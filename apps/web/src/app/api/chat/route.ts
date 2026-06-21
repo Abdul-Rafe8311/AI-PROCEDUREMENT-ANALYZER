@@ -31,13 +31,13 @@ export async function POST(req: Request) {
     });
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
+  // Prefer Groq (OpenAI-compatible), then OpenAI, else rule-based answers.
+  const provider = resolveProvider();
+  if (!provider) {
     return NextResponse.json({ answer: answerFromData(question, analysis), source: 'rules' });
   }
 
   try {
-    const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
     const system = [
       'You are a procurement analyst assistant. Answer concisely and only from the',
       'supplier quotation data provided as JSON. Use figures from the data. If asked',
@@ -46,14 +46,14 @@ export async function POST(req: Request) {
       `QUOTATION DATA:\n${JSON.stringify(analysis, null, 2)}`,
     ].join('\n');
 
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const res = await fetch(provider.url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${provider.apiKey}`,
       },
       body: JSON.stringify({
-        model,
+        model: provider.model,
         temperature: 0.2,
         messages: [
           { role: 'system', content: system },
@@ -71,8 +71,32 @@ export async function POST(req: Request) {
     const data = await res.json();
     const answer: string =
       data?.choices?.[0]?.message?.content?.trim() || answerFromData(question, analysis);
-    return NextResponse.json({ answer, source: 'openai' });
+    return NextResponse.json({ answer, source: provider.name });
   } catch {
     return NextResponse.json({ answer: answerFromData(question, analysis), source: 'rules' });
   }
+}
+
+function resolveProvider():
+  | { name: 'groq' | 'openai'; apiKey: string; url: string; model: string }
+  | null {
+  const groqKey = process.env.GROQ_API_KEY;
+  if (groqKey) {
+    return {
+      name: 'groq',
+      apiKey: groqKey,
+      url: 'https://api.groq.com/openai/v1/chat/completions',
+      model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+    };
+  }
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (openaiKey) {
+    return {
+      name: 'openai',
+      apiKey: openaiKey,
+      url: 'https://api.openai.com/v1/chat/completions',
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    };
+  }
+  return null;
 }
