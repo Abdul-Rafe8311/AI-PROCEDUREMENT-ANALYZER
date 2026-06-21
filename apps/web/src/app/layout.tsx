@@ -3,9 +3,9 @@ import './globals.css';
 import { Providers } from '@/components/providers';
 
 export const metadata: Metadata = {
-  title: 'AI Procurement Analyzer',
+  title: 'Procurement Copilot — Compare Supplier Quotations in Minutes',
   description:
-    'Compare supplier quotations, analyze costs, detect risks, and generate procurement reports with AI.',
+    'Upload quotations from multiple suppliers and let AI identify the best option based on price, delivery time, payment terms, and risk factors.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
