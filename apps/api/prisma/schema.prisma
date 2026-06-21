@@ -1,0 +1,316 @@
+// AI Procurement Analyzer — Prisma schema
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  PROCUREMENT_MANAGER
+}
+
+enum RequestStatus {
+  DRAFT
+  OPEN
+  COMPARING
+  AWARDED
+  CLOSED
+  CANCELLED
+}
+
+enum QuotationStatus {
+  UPLOADED        // file stored, not yet processed
+  PROCESSING      // AI extraction running
+  EXTRACTED       // structured data available
+  FAILED          // extraction failed
+  AWARDED         // selected as winning quotation
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  UPLOAD
+  EXTRACT
+  GENERATE_REPORT
+  AWARD
+}
+
+// ─────────────────────────────────────────────
+// Users & Auth
+// ─────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         Role     @default(PROCUREMENT_MANAGER)
+  isActive     Boolean  @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  procurementRequests ProcurementRequest[]
+  suppliers           Supplier[]
+  reports             Report[]
+  auditLogs           AuditLog[]
+  refreshTokens       RefreshToken[]
+
+  @@index([email])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  tokenHash String
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────────────
+// Suppliers
+// ─────────────────────────────────────────────
+
+model Supplier {
+  id               String   @id @default(uuid())
+  companyName      String
+  contactPerson    String?
+  email            String?
+  phone            String?
+  country          String?
+  // Reliability score 0-100, may be AI/usage adjusted over time
+  reliabilityScore Float    @default(50)
+  notes            String?
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  quotations Quotation[]
+  ratings    SupplierRating[]
+
+  @@index([companyName])
+  @@index([country])
+  @@map("suppliers")
+}
+
+// Individual rating events form the supplier history/score trail.
+model SupplierRating {
+  id         String   @id @default(uuid())
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  // 1-5 stars
+  score      Int
+  comment    String?
+  createdById String?
+  createdAt  DateTime @default(now())
+
+  @@index([supplierId])
+  @@map("supplier_ratings")
+}
+
+// ─────────────────────────────────────────────
+// Procurement Requests
+// ─────────────────────────────────────────────
+
+model ProcurementRequest {
+  id                  String        @id @default(uuid())
+  title               String
+  description         String?
+  requiredItems       String?       // free-text / multiline list of items
+  quantity            Int?
+  requiredDeliveryDate DateTime?
+  budget              Decimal?      @db.Decimal(14, 2)
+  currency            String        @default("USD")
+  status              RequestStatus @default(OPEN)
+
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  awardedQuotationId String?    @unique
+  awardedQuotation   Quotation? @relation("AwardedQuotation", fields: [awardedQuotationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  quotations Quotation[] @relation("RequestQuotations")
+  reports    Report[]
+  recommendation Recommendation?
+
+  @@index([ownerId])
+  @@index([status])
+  @@map("procurement_requests")
+}
+
+// ─────────────────────────────────────────────
+// Quotations & Items
+// ─────────────────────────────────────────────
+
+model Quotation {
+  id            String          @id @default(uuid())
+  requestId     String
+  request       ProcurementRequest @relation("RequestQuotations", fields: [requestId], references: [id], onDelete: Cascade)
+  supplierId    String?
+  supplier      Supplier?       @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+
+  // raw file metadata
+  fileName      String
+  fileKey       String          // object key in S3
+  fileMimeType  String
+  fileSize      Int
+  status        QuotationStatus @default(UPLOADED)
+
+  // AI-extracted summary fields
+  supplierName  String?
+  currency      String?
+  totalPrice    Decimal?        @db.Decimal(14, 2)
+  deliveryTime  String?         // e.g. "14 days"
+  deliveryDays  Int?            // normalized numeric delivery time
+  paymentTerms  String?
+
+  // full extracted text (used for RAG/chat) and raw model JSON
+  extractedText String?
+  rawExtraction Json?
+
+  // risk analysis cache
+  riskLevel     RiskLevel?
+  riskScore     Float?
+  warnings      Json?           // string[] of detected risks
+
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  items         QuotationItem[]
+  embeddings    QuotationEmbedding[]
+  awardedFor    ProcurementRequest? @relation("AwardedQuotation")
+
+  @@index([requestId])
+  @@index([supplierId])
+  @@index([status])
+  @@map("quotations")
+}
+
+model QuotationItem {
+  id          String    @id @default(uuid())
+  quotationId String
+  quotation   Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+
+  productName String
+  quantity    Float?
+  unitPrice   Decimal?  @db.Decimal(14, 2)
+  totalPrice  Decimal?  @db.Decimal(14, 2)
+  currency    String?
+  notes       String?
+
+  createdAt   DateTime  @default(now())
+
+  @@index([quotationId])
+  @@map("quotation_items")
+}
+
+// Vector-ish chunks for Retrieval Augmented Generation chat.
+// Embedding stored as Json (float[]) to stay portable without pgvector;
+// cosine similarity is computed in the application layer.
+model QuotationEmbedding {
+  id          String    @id @default(uuid())
+  quotationId String
+  quotation   Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  requestId   String
+  chunkIndex  Int
+  content     String
+  embedding   Json      // number[]
+  createdAt   DateTime  @default(now())
+
+  @@index([quotationId])
+  @@index([requestId])
+  @@map("quotation_embeddings")
+}
+
+// ─────────────────────────────────────────────
+// AI Recommendation
+// ─────────────────────────────────────────────
+
+model Recommendation {
+  id          String   @id @default(uuid())
+  requestId   String   @unique
+  request     ProcurementRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  recommendedQuotationId String?
+  summary     String              // AI-generated narrative recommendation
+  highlights  Json                // structured bullets: lowestCost, fastestDelivery, bestBalance...
+  model       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("recommendations")
+}
+
+// ─────────────────────────────────────────────
+// Reports
+// ─────────────────────────────────────────────
+
+model Report {
+  id          String   @id @default(uuid())
+  requestId   String
+  request     ProcurementRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  generatedById String?
+  generatedBy   User?  @relation(fields: [generatedById], references: [id], onDelete: SetNull)
+
+  title       String
+  fileKey     String   // PDF object key in S3
+  fileSize    Int?
+  summary     Json?    // snapshot of comparison + recommendation at generation time
+  createdAt   DateTime @default(now())
+
+  @@index([requestId])
+  @@map("reports")
+}
+
+// ─────────────────────────────────────────────
+// Audit Logs
+// ─────────────────────────────────────────────
+
+model AuditLog {
+  id         String      @id @default(uuid())
+  userId     String?
+  user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     AuditAction
+  entityType String      // e.g. "Supplier", "Quotation"
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime    @default(now())
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
