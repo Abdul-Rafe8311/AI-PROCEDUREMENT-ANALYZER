@@ -32,7 +32,8 @@ export interface AppConfig {
 
 export default (): AppConfig => ({
   env: process.env.NODE_ENV ?? 'development',
-  port: parseInt(process.env.API_PORT ?? '4000', 10),
+  // PORT is injected by most hosts (Railway/Render/Fly); fall back to API_PORT.
+  port: parseInt(process.env.PORT ?? process.env.API_PORT ?? '4000', 10),
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
   jwt: {
     accessSecret: process.env.JWT_ACCESS_SECRET ?? 'dev_access_secret_change_me',
