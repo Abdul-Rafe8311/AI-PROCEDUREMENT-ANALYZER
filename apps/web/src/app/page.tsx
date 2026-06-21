@@ -172,7 +172,7 @@ function SiteNav() {
           <a href="#features" className="transition hover:text-foreground">Features</a>
           <a href="#demo" className="transition hover:text-foreground">Live demo</a>
         </div>
-        <Link href="/dashboard" className={cn(btnPrimary, 'px-4 py-2')}>
+        <Link href="/workspace" className={cn(btnPrimary, 'px-4 py-2')}>
           <Upload className="h-4 w-4" />
           Upload Quotations
         </Link>
@@ -208,7 +208,7 @@ function Hero() {
         </p>
 
         <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-          <Link href="/dashboard" className={btnPrimary}>
+          <Link href="/workspace" className={btnPrimary}>
             <Upload className="h-4 w-4" />
             Upload Quotations
           </Link>
@@ -599,7 +599,7 @@ function FinalCta() {
         </p>
         <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <Link
-            href="/dashboard"
+            href="/workspace"
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-card px-6 py-3 text-sm font-semibold text-primary shadow-sm transition hover:bg-card/90"
           >
             <Upload className="h-4 w-4" />
