@@ -11,7 +11,8 @@ RUN npm install
 RUN npx prisma generate
 
 COPY . .
-RUN npm run build
+# Build and fail loudly if the compiled entrypoint wasn't produced.
+RUN npm run build && test -f dist/main.js
 
 # ── Runtime stage ──
 FROM node:22-bookworm-slim AS runner
@@ -28,5 +29,6 @@ COPY --from=builder /app/dist ./dist
 
 EXPOSE 4000
 
-# Apply migrations (or db push for first run) then start the API
-CMD ["sh", "-c", "npx prisma migrate deploy || npx prisma db push; node dist/main.js"]
+# Apply committed migrations (non-destructive, idempotent) then start the API.
+# No db push — migrations are versioned and safe to run on every deploy.
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main.js"]
