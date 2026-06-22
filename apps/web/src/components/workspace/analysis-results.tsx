@@ -1,6 +1,7 @@
 'use client';
 
 import { Fragment, type ReactNode, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import {
   AlertTriangle,
   ArrowDown,
@@ -34,6 +35,19 @@ import {
   type SupplierScore,
 } from '@/lib/workspace-types';
 import { ComparisonMatrix } from './comparison-matrix';
+import { KpiCards } from './kpi-cards';
+
+// Lazy-load charts (recharts is heavy) — keeps initial JS lean for Lighthouse.
+const AnalysisCharts = dynamic(() => import('./analysis-charts'), {
+  ssr: false,
+  loading: () => (
+    <div className="grid gap-4 lg:grid-cols-2">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div key={i} className="h-72 animate-pulse rounded-2xl border border-border bg-muted/40" />
+      ))}
+    </div>
+  ),
+});
 
 type Extreme = 'best' | 'worst' | 'none';
 
@@ -233,6 +247,18 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
         }
       : null;
 
+  const kpi = useMemo(
+    () => ({
+      totalSuppliers: quotations.length,
+      potentialSavings: savings?.amount ?? 0,
+      savingsPct: savings?.pct ?? 0,
+      recommendedSupplier: best ?? '—',
+      recommendedScore: bestScorePct ?? 0,
+      risksFound: risks.length,
+    }),
+    [quotations.length, savings, best, bestScorePct, risks.length],
+  );
+
   // Which field's source snippet is currently expanded.
   const [open, setOpen] = useState<{ id: string; field: FieldKey } | null>(null);
   const toggleSource = (id: string, field: FieldKey) =>
@@ -240,6 +266,8 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
 
   return (
     <div className="space-y-6">
+      <KpiCards data={kpi} />
+
       {/* Comparison table */}
       <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
         <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-4">
@@ -373,6 +401,8 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
       </div>
 
       <ComparisonMatrix quotations={quotations} />
+
+      <AnalysisCharts quotations={quotations} scored={scored} />
 
       <ScoreBreakdown scored={scored} />
 

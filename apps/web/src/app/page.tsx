@@ -20,8 +20,6 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { MacbookScroll } from '@/components/landing/macbook-scroll';
-import { Reveal } from '@/components/landing/reveal';
 
 /* ─────────────────────────────────────────────
    Shared button styles (no auth UI on this page)
@@ -148,18 +146,10 @@ export default function Home() {
     <div className="min-h-screen bg-background text-foreground">
       <SiteNav />
       <Hero />
-      <Reveal>
-        <Workflow />
-      </Reveal>
-      <Reveal>
-        <Features />
-      </Reveal>
-      <Reveal>
-        <Demo />
-      </Reveal>
-      <Reveal>
-        <FinalCta />
-      </Reveal>
+      <Workflow />
+      <Features />
+      <Demo />
+      <FinalCta />
       <SiteFooter />
     </div>
   );
@@ -201,19 +191,9 @@ function SiteNav() {
 function Hero() {
   return (
     <section className="relative overflow-hidden">
-      {/* decorative spotlight + faded grid */}
+      {/* static decorative gradient (no animation) */}
       <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
-        <div className="absolute left-1/2 top-[-12rem] h-[32rem] w-[64rem] -translate-x-1/2 rounded-full bg-primary/15 blur-3xl" />
-        <div
-          className="absolute inset-0 opacity-[0.05]"
-          style={{
-            backgroundImage:
-              'linear-gradient(to right, hsl(var(--foreground)) 1px, transparent 1px), linear-gradient(to bottom, hsl(var(--foreground)) 1px, transparent 1px)',
-            backgroundSize: '56px 56px',
-            maskImage: 'radial-gradient(ellipse 60% 50% at 50% 0%, black, transparent 75%)',
-            WebkitMaskImage: 'radial-gradient(ellipse 60% 50% at 50% 0%, black, transparent 75%)',
-          }}
-        />
+        <div className="absolute left-1/2 top-[-12rem] h-[30rem] w-[60rem] -translate-x-1/2 rounded-full bg-primary/10 blur-3xl" />
       </div>
 
       <div className="mx-auto max-w-6xl px-6 pb-16 pt-20 text-center sm:pt-24">
@@ -247,9 +227,7 @@ function Hero() {
         </p>
 
         <div className="mt-16">
-          <MacbookScroll>
-            <HeroDashboard />
-          </MacbookScroll>
+          <HeroDashboard />
         </div>
       </div>
     </section>
