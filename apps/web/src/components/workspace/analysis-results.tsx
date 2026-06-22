@@ -3,6 +3,8 @@
 import { Fragment, type ReactNode, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   Clock,
   ShieldAlert,
   Sparkles,
@@ -69,6 +71,21 @@ function ConfidenceDot({ confidence }: { confidence: number }) {
     <span
       className={cn('inline-block h-1.5 w-1.5 shrink-0 rounded-full', tone)}
       title={`Confidence: ${Math.round(confidence * 100)}%`}
+    />
+  );
+}
+
+// Directional best/worst marker — conveys meaning by shape (arrow direction)
+// in addition to color, so it doesn't rely on color alone.
+function ColumnFlag({ tone, lowerIsBetter }: { tone: Extreme; lowerIsBetter: boolean }) {
+  if (tone === 'none') return null;
+  const isBest = tone === 'best';
+  const pointsDown = lowerIsBetter ? isBest : !isBest;
+  const Icon = pointsDown ? ArrowDown : ArrowUp;
+  return (
+    <Icon
+      className="h-3 w-3 shrink-0 opacity-80"
+      aria-label={isBest ? 'Best value in this column' : 'Worst value in this column'}
     />
   );
 }
@@ -190,13 +207,13 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+            <thead className="border-b border-border bg-muted/40 text-[11px] uppercase tracking-wider text-muted-foreground">
               <tr>
-                <th className="px-5 py-3 font-medium">Supplier</th>
-                <th className="px-5 py-3 font-medium">Total Cost</th>
-                <th className="px-5 py-3 font-medium">Delivery</th>
-                <th className="px-5 py-3 font-medium">Payment Terms</th>
-                <th className="px-5 py-3 font-medium">Warranty</th>
+                <th className="px-5 py-3 text-left font-semibold">Supplier</th>
+                <th className="px-5 py-3 text-right font-semibold">Total Cost</th>
+                <th className="px-5 py-3 text-right font-semibold">Delivery</th>
+                <th className="px-5 py-3 text-left font-semibold">Payment Terms</th>
+                <th className="px-5 py-3 text-right font-semibold">Warranty</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -227,34 +244,43 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                           {q.supplierName === fastest && <Tag tone="warning" icon={Clock} label="Fastest" />}
                         </div>
                       </td>
-                      <td className={cn('px-5 py-4 font-semibold tabular-nums', cellText(costTone, false))}>
-                        <FieldButton q={q} field="totalCost" onToggle={toggleSource}
-                          active={isOpen('totalCost')}
-                          display={
-                            q.totalCost == null ? null : (
-                              <span className="inline-flex flex-col leading-tight">
-                                <span>{formatCurrency(q.totalCost, q.currency)}</span>
-                                {q.currency !== 'USD' && q.totalCostUsd != null && (
-                                  <span className="text-xs font-normal text-muted-foreground">
-                                    ≈ {formatCurrency(q.totalCostUsd, 'USD')}
-                                  </span>
-                                )}
-                              </span>
-                            )
-                          } />
+                      <td className={cn('px-5 py-4 text-right font-semibold nums', cellText(costTone, false))}>
+                        <span className="inline-flex items-center justify-end gap-1.5">
+                          <ColumnFlag tone={costTone} lowerIsBetter />
+                          <FieldButton q={q} field="totalCost" onToggle={toggleSource}
+                            active={isOpen('totalCost')}
+                            display={
+                              q.totalCost == null ? null : (
+                                <span className="inline-flex flex-col items-end leading-tight">
+                                  <span>{formatCurrency(q.totalCost, q.currency)}</span>
+                                  {q.currency !== 'USD' && q.totalCostUsd != null && (
+                                    <span className="text-xs font-normal text-muted-foreground">
+                                      ≈ {formatCurrency(q.totalCostUsd, 'USD')}
+                                    </span>
+                                  )}
+                                </span>
+                              )
+                            } />
+                        </span>
                       </td>
-                      <td className={cn('px-5 py-4 tabular-nums', cellText(delTone, true))}>
-                        <FieldButton q={q} field="deliveryDays" onToggle={toggleSource}
-                          active={isOpen('deliveryDays')}
-                          display={q.deliveryDays == null ? null : formatDelivery(q.deliveryDays)} />
+                      <td className={cn('px-5 py-4 text-right nums', cellText(delTone, true))}>
+                        <span className="inline-flex items-center justify-end gap-1.5">
+                          <ColumnFlag tone={delTone} lowerIsBetter />
+                          <FieldButton q={q} field="deliveryDays" onToggle={toggleSource}
+                            active={isOpen('deliveryDays')}
+                            display={q.deliveryDays == null ? null : formatDelivery(q.deliveryDays)} />
+                        </span>
                       </td>
                       <td className="px-5 py-4 text-muted-foreground">
                         <FieldButton q={q} field="paymentTerms" display={q.paymentTerms}
                           active={isOpen('paymentTerms')} onToggle={toggleSource} />
                       </td>
-                      <td className={cn('px-5 py-4', cellText(warrTone, true))}>
-                        <FieldButton q={q} field="warranty" display={q.warranty}
-                          active={isOpen('warranty')} onToggle={toggleSource} />
+                      <td className={cn('px-5 py-4 text-right', cellText(warrTone, true))}>
+                        <span className="inline-flex items-center justify-end gap-1.5">
+                          <ColumnFlag tone={warrTone} lowerIsBetter={false} />
+                          <FieldButton q={q} field="warranty" display={q.warranty}
+                            active={isOpen('warranty')} onToggle={toggleSource} />
+                        </span>
                       </td>
                     </tr>
                     {openMeta && open && (
@@ -269,6 +295,24 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
               })}
             </tbody>
           </table>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border px-5 py-3 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground/70">Confidence</span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-success" />High
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-warning" />Medium
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-danger" />Low
+          </span>
+          <span className="hidden items-center gap-1.5 sm:inline-flex">
+            <ArrowDown className="h-3 w-3 text-success" />Best in column
+          </span>
+          <span className="ml-auto hidden text-muted-foreground/80 sm:inline">
+            Click any value to view its source
+          </span>
         </div>
       </div>
 
