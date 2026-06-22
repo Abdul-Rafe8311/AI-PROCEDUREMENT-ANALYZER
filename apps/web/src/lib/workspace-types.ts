@@ -23,7 +23,8 @@ export type RiskType =
   | 'missing_delivery'
   | 'missing_warranty'
   | 'unusual_pricing'
-  | 'long_lead_time';
+  | 'long_lead_time'
+  | 'risky_payment_terms';
 
 export interface RiskFlag {
   supplier: string;

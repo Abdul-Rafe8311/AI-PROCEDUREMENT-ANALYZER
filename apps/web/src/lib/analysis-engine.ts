@@ -30,12 +30,23 @@ function prettySupplier(fileName: string, i: number): string {
   return base.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// Three distinct supplier "profiles" so the demo always surfaces a clear
-// lowest-cost / fastest-delivery / best-overall winner plus risk flags.
-const PROFILES = [
-  { cost: 10000, delivery: 6, terms: 'Net 30', warranty: '24 months' }, // balanced → best overall
-  { cost: 9000, delivery: 11, terms: 'Net 45', warranty: null }, // cheapest, slow, no warranty
-  { cost: 13500, delivery: 4, terms: 'Net 15', warranty: '12 months' }, // fastest, pricey (outlier)
+// Distinct supplier archetypes with REAL trade-offs so the demo always shows a
+// clear lowest-cost / fastest / best-overall winner (and best != cheapest),
+// plus at least one supplier with a problem so Risk Detection is never empty.
+const ARCHETYPES: {
+  cost: number;
+  delivery: number;
+  terms: string;
+  warranty: string | null;
+}[] = [
+  // Cheapest, but slowest AND no warranty (problem).
+  { cost: 8900, delivery: 26, terms: 'Net 60', warranty: null },
+  // Fastest, but most expensive AND risky payment terms (problem).
+  { cost: 14500, delivery: 7, terms: '100% advance payment', warranty: '12 months' },
+  // Mid-priced with the best warranty → typically best overall.
+  { cost: 10500, delivery: 10, terms: 'Net 30', warranty: '36 months' },
+  // Solid all-rounder, no red flags (for contrast).
+  { cost: 11200, delivery: 11, terms: 'Net 45', warranty: '24 months' },
 ];
 
 function median(values: number[]): number {
@@ -44,13 +55,25 @@ function median(values: number[]): number {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+// Heuristic for vague/risky payment terms (full upfront, COD, TBD, negotiable…).
+function isRiskyPaymentTerms(terms: string): boolean {
+  return /(advance|prepay|prepaid|100\s*%|upfront|cash\s*on|on\s*delivery|\bcod\b|\btbd\b|to be (confirmed|advised)|negotiable)/i.test(
+    terms,
+  );
+}
+
 export function buildAnalysis(fileNames: string[]): AnalysisResult {
   const names = fileNames.length
     ? fileNames
-    : ['supplier-a.pdf', 'supplier-b.pdf', 'supplier-c.pdf'];
+    : [
+        'atlas-industrial-supply.pdf',
+        'rapidship-trading.pdf',
+        'meridian-materials.pdf',
+        'keystone-procurement.pdf',
+      ];
 
   const quotations: ExtractedQuotation[] = names.map((fileName, i) => {
-    const profile = PROFILES[i % PROFILES.length];
+    const profile = ARCHETYPES[i % ARCHETYPES.length];
     const h = hash(fileName + i);
     const jitter = (h % 600) - 300; // ±$300 so repeats differ
     const deliveryJitter = (h >> 4) % 3; // 0-2 extra days
@@ -154,6 +177,14 @@ export function detectRisks(qs: ExtractedQuotation[]): RiskFlag[] {
         supplier: q.supplierName,
         type: 'missing_warranty',
         message: `${q.supplierName}: no warranty information found.`,
+      });
+    }
+
+    if (q.paymentTerms && isRiskyPaymentTerms(q.paymentTerms)) {
+      risks.push({
+        supplier: q.supplierName,
+        type: 'risky_payment_terms',
+        message: `${q.supplierName}: payment terms "${q.paymentTerms}" require payment upfront / reduce buyer protection.`,
       });
     }
 
