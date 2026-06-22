@@ -4,11 +4,15 @@
 // swapped in behind /api/extract without changing the UI, since this module
 // produces the same AnalysisResult shape.
 
+import { DEFAULT_WEIGHTS } from './workspace-types';
 import type {
   AnalysisResult,
   ExtractedQuotation,
   Recommendation,
   RiskFlag,
+  RiskType,
+  ScoreWeights,
+  SupplierScore,
 } from './workspace-types';
 
 function hash(str: string): number {
@@ -89,15 +93,19 @@ export function buildAnalysis(fileNames: string[]): AnalysisResult {
     };
   });
 
+  const risks = detectRisks(quotations);
   return {
     quotations,
-    recommendation: buildRecommendation(quotations),
-    risks: detectRisks(quotations),
+    recommendation: buildRecommendation(quotations, risks),
+    risks,
     simulated: true,
   };
 }
 
-export function buildRecommendation(qs: ExtractedQuotation[]): Recommendation {
+export function buildRecommendation(
+  qs: ExtractedQuotation[],
+  risks: RiskFlag[],
+): Recommendation {
   const withCost = qs.filter((q) => q.totalCost != null);
   const withDelivery = qs.filter((q) => q.deliveryDays != null);
   const rec: Recommendation = {};
@@ -120,36 +128,97 @@ export function buildRecommendation(qs: ExtractedQuotation[]): Recommendation {
     };
   }
 
-  // Weighted score: cost 50%, delivery 30%, warranty present 20%.
-  const costs = withCost.map((q) => q.totalCost!);
-  const deliveries = withDelivery.map((q) => q.deliveryDays!);
-  const minCost = Math.min(...costs, Infinity);
-  const maxCost = Math.max(...costs, -Infinity);
-  const minDel = Math.min(...deliveries, Infinity);
-  const maxDel = Math.max(...deliveries, -Infinity);
-
-  const scored = qs.map((q) => {
-    const costScore =
-      q.totalCost == null || maxCost === minCost
-        ? 0.5
-        : (maxCost - q.totalCost) / (maxCost - minCost);
-    const delScore =
-      q.deliveryDays == null || maxDel === minDel
-        ? 0.5
-        : (maxDel - q.deliveryDays) / (maxDel - minDel);
-    const warrantyScore = q.warranty ? 1 : 0;
-    return { q, score: 0.5 * costScore + 0.3 * delScore + 0.2 * warrantyScore };
-  });
-
+  // Best overall = top of the deterministic weighted ranking (default weights).
+  const scored = scoreSuppliers(qs, risks, DEFAULT_WEIGHTS);
   if (scored.length) {
-    const best = scored.reduce((a, b) => (a.score >= b.score ? a : b));
     rec.bestOverall = {
-      supplier: best.q.supplierName,
-      detail: 'Best balance of cost, delivery, and warranty coverage.',
+      supplier: scored[0].quotation.supplierName,
+      detail: 'Best balance of cost, delivery, warranty, and risk.',
     };
   }
 
   return rec;
+}
+
+// ── Deterministic weighted scoring (pure, no LLM) ──────────────
+// Severity weights for the per-supplier risk score.
+const RISK_SEVERITY: Record<RiskType, number> = {
+  missing_delivery: 3,
+  risky_payment_terms: 3,
+  missing_warranty: 2,
+  long_lead_time: 1,
+  unusual_pricing: 1,
+};
+
+/** Parse warranty months from a free-text string ("36 months", "2 years"). */
+export function warrantyMonths(warranty: string | null): number {
+  if (!warranty) return 0;
+  const m = warranty.match(/(\d+(?:\.\d+)?)/);
+  if (!m) return 0;
+  const n = parseFloat(m[1]);
+  return /year/i.test(warranty) ? n * 12 : n;
+}
+
+/** Summed severity of a supplier's risk flags. */
+export function riskScoreFor(supplierName: string, risks: RiskFlag[]): number {
+  return risks
+    .filter((r) => r.supplier === supplierName)
+    .reduce((sum, r) => sum + (RISK_SEVERITY[r.type] ?? 1), 0);
+}
+
+// Normalize to 0..1. If all values are equal, everyone gets 1 (no divide-by-zero).
+function normalize(value: number, min: number, max: number, higherIsBetter: boolean): number {
+  if (max === min) return 1;
+  const t = (value - min) / (max - min);
+  return higherIsBetter ? t : 1 - t;
+}
+
+/**
+ * Pure deterministic ranking. Each metric is normalized to 0..1 (higher is
+ * better), combined with the given weights (renormalized to sum to 1), and the
+ * result is sorted best-first. Does NOT call any LLM.
+ */
+export function scoreSuppliers(
+  quotations: ExtractedQuotation[],
+  risks: RiskFlag[],
+  weights: ScoreWeights = DEFAULT_WEIGHTS,
+): SupplierScore[] {
+  if (!quotations.length) return [];
+
+  const prices = quotations.map((q) => q.totalCost ?? 0);
+  const deliveries = quotations.map((q) => q.deliveryDays ?? 0);
+  const warranties = quotations.map((q) => warrantyMonths(q.warranty));
+  const riskScores = quotations.map((q) => riskScoreFor(q.supplierName, risks));
+
+  const minP = Math.min(...prices), maxP = Math.max(...prices);
+  const minD = Math.min(...deliveries), maxD = Math.max(...deliveries);
+  const minW = Math.min(...warranties), maxW = Math.max(...warranties);
+  const maxRisk = Math.max(...riskScores);
+  const allRiskEqual = riskScores.every((r) => r === riskScores[0]);
+
+  // Renormalize weights so they always sum to 1 (guard the all-zero case).
+  const sum = weights.price + weights.delivery + weights.warranty + weights.risk;
+  const w =
+    sum > 0
+      ? {
+          price: weights.price / sum,
+          delivery: weights.delivery / sum,
+          warranty: weights.warranty / sum,
+          risk: weights.risk / sum,
+        }
+      : { price: 0.25, delivery: 0.25, warranty: 0.25, risk: 0.25 };
+
+  return quotations
+    .map<SupplierScore>((q, i) => {
+      const price = normalize(prices[i], minP, maxP, false); // lower is better
+      const delivery = normalize(deliveries[i], minD, maxD, false); // lower is better
+      const warranty = normalize(warranties[i], minW, maxW, true); // higher is better
+      const risk = allRiskEqual ? 1 : 1 - riskScores[i] / maxRisk; // fewer/less severe is better
+      const overall =
+        w.price * price + w.delivery * delivery + w.warranty * warranty + w.risk * risk;
+      return { quotation: q, price, delivery, warranty, risk, overall };
+    })
+    .sort((a, b) => b.overall - a.overall);
 }
 
 export function detectRisks(qs: ExtractedQuotation[]): RiskFlag[] {

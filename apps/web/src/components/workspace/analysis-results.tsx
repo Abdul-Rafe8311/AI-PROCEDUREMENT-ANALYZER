@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Clock,
@@ -10,17 +11,29 @@ import {
   Wallet,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { scoreSuppliers } from '@/lib/analysis-engine';
 import {
   type AnalysisResult,
+  DEFAULT_WEIGHTS,
   formatCurrency,
   formatDelivery,
+  type ScoreWeights,
 } from '@/lib/workspace-types';
+import { WeightControls } from './weight-controls';
 
 export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
   const { quotations, recommendation: rec, risks } = analysis;
   const cheapest = rec.lowestCost?.supplier;
   const fastest = rec.fastestDelivery?.supplier;
-  const best = rec.bestOverall?.supplier;
+
+  // Live deterministic re-ranking as the weight sliders move (no LLM).
+  const [weights, setWeights] = useState<ScoreWeights>(DEFAULT_WEIGHTS);
+  const scored = useMemo(
+    () => scoreSuppliers(quotations, risks, weights),
+    [quotations, risks, weights],
+  );
+  const best = scored[0]?.quotation.supplierName;
+  const bestScorePct = scored[0] ? Math.round(scored[0].overall * 100) : null;
 
   return (
     <div className="space-y-6">
@@ -76,6 +89,8 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
         </div>
       </div>
 
+      <WeightControls weights={weights} onChange={setWeights} />
+
       <div className="grid gap-6 lg:grid-cols-2">
         {/* AI recommendation */}
         <div className="rounded-2xl border border-primary/20 bg-primary/5 p-6 shadow-sm">
@@ -92,9 +107,10 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
               <RecRow icon={Clock} tone="warning" title="Fastest Delivery Supplier"
                 supplier={rec.fastestDelivery.supplier} detail={rec.fastestDelivery.detail} />
             )}
-            {rec.bestOverall && (
+            {best && (
               <RecRow icon={Trophy} tone="primary" title="Best Overall Supplier" highlight
-                supplier={rec.bestOverall.supplier} detail={rec.bestOverall.detail} />
+                supplier={best}
+                detail={`Highest weighted score (${bestScorePct}/100) for your current priorities.`} />
             )}
           </ul>
         </div>

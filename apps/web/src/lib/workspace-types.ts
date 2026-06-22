@@ -43,6 +43,31 @@ export interface Recommendation {
   bestOverall?: RecommendationItem;
 }
 
+export interface ScoreWeights {
+  price: number;
+  delivery: number;
+  warranty: number;
+  risk: number;
+}
+
+/** Default weighting (sums to 1): price-led, then delivery, warranty, risk. */
+export const DEFAULT_WEIGHTS: ScoreWeights = {
+  price: 0.4,
+  delivery: 0.25,
+  warranty: 0.2,
+  risk: 0.15,
+};
+
+export interface SupplierScore {
+  quotation: ExtractedQuotation;
+  /** each normalized to 0..1 where higher = better */
+  price: number;
+  delivery: number;
+  warranty: number;
+  risk: number;
+  overall: number;
+}
+
 export interface AnalysisResult {
   quotations: ExtractedQuotation[];
   recommendation: Recommendation;
