@@ -4,31 +4,76 @@
 
 @layer base {
   :root {
+    color-scheme: light;
+
+    /* ── Surfaces & text ── */
     --background: 210 40% 98%;
     --foreground: 222 47% 11%;
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
-    --primary: 221 83% 40%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96%;
-    --secondary-foreground: 222 47% 11%;
     --muted: 210 40% 96%;
     --muted-foreground: 215 16% 47%;
     --accent: 210 40% 94%;
     --accent-foreground: 222 47% 11%;
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 221 83% 40%;
-    --radius: 0.6rem;
+    --border: 214 32% 90%;
+    --input: 214 32% 90%;
+
+    /* ── Brand accent — change these to re-skin the whole app ── */
+    --primary: 238 78% 58%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 238 78% 58%;
+
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    /* ── Semantic status ── */
+    --success: 142 70% 38%;
+    --success-foreground: 0 0% 100%;
+    --warning: 32 95% 44%;
+    --warning-foreground: 0 0% 100%;
+    --danger: 0 74% 52%;
+    --danger-foreground: 0 0% 100%;
+    /* alias kept for existing `destructive` usage */
+    --destructive: 0 74% 52%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* ── Radius & soft shadows ── */
+    --radius: 0.7rem;
+    --shadow-sm: 0 1px 2px 0 hsl(222 47% 11% / 0.05);
+    --shadow: 0 1px 3px 0 hsl(222 47% 11% / 0.06), 0 1px 2px -1px hsl(222 47% 11% / 0.05);
+    --shadow-md: 0 4px 14px -3px hsl(222 47% 11% / 0.09), 0 2px 6px -2px hsl(222 47% 11% / 0.05);
+    --shadow-lg: 0 14px 36px -10px hsl(222 47% 11% / 0.14);
   }
 
   * {
     @apply border-border;
   }
+
   body {
     @apply bg-background text-foreground antialiased;
-    font-feature-settings: 'rlig' 1, 'calt' 1;
+    font-feature-settings: 'cv11', 'ss01', 'calt' 1;
+  }
+
+  /* Accessible, consistent focus rings */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  /* Subtle theme/hover transitions; respect reduced-motion */
+  @media (prefers-reduced-motion: no-preference) {
+    body {
+      transition:
+        background-color 0.2s ease,
+        color 0.2s ease;
+    }
+  }
+}
+
+/* Tabular figures helper for numeric columns */
+@layer utilities {
+  .nums {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
   }
 }
