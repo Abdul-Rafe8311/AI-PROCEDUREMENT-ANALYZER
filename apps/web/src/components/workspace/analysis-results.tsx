@@ -7,11 +7,12 @@ import {
   ShieldAlert,
   Sparkles,
   Table2,
+  TrendingDown,
   Trophy,
   Wallet,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { scoreSuppliers } from '@/lib/analysis-engine';
+import { scoreSuppliers, warrantyMonths } from '@/lib/analysis-engine';
 import {
   type AnalysisResult,
   DEFAULT_WEIGHTS,
@@ -20,6 +21,37 @@ import {
   type ScoreWeights,
 } from '@/lib/workspace-types';
 import { WeightControls } from './weight-controls';
+
+type Extreme = 'best' | 'worst' | 'none';
+
+// Best (green) / worst (amber) per numeric column; neutral otherwise.
+function extremeTone(
+  value: number | null,
+  min: number,
+  max: number,
+  lowerIsBetter: boolean,
+): Extreme {
+  if (value == null || !Number.isFinite(min) || !Number.isFinite(max) || min === max) {
+    return 'none';
+  }
+  if (value === (lowerIsBetter ? min : max)) return 'best';
+  if (value === (lowerIsBetter ? max : min)) return 'worst';
+  return 'none';
+}
+
+function cellText(tone: Extreme, mutedWhenNone: boolean): string {
+  if (tone === 'best') return 'bg-green-50 text-green-700';
+  if (tone === 'worst') return 'bg-amber-50 text-amber-700';
+  return mutedWhenNone ? 'text-muted-foreground' : '';
+}
+
+function MissingTag() {
+  return (
+    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700">
+      Missing
+    </span>
+  );
+}
 
 export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
   const { quotations, recommendation: rec, risks } = analysis;
@@ -34,6 +66,28 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
   );
   const best = scored[0]?.quotation.supplierName;
   const bestScorePct = scored[0] ? Math.round(scored[0].overall * 100) : null;
+
+  // Per-column extremes for best/worst cell highlighting.
+  const costs = quotations.map((q) => q.totalCost).filter((v): v is number => v != null);
+  const dels = quotations.map((q) => q.deliveryDays).filter((v): v is number => v != null);
+  const warrs = quotations.map((q) => warrantyMonths(q.warranty));
+  const minCost = Math.min(...costs);
+  const maxCost = Math.max(...costs);
+  const minDel = Math.min(...dels);
+  const maxDel = Math.max(...dels);
+  const minWarr = Math.min(...warrs);
+  const maxWarr = Math.max(...warrs);
+
+  // Savings of the recommended supplier vs the highest quote.
+  const bestQ = scored[0]?.quotation;
+  const savings =
+    bestQ?.totalCost != null && Number.isFinite(maxCost) && maxCost > bestQ.totalCost
+      ? {
+          amount: maxCost - bestQ.totalCost,
+          pct: Math.round(((maxCost - bestQ.totalCost) / maxCost) * 100),
+          currency: bestQ.currency,
+        }
+      : null;
 
   return (
     <div className="space-y-6">
@@ -62,28 +116,38 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {quotations.map((q) => (
-                <tr key={q.id} className="transition hover:bg-muted/40">
-                  <td className="px-5 py-4">
-                    <div className="font-semibold">{q.supplierName}</div>
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {q.supplierName === best && <Tag tone="primary" icon={Trophy} label="Best overall" />}
-                      {q.supplierName === cheapest && <Tag tone="success" icon={Wallet} label="Lowest cost" />}
-                      {q.supplierName === fastest && <Tag tone="warning" icon={Clock} label="Fastest" />}
-                    </div>
-                  </td>
-                  <td className="px-5 py-4 font-semibold tabular-nums">
-                    {formatCurrency(q.totalCost, q.currency)}
-                  </td>
-                  <td className="px-5 py-4 tabular-nums text-muted-foreground">
-                    {formatDelivery(q.deliveryDays)}
-                  </td>
-                  <td className="px-5 py-4 text-muted-foreground">{q.paymentTerms ?? '—'}</td>
-                  <td className="px-5 py-4 text-muted-foreground">
-                    {q.warranty ?? <span className="text-amber-600">Missing</span>}
-                  </td>
-                </tr>
-              ))}
+              {quotations.map((q) => {
+                const costTone = extremeTone(q.totalCost, minCost, maxCost, true);
+                const delTone = extremeTone(q.deliveryDays, minDel, maxDel, true);
+                const warrTone: Extreme =
+                  q.warranty == null
+                    ? 'worst'
+                    : extremeTone(warrantyMonths(q.warranty), minWarr, maxWarr, false);
+                return (
+                  <tr key={q.id} className="transition hover:bg-muted/40">
+                    <td className="px-5 py-4">
+                      <div className="font-semibold">{q.supplierName}</div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {q.supplierName === best && <Tag tone="primary" icon={Trophy} label="Best overall" />}
+                        {q.supplierName === cheapest && <Tag tone="success" icon={Wallet} label="Lowest cost" />}
+                        {q.supplierName === fastest && <Tag tone="warning" icon={Clock} label="Fastest" />}
+                      </div>
+                    </td>
+                    <td className={cn('px-5 py-4 font-semibold tabular-nums', cellText(costTone, false))}>
+                      {q.totalCost == null ? <MissingTag /> : formatCurrency(q.totalCost, q.currency)}
+                    </td>
+                    <td className={cn('px-5 py-4 tabular-nums', cellText(delTone, true))}>
+                      {q.deliveryDays == null ? <MissingTag /> : formatDelivery(q.deliveryDays)}
+                    </td>
+                    <td className="px-5 py-4 text-muted-foreground">
+                      {q.paymentTerms ?? <MissingTag />}
+                    </td>
+                    <td className={cn('px-5 py-4', cellText(warrTone, true))}>
+                      {q.warranty ?? <MissingTag />}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -111,6 +175,13 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
               <RecRow icon={Trophy} tone="primary" title="Best Overall Supplier" highlight
                 supplier={best}
                 detail={`Highest weighted score (${bestScorePct}/100) for your current priorities.`} />
+            )}
+            {best && savings && (
+              <li className="flex items-center gap-2 rounded-xl bg-green-50 px-3 py-2 text-sm font-medium text-green-700">
+                <TrendingDown className="h-4 w-4 shrink-0" />
+                {best} saves {formatCurrency(savings.amount, savings.currency)} ({savings.pct}%) vs
+                the highest quote.
+              </li>
             )}
           </ul>
         </div>
