@@ -55,7 +55,7 @@ function buildFields(
       q.totalCost == null
         ? { snippet: null, confidence: 0 }
         : {
-            snippet: `Grand Total: ${money(q.totalCost)} ${q.currency}`,
+            snippet: `Grand Total: ${q.totalCost.toLocaleString('en-US')} ${q.currency} (≈ ${money(q.totalCostUsd ?? 0)} USD)`,
             page: 2,
             confidence: conf(0.85, 5),
           },
@@ -63,7 +63,7 @@ function buildFields(
       q.deliveryDays == null
         ? { snippet: null, confidence: 0 }
         : {
-            snippet: `Estimated delivery: ${q.deliveryDays} days from PO`,
+            snippet: `Lead time: "${q.deliveryRaw}" → normalized to ${q.deliveryDays} days`,
             page: 1,
             confidence: conf(0.8, 8),
           },
@@ -90,20 +90,65 @@ function buildFields(
 // clear lowest-cost / fastest / best-overall winner (and best != cheapest),
 // plus at least one supplier with a problem so Risk Detection is never empty.
 const ARCHETYPES: {
-  cost: number;
-  delivery: number;
+  amount: number;
+  currency: string;
+  deliveryRaw: string;
   terms: string;
   warranty: string | null;
 }[] = [
-  // Cheapest, but slowest AND no warranty (problem).
-  { cost: 8900, delivery: 26, terms: 'Net 60', warranty: null },
-  // Fastest, but most expensive AND risky payment terms (problem).
-  { cost: 14500, delivery: 7, terms: '100% advance payment', warranty: '12 months' },
-  // Mid-priced with the best warranty → typically best overall.
-  { cost: 10500, delivery: 10, terms: 'Net 30', warranty: '36 months' },
-  // Solid all-rounder, no red flags (for contrast).
-  { cost: 11200, delivery: 11, terms: 'Net 45', warranty: '24 months' },
+  // Cheapest, but slowest AND no warranty (problem). Priced in USD.
+  { amount: 8900, currency: 'USD', deliveryRaw: 'Approx. 4 weeks', terms: 'Net 60', warranty: null },
+  // Fastest, but most expensive AND risky payment terms (problem). Priced in EUR.
+  { amount: 13400, currency: 'EUR', deliveryRaw: '1 week', terms: '100% advance payment', warranty: '12 months' },
+  // Mid-priced (GBP) with the best warranty → typically best overall.
+  { amount: 8300, currency: 'GBP', deliveryRaw: '10 working days', terms: 'Net 30', warranty: '36 months' },
+  // Solid all-rounder, no red flags (for contrast). Priced in USD.
+  { amount: 11200, currency: 'USD', deliveryRaw: '11 days', terms: 'Net 45', warranty: '24 months' },
 ];
+
+// ── Normalization ──────────────────────────────────────────────
+// TODO: replace STATIC_FX with a live FX source (e.g. an exchange-rate API).
+const STATIC_FX: Record<string, number> = {
+  USD: 1,
+  EUR: 1.08,
+  GBP: 1.27,
+  CAD: 0.73,
+  AUD: 0.66,
+  AED: 0.27,
+  INR: 0.012,
+  JPY: 0.0064,
+};
+
+/** Convert an amount in `currency` to a normalized USD value. */
+export function toUsd(amount: number | null, currency: string): number | null {
+  if (amount == null) return null;
+  const rate = STATIC_FX[currency?.toUpperCase()] ?? 1;
+  return Math.round(amount * rate);
+}
+
+/** Normalize free-text delivery ("2 weeks", "ASAP", a date) to integer days. */
+export function normalizeDelivery(raw: string | null): number | null {
+  if (!raw) return null;
+  const s = raw.trim().toLowerCase();
+  if (/asap|immediate|same.?day|next.?day|in stock|ready now/.test(s)) return 1;
+
+  const unit = s.match(/(\d+(?:\.\d+)?)\s*(day|week|month|year)/);
+  if (unit) {
+    const n = parseFloat(unit[1]);
+    const mult =
+      unit[2] === 'week' ? 7 : unit[2] === 'month' ? 30 : unit[2] === 'year' ? 365 : 1;
+    return Math.round(n * mult);
+  }
+
+  const asDate = Date.parse(raw);
+  if (!Number.isNaN(asDate)) {
+    const days = Math.ceil((asDate - Date.now()) / 86_400_000);
+    if (days >= 0 && days < 3650) return days;
+  }
+
+  const bare = s.match(/(\d+(?:\.\d+)?)/);
+  return bare ? Math.round(parseFloat(bare[1])) : null;
+}
 
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
@@ -131,15 +176,17 @@ export function buildAnalysis(fileNames: string[]): AnalysisResult {
   const quotations: ExtractedQuotation[] = names.map((fileName, i) => {
     const profile = ARCHETYPES[i % ARCHETYPES.length];
     const h = hash(fileName + i);
-    const jitter = (h % 600) - 300; // ±$300 so repeats differ
-    const deliveryJitter = (h >> 4) % 3; // 0-2 extra days
+    const jitter = (h % 600) - 300; // ±300 (original currency) so repeats differ
+    const totalCost = profile.amount + jitter;
     const base = {
       id: `q_${i}`,
       fileName,
       supplierName: prettySupplier(fileName, i),
-      totalCost: profile.cost + jitter,
-      currency: 'USD',
-      deliveryDays: profile.delivery + deliveryJitter,
+      totalCost,
+      currency: profile.currency,
+      totalCostUsd: toUsd(totalCost, profile.currency),
+      deliveryRaw: profile.deliveryRaw,
+      deliveryDays: normalizeDelivery(profile.deliveryRaw),
       paymentTerms: profile.terms,
       warranty: profile.warranty,
     };
@@ -159,15 +206,17 @@ export function buildRecommendation(
   qs: ExtractedQuotation[],
   risks: RiskFlag[],
 ): Recommendation {
-  const withCost = qs.filter((q) => q.totalCost != null);
+  const withCostUsd = qs.filter((q) => q.totalCostUsd != null);
   const withDelivery = qs.filter((q) => q.deliveryDays != null);
   const rec: Recommendation = {};
 
-  if (withCost.length) {
-    const cheapest = withCost.reduce((a, b) => (a.totalCost! <= b.totalCost! ? a : b));
+  if (withCostUsd.length) {
+    const cheapest = withCostUsd.reduce((a, b) =>
+      a.totalCostUsd! <= b.totalCostUsd! ? a : b,
+    );
     rec.lowestCost = {
       supplier: cheapest.supplierName,
-      detail: `Lowest total cost at ${money(cheapest.totalCost!)}.`,
+      detail: `Lowest normalized cost at ${money(cheapest.totalCostUsd!)} (USD).`,
     };
   }
 
@@ -238,7 +287,7 @@ export function scoreSuppliers(
 ): SupplierScore[] {
   if (!quotations.length) return [];
 
-  const prices = quotations.map((q) => q.totalCost ?? 0);
+  const prices = quotations.map((q) => q.totalCostUsd ?? 0); // normalized USD
   const deliveries = quotations.map((q) => q.deliveryDays ?? 0);
   const warranties = quotations.map((q) => warrantyMonths(q.warranty));
   const riskScores = quotations.map((q) => riskScoreFor(q.supplierName, risks));
@@ -276,7 +325,7 @@ export function scoreSuppliers(
 
 export function detectRisks(qs: ExtractedQuotation[]): RiskFlag[] {
   const risks: RiskFlag[] = [];
-  const costs = qs.filter((q) => q.totalCost != null).map((q) => q.totalCost!);
+  const costs = qs.filter((q) => q.totalCostUsd != null).map((q) => q.totalCostUsd!);
   const med = costs.length ? median(costs) : 0;
 
   for (const q of qs) {
@@ -310,12 +359,12 @@ export function detectRisks(qs: ExtractedQuotation[]): RiskFlag[] {
       });
     }
 
-    if (q.totalCost != null && med > 0 && q.totalCost > med * 1.25) {
+    if (q.totalCostUsd != null && med > 0 && q.totalCostUsd > med * 1.25) {
       risks.push({
         supplier: q.supplierName,
         type: 'unusual_pricing',
         message: `${q.supplierName}: priced ${Math.round(
-          ((q.totalCost - med) / med) * 100,
+          ((q.totalCostUsd - med) / med) * 100,
         )}% above the median quote.`,
       });
     }

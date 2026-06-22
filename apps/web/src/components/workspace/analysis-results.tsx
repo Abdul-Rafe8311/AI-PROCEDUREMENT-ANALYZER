@@ -148,7 +148,7 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
   const bestScorePct = scored[0] ? Math.round(scored[0].overall * 100) : null;
 
   // Per-column extremes for best/worst cell highlighting.
-  const costs = quotations.map((q) => q.totalCost).filter((v): v is number => v != null);
+  const costs = quotations.map((q) => q.totalCostUsd).filter((v): v is number => v != null);
   const dels = quotations.map((q) => q.deliveryDays).filter((v): v is number => v != null);
   const warrs = quotations.map((q) => warrantyMonths(q.warranty));
   const minCost = Math.min(...costs);
@@ -161,11 +161,10 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
   // Savings of the recommended supplier vs the highest quote.
   const bestQ = scored[0]?.quotation;
   const savings =
-    bestQ?.totalCost != null && Number.isFinite(maxCost) && maxCost > bestQ.totalCost
+    bestQ?.totalCostUsd != null && Number.isFinite(maxCost) && maxCost > bestQ.totalCostUsd
       ? {
-          amount: maxCost - bestQ.totalCost,
-          pct: Math.round(((maxCost - bestQ.totalCost) / maxCost) * 100),
-          currency: bestQ.currency,
+          amount: maxCost - bestQ.totalCostUsd,
+          pct: Math.round(((maxCost - bestQ.totalCostUsd) / maxCost) * 100),
         }
       : null;
 
@@ -202,7 +201,7 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
             </thead>
             <tbody className="divide-y divide-border">
               {quotations.map((q) => {
-                const costTone = extremeTone(q.totalCost, minCost, maxCost, true);
+                const costTone = extremeTone(q.totalCostUsd, minCost, maxCost, true);
                 const delTone = extremeTone(q.deliveryDays, minDel, maxDel, true);
                 const warrTone: Extreme =
                   q.warranty == null
@@ -231,7 +230,18 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                       <td className={cn('px-5 py-4 font-semibold tabular-nums', cellText(costTone, false))}>
                         <FieldButton q={q} field="totalCost" onToggle={toggleSource}
                           active={isOpen('totalCost')}
-                          display={q.totalCost == null ? null : formatCurrency(q.totalCost, q.currency)} />
+                          display={
+                            q.totalCost == null ? null : (
+                              <span className="inline-flex flex-col leading-tight">
+                                <span>{formatCurrency(q.totalCost, q.currency)}</span>
+                                {q.currency !== 'USD' && q.totalCostUsd != null && (
+                                  <span className="text-xs font-normal text-muted-foreground">
+                                    ≈ {formatCurrency(q.totalCostUsd, 'USD')}
+                                  </span>
+                                )}
+                              </span>
+                            )
+                          } />
                       </td>
                       <td className={cn('px-5 py-4 tabular-nums', cellText(delTone, true))}>
                         <FieldButton q={q} field="deliveryDays" onToggle={toggleSource}
@@ -288,8 +298,8 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
             {best && savings && (
               <li className="flex items-center gap-2 rounded-xl bg-green-50 px-3 py-2 text-sm font-medium text-green-700">
                 <TrendingDown className="h-4 w-4 shrink-0" />
-                {best} saves {formatCurrency(savings.amount, savings.currency)} ({savings.pct}%) vs
-                the highest quote.
+                {best} saves {formatCurrency(savings.amount, 'USD')} ({savings.pct}%) vs the
+                highest quote.
               </li>
             )}
           </ul>

@@ -28,8 +28,14 @@ export interface ExtractedQuotation {
   id: string;
   fileName: string;
   supplierName: string;
+  /** original amount in `currency` */
   totalCost: number | null;
   currency: string;
+  /** normalized to USD (single base currency) — used for sorting/scoring */
+  totalCostUsd: number | null;
+  /** raw delivery text as written ("2 weeks", "ASAP", a date) */
+  deliveryRaw: string | null;
+  /** normalized integer days — used for sorting/scoring */
   deliveryDays: number | null;
   paymentTerms: string | null;
   warranty: string | null;
