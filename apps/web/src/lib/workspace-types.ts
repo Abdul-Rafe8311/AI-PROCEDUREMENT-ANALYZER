@@ -82,16 +82,18 @@ export interface Recommendation {
 export interface ScoreWeights {
   price: number;
   delivery: number;
+  payment: number;
   warranty: number;
   risk: number;
 }
 
-/** Default weighting (sums to 1): price-led, then delivery, warranty, risk. */
+/** Default weighting (sums to 1): Price 40 / Delivery 25 / Payment 15 / Warranty 10 / Risk 10. */
 export const DEFAULT_WEIGHTS: ScoreWeights = {
   price: 0.4,
   delivery: 0.25,
-  warranty: 0.2,
-  risk: 0.15,
+  payment: 0.15,
+  warranty: 0.1,
+  risk: 0.1,
 };
 
 export interface SupplierScore {
@@ -99,6 +101,7 @@ export interface SupplierScore {
   /** each normalized to 0..1 where higher = better */
   price: number;
   delivery: number;
+  payment: number;
   warranty: number;
   risk: number;
   overall: number;

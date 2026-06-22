@@ -284,6 +284,19 @@ const RISK_SEVERITY: Record<RiskType, number> = {
   unusual_pricing: 1,
 };
 
+/**
+ * Days of supplier credit from payment terms — higher is better for the buyer.
+ * "Net 45" -> 45; advance/prepaid/COD -> 0 (worst); unknown -> 15 (neutral-ish).
+ */
+export function paymentDays(terms: string | null): number {
+  if (!terms) return 15;
+  if (/advance|prepay|prepaid|100\s*%|upfront|cash\s*on|on\s*delivery|\bcod\b/i.test(terms)) {
+    return 0;
+  }
+  const m = terms.match(/net\s*(\d+)/i) ?? terms.match(/(\d+)\s*days?/i);
+  return m ? parseInt(m[1], 10) : 15;
+}
+
 /** Parse warranty months from a free-text string ("36 months", "2 years"). */
 export function warrantyMonths(warranty: string | null): number {
   if (!warranty) return 0;
@@ -321,38 +334,122 @@ export function scoreSuppliers(
 
   const prices = quotations.map((q) => q.totalCostUsd ?? 0); // normalized USD
   const deliveries = quotations.map((q) => q.deliveryDays ?? 0);
+  const payments = quotations.map((q) => paymentDays(q.paymentTerms));
   const warranties = quotations.map((q) => warrantyMonths(q.warranty));
   const riskScores = quotations.map((q) => riskScoreFor(q.supplierName, risks));
 
   const minP = Math.min(...prices), maxP = Math.max(...prices);
   const minD = Math.min(...deliveries), maxD = Math.max(...deliveries);
+  const minPay = Math.min(...payments), maxPay = Math.max(...payments);
   const minW = Math.min(...warranties), maxW = Math.max(...warranties);
   const maxRisk = Math.max(...riskScores);
   const allRiskEqual = riskScores.every((r) => r === riskScores[0]);
 
   // Renormalize weights so they always sum to 1 (guard the all-zero case).
-  const sum = weights.price + weights.delivery + weights.warranty + weights.risk;
+  const sum =
+    weights.price + weights.delivery + weights.payment + weights.warranty + weights.risk;
   const w =
     sum > 0
       ? {
           price: weights.price / sum,
           delivery: weights.delivery / sum,
+          payment: weights.payment / sum,
           warranty: weights.warranty / sum,
           risk: weights.risk / sum,
         }
-      : { price: 0.25, delivery: 0.25, warranty: 0.25, risk: 0.25 };
+      : { price: 0.2, delivery: 0.2, payment: 0.2, warranty: 0.2, risk: 0.2 };
 
   return quotations
     .map<SupplierScore>((q, i) => {
       const price = normalize(prices[i], minP, maxP, false); // lower is better
       const delivery = normalize(deliveries[i], minD, maxD, false); // lower is better
+      const payment = normalize(payments[i], minPay, maxPay, true); // more credit is better
       const warranty = normalize(warranties[i], minW, maxW, true); // higher is better
       const risk = allRiskEqual ? 1 : 1 - riskScores[i] / maxRisk; // fewer/less severe is better
       const overall =
-        w.price * price + w.delivery * delivery + w.warranty * warranty + w.risk * risk;
-      return { quotation: q, price, delivery, warranty, risk, overall };
+        w.price * price +
+        w.delivery * delivery +
+        w.payment * payment +
+        w.warranty * warranty +
+        w.risk * risk;
+      return { quotation: q, price, delivery, payment, warranty, risk, overall };
     })
     .sort((a, b) => b.overall - a.overall);
+}
+
+export type RiskLevel = 'Low' | 'Medium' | 'High';
+
+/** Coarse risk level from a supplier's summed flag severity. */
+export function riskLevelFor(supplierName: string, risks: RiskFlag[]): RiskLevel {
+  const s = riskScoreFor(supplierName, risks);
+  if (s >= 4) return 'High';
+  if (s >= 2) return 'Medium';
+  return 'Low';
+}
+
+/** Procurement score 0-100 for a supplier under the given weights. */
+export function procurementScore(
+  supplierName: string,
+  scored: SupplierScore[],
+): number {
+  const s = scored.find((x) => x.quotation.supplierName === supplierName);
+  return s ? Math.round(s.overall * 100) : 0;
+}
+
+/**
+ * Plain-language executive summary built purely from the data (no LLM).
+ * Names the recommended supplier, savings vs the highest quote, payment/
+ * delivery posture, and the leading risk.
+ */
+export function buildExecutiveSummary(
+  scored: SupplierScore[],
+  risks: RiskFlag[],
+): string {
+  if (!scored.length) return '';
+  const best = scored[0].quotation;
+  const costs = scored
+    .map((s) => s.quotation.totalCostUsd)
+    .filter((v): v is number => v != null);
+  if (!costs.length) return `${best.supplierName} is the recommended supplier.`;
+
+  const avg = costs.reduce((a, b) => a + b, 0) / costs.length;
+  const maxCost = Math.max(...costs);
+  const bestCost = best.totalCostUsd ?? avg;
+  const vsAvgPct = avg > 0 ? Math.round(((avg - bestCost) / avg) * 1000) / 10 : 0;
+  const savings = maxCost - bestCost;
+  const savingsPct = maxCost > 0 ? Math.round((savings / maxCost) * 1000) / 10 : 0;
+
+  const fastest = [...scored]
+    .map((s) => s.quotation)
+    .filter((q) => q.deliveryDays != null)
+    .sort((a, b) => a.deliveryDays! - b.deliveryDays!)[0];
+
+  const parts: string[] = [];
+  parts.push(
+    vsAvgPct > 0
+      ? `${best.supplierName} is ${vsAvgPct}% cheaper than the average quotation`
+      : `${best.supplierName} is the best-balanced quotation`,
+  );
+  if (best.paymentTerms) parts.push(`offers ${best.paymentTerms} payment terms`);
+  let summary = parts.join(' and ') + '.';
+
+  if (best.deliveryDays != null) {
+    if (fastest && fastest.supplierName !== best.supplierName) {
+      const gap = best.deliveryDays - (fastest.deliveryDays ?? 0);
+      summary += ` Delivery is ${gap} day${gap === 1 ? '' : 's'} slower than ${fastest.supplierName} but remains within typical project timelines.`;
+    } else {
+      summary += ` It also provides the fastest delivery at ${best.deliveryDays} days.`;
+    }
+  }
+
+  if (savings > 0) {
+    summary += ` Choosing it over the highest quotation saves ${money(savings)} (${savingsPct}%).`;
+  }
+  const bestRisks = risks.filter((r) => r.supplier === best.supplierName);
+  summary += bestRisks.length
+    ? ` Note: ${bestRisks.length} risk flag${bestRisks.length === 1 ? '' : 's'} to review before award.`
+    : ` No material risks were detected for this supplier.`;
+  return summary;
 }
 
 export function detectRisks(qs: ExtractedQuotation[]): RiskFlag[] {

@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  BarChart3,
   Clock,
   ShieldAlert,
   Sparkles,
@@ -14,7 +15,13 @@ import {
   Wallet,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { scoreSuppliers, warrantyMonths } from '@/lib/analysis-engine';
+import {
+  buildExecutiveSummary,
+  type RiskLevel,
+  riskLevelFor,
+  scoreSuppliers,
+  warrantyMonths,
+} from '@/lib/analysis-engine';
 import {
   type AnalysisResult,
   DEFAULT_WEIGHTS,
@@ -24,8 +31,8 @@ import {
   formatCurrency,
   formatDelivery,
   type ScoreWeights,
+  type SupplierScore,
 } from '@/lib/workspace-types';
-import { WeightControls } from './weight-controls';
 import { ComparisonMatrix } from './comparison-matrix';
 
 type Extreme = 'best' | 'worst' | 'none';
@@ -88,6 +95,30 @@ function ColumnFlag({ tone, lowerIsBetter }: { tone: Extreme; lowerIsBetter: boo
       className="h-3 w-3 shrink-0 opacity-80"
       aria-label={isBest ? 'Best value in this column' : 'Worst value in this column'}
     />
+  );
+}
+
+function ScoreBadge({ score }: { score: number }) {
+  const tone =
+    score >= 85 ? 'bg-success/15 text-success' : score >= 70 ? 'bg-primary/10 text-primary' : 'bg-warning/15 text-warning';
+  return (
+    <span className={cn('nums inline-flex items-center rounded-md px-2 py-0.5 text-sm font-semibold', tone)}>
+      {score}
+    </span>
+  );
+}
+
+function RiskBadge({ level }: { level: RiskLevel }) {
+  const map: Record<RiskLevel, string> = {
+    Low: 'bg-success/15 text-success',
+    Medium: 'bg-warning/15 text-warning',
+    High: 'bg-danger/15 text-danger',
+  };
+  return (
+    <span className={cn('inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold', map[level])}>
+      <span className={cn('h-1.5 w-1.5 rounded-full', level === 'Low' ? 'bg-success' : level === 'Medium' ? 'bg-warning' : 'bg-danger')} />
+      {level}
+    </span>
   );
 }
 
@@ -156,14 +187,30 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
   const cheapest = rec.lowestCost?.supplier;
   const fastest = rec.fastestDelivery?.supplier;
 
-  // Live deterministic re-ranking as the weight sliders move (no LLM).
-  const [weights, setWeights] = useState<ScoreWeights>(DEFAULT_WEIGHTS);
+  // Fixed, auditable scoring — weights are system-defined, not user-editable.
   const scored = useMemo(
-    () => scoreSuppliers(quotations, risks, weights),
-    [quotations, risks, weights],
+    () => scoreSuppliers(quotations, risks, DEFAULT_WEIGHTS),
+    [quotations, risks],
   );
   const best = scored[0]?.quotation.supplierName;
   const bestScorePct = scored[0] ? Math.round(scored[0].overall * 100) : null;
+
+  // Procurement score (0-100) + risk level per supplier, keyed by name.
+  const scoreOf = useMemo(() => {
+    const m = new Map<string, number>();
+    scored.forEach((s) => m.set(s.quotation.supplierName, Math.round(s.overall * 100)));
+    return m;
+  }, [scored]);
+  const execSummary = useMemo(
+    () => buildExecutiveSummary(scored, risks),
+    [scored, risks],
+  );
+  // Confidence reflects how decisively the top supplier leads the runner-up.
+  const confidence = useMemo(() => {
+    if (scored.length < 2) return scored.length ? 90 : 0;
+    const margin = scored[0].overall - scored[1].overall;
+    return Math.round(Math.min(0.98, 0.6 + margin * 2.5) * 100);
+  }, [scored]);
 
   // Per-column extremes for best/worst cell highlighting.
   const costs = quotations.map((q) => q.totalCostUsd).filter((v): v is number => v != null);
@@ -215,6 +262,8 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                 <th className="px-5 py-3 text-right font-semibold">Delivery</th>
                 <th className="px-5 py-3 text-left font-semibold">Payment Terms</th>
                 <th className="px-5 py-3 text-right font-semibold">Warranty</th>
+                <th className="px-5 py-3 text-right font-semibold">Score</th>
+                <th className="px-5 py-3 text-center font-semibold">Risk</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -283,10 +332,16 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                             active={isOpen('warranty')} onToggle={toggleSource} />
                         </span>
                       </td>
+                      <td className="px-5 py-4 text-right">
+                        <ScoreBadge score={scoreOf.get(q.supplierName) ?? 0} />
+                      </td>
+                      <td className="px-5 py-4 text-center">
+                        <RiskBadge level={riskLevelFor(q.supplierName, risks)} />
+                      </td>
                     </tr>
                     {openMeta && open && (
                       <tr className="bg-muted/20">
-                        <td colSpan={5} className="px-5 pb-4 pt-0">
+                        <td colSpan={7} className="px-5 pb-4 pt-0">
                           <SourceDetail field={open.field} meta={openMeta} />
                         </td>
                       </tr>
@@ -319,7 +374,17 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
 
       <ComparisonMatrix quotations={quotations} />
 
-      <WeightControls weights={weights} onChange={setWeights} />
+      <ScoreBreakdown scored={scored} />
+
+      {execSummary && (
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Sparkles className="h-4 w-4 text-primary" />
+            Executive Summary
+          </div>
+          <p className="mt-3 text-sm leading-relaxed text-foreground">{execSummary}</p>
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* AI recommendation */}
@@ -338,9 +403,9 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                 supplier={rec.fastestDelivery.supplier} detail={rec.fastestDelivery.detail} />
             )}
             {best && (
-              <RecRow icon={Trophy} tone="primary" title="Best Overall Supplier" highlight
+              <RecRow icon={Trophy} tone="primary" title="Recommended Supplier" highlight
                 supplier={best}
-                detail={`Highest weighted score (${bestScorePct}/100) for your current priorities.`} />
+                detail={`Highest procurement score (${bestScorePct}/100) on the system methodology.`} />
             )}
             {best && savings && (
               <li className="flex items-center gap-2 rounded-xl bg-success/10 px-3 py-2 text-sm font-medium text-success">
@@ -350,6 +415,14 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
               </li>
             )}
           </ul>
+          {best && (
+            <div className="mt-4 flex items-center justify-between border-t border-primary/20 pt-4">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Confidence score
+              </span>
+              <span className="nums text-lg font-bold text-primary">{confidence}%</span>
+            </div>
+          )}
         </div>
 
         {/* Risk detection */}
@@ -438,5 +511,99 @@ function RecRow({
         <p className="mt-0.5 text-sm text-muted-foreground">{detail}</p>
       </div>
     </li>
+  );
+}
+
+// ── Read-only scoring methodology + auditable per-criterion breakdown ──
+const CRITERIA: { key: keyof typeof DEFAULT_WEIGHTS; label: string; dim: keyof SupplierScore }[] = [
+  { key: 'price', label: 'Price', dim: 'price' },
+  { key: 'delivery', label: 'Delivery', dim: 'delivery' },
+  { key: 'payment', label: 'Payment Terms', dim: 'payment' },
+  { key: 'warranty', label: 'Warranty', dim: 'warranty' },
+  { key: 'risk', label: 'Risk', dim: 'risk' },
+];
+
+function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
+  if (!scored.length) return null;
+  // Points = weight% applied to the 0..1 dimension score (so Price caps at 40).
+  const pts = (s: SupplierScore, key: keyof typeof DEFAULT_WEIGHTS, dim: keyof SupplierScore) =>
+    Math.round(DEFAULT_WEIGHTS[key] * (s[dim] as number) * 100);
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-4">
+        <span className="flex items-center gap-2 text-sm font-semibold">
+          <BarChart3 className="h-4 w-4 text-primary" />
+          Procurement Scoring Methodology
+        </span>
+        <span
+          className="cursor-help text-xs text-muted-foreground underline decoration-dotted underline-offset-2"
+          title="Each supplier is scored 0-100. Every criterion is normalized across suppliers (0-1, higher is better) then multiplied by its fixed weight. Weights are system-defined and cannot be edited, so rankings are data-driven and auditable."
+        >
+          How is this calculated?
+        </span>
+      </div>
+
+      {/* Fixed weights (read-only) */}
+      <div className="flex flex-wrap gap-2 border-b border-border bg-muted/30 px-5 py-3 text-xs">
+        {CRITERIA.map((c) => (
+          <span key={c.key} className="inline-flex items-center gap-1.5 rounded-full bg-card px-2.5 py-1 font-medium shadow-sm">
+            {c.label}
+            <span className="nums text-primary">{Math.round(DEFAULT_WEIGHTS[c.key] * 100)}%</span>
+          </span>
+        ))}
+      </div>
+
+      {/* Auditable breakdown */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead className="border-b border-border bg-muted/40 text-[11px] uppercase tracking-wider text-muted-foreground">
+            <tr>
+              <th className="px-5 py-3 text-left font-semibold">Criteria</th>
+              <th className="px-5 py-3 text-right font-semibold">Weight</th>
+              {scored.map((s) => (
+                <th key={s.quotation.id} className="px-5 py-3 text-right font-semibold">
+                  {s.quotation.supplierName}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {CRITERIA.map((c) => {
+              const vals = scored.map((s) => pts(s, c.key, c.dim));
+              const max = Math.max(...vals);
+              return (
+                <tr key={c.key} className="transition hover:bg-muted/40">
+                  <td className="px-5 py-3 font-medium">{c.label}</td>
+                  <td className="nums px-5 py-3 text-right text-muted-foreground">
+                    {Math.round(DEFAULT_WEIGHTS[c.key] * 100)}%
+                  </td>
+                  {vals.map((v, i) => (
+                    <td
+                      key={scored[i].quotation.id}
+                      className={cn('nums px-5 py-3 text-right', v === max ? 'font-semibold text-success' : 'text-muted-foreground')}
+                    >
+                      {v}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+            <tr className="border-t-2 border-border bg-muted/30 font-semibold">
+              <td className="px-5 py-3" colSpan={2}>Total Procurement Score</td>
+              {scored.map((s) => {
+                const total = Math.round(s.overall * 100);
+                const isTop = s.quotation.supplierName === scored[0].quotation.supplierName;
+                return (
+                  <td key={s.quotation.id} className={cn('nums px-5 py-3 text-right', isTop && 'text-primary')}>
+                    {total}{isTop && ' ★'}
+                  </td>
+                );
+              })}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
