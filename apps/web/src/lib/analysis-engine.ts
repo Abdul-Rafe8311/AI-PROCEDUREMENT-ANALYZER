@@ -10,6 +10,7 @@ import type {
   ExtractedQuotation,
   FieldKey,
   FieldProvenance,
+  LineItem,
   Recommendation,
   RiskFlag,
   RiskType,
@@ -36,10 +37,41 @@ function prettySupplier(fileName: string, i: number): string {
   return base.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// Shared catalog of construction/manufacturing materials. The same items appear
+// for every supplier so the comparison matrix lines up; per-item price variation
+// is added per supplier so different suppliers win different items.
+const CATALOG: { name: string; quantity: number; weight: number }[] = [
+  { name: 'Reinforced Steel Bars (12mm)', quantity: 500, weight: 0.34 },
+  { name: 'Portland Cement (50kg)', quantity: 800, weight: 0.18 },
+  { name: 'Structural Timber Beams', quantity: 300, weight: 0.2 },
+  { name: 'Galvanized Roofing Sheets', quantity: 450, weight: 0.16 },
+  { name: 'Fasteners & Fixings (set)', quantity: 1200, weight: 0.12 },
+];
+
+// Itemized breakdown that sums (in USD) to the supplier's total cost.
+function buildLineItems(q: Omit<ExtractedQuotation, 'fields' | 'lineItems'>): LineItem[] {
+  const totalUsd = q.totalCostUsd ?? 0;
+  const fx = STATIC_FX[q.currency?.toUpperCase()] ?? 1;
+  const weights = CATALOG.map((item) => {
+    const jitter = ((hash(q.id + item.name) % 31) - 15) / 100; // ±15%
+    return Math.max(0.02, item.weight * (1 + jitter));
+  });
+  const wsum = weights.reduce((a, b) => a + b, 0);
+
+  return CATALOG.map((item, i) => {
+    const lineUsd = (totalUsd * weights[i]) / wsum;
+    const totalPrice = Math.round(lineUsd / fx);
+    const unitPrice = item.quantity
+      ? Math.round((totalPrice / item.quantity) * 100) / 100
+      : null;
+    return { name: item.name, quantity: item.quantity, unitPrice, totalPrice, currency: q.currency };
+  });
+}
+
 // Simulated source snippet + confidence per field (real OCR/extraction is the
 // documented next step). A null value yields confidence 0 → rendered "Not found".
 function buildFields(
-  q: Omit<ExtractedQuotation, 'fields'>,
+  q: Omit<ExtractedQuotation, 'fields' | 'lineItems'>,
   h: number,
 ): Record<FieldKey, FieldProvenance> {
   const conf = (base: number, shift: number) =>
@@ -190,7 +222,7 @@ export function buildAnalysis(fileNames: string[]): AnalysisResult {
       paymentTerms: profile.terms,
       warranty: profile.warranty,
     };
-    return { ...base, fields: buildFields(base, h) };
+    return { ...base, lineItems: buildLineItems(base), fields: buildFields(base, h) };
   });
 
   const risks = detectRisks(quotations);

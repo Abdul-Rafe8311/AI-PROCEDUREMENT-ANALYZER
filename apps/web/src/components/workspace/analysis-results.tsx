@@ -26,6 +26,7 @@ import {
   type ScoreWeights,
 } from '@/lib/workspace-types';
 import { WeightControls } from './weight-controls';
+import { ComparisonMatrix } from './comparison-matrix';
 
 type Extreme = 'best' | 'worst' | 'none';
 
@@ -315,6 +316,8 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
           </span>
         </div>
       </div>
+
+      <ComparisonMatrix quotations={quotations} />
 
       <WeightControls weights={weights} onChange={setWeights} />
 

@@ -24,6 +24,16 @@ export interface FieldProvenance {
   confidence: number;
 }
 
+export interface LineItem {
+  name: string;
+  quantity: number | null;
+  /** unit price in `currency` */
+  unitPrice: number | null;
+  /** line total in `currency` */
+  totalPrice: number | null;
+  currency: string;
+}
+
 export interface ExtractedQuotation {
   id: string;
   fileName: string;
@@ -39,6 +49,8 @@ export interface ExtractedQuotation {
   deliveryDays: number | null;
   paymentTerms: string | null;
   warranty: string | null;
+  /** extracted line items (shared catalog across suppliers) */
+  lineItems: LineItem[];
   /** per-field source snippet + confidence for traceability */
   fields: Record<FieldKey, FieldProvenance>;
 }
