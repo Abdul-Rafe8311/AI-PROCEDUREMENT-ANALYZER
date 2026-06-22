@@ -68,7 +68,7 @@ export default function WorkspacePage() {
   async function handleAnalyze() {
     if (!files.length) return;
     setError(null);
-    await persistUpload();
+    const id = await persistUpload();
 
     try {
       setAnalyzing(true);
@@ -81,10 +81,21 @@ export default function WorkspacePage() {
       const data = (await res.json()) as AnalysisResult;
       setAnalysis(data);
       setMessages([]);
+      if (id) void persistResult(id, data);
     } catch {
       setError('Could not analyze the quotations. Please try again.');
     } finally {
       setAnalyzing(false);
+    }
+  }
+
+  // Best-effort: store the full analysis (with per-field source + confidence).
+  async function persistResult(id: string, result: AnalysisResult) {
+    if (!isSupabaseConfigured || !supabase) return;
+    try {
+      await supabase.from('analyses').update({ result }).eq('id', id);
+    } catch {
+      /* ignore — requires the analyses.result column (see supabase/schema.sql) */
     }
   }
 

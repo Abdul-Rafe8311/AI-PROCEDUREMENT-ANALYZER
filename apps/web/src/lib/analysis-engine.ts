@@ -8,6 +8,8 @@ import { DEFAULT_WEIGHTS } from './workspace-types';
 import type {
   AnalysisResult,
   ExtractedQuotation,
+  FieldKey,
+  FieldProvenance,
   Recommendation,
   RiskFlag,
   RiskType,
@@ -32,6 +34,56 @@ function prettySupplier(fileName: string, i: number): string {
     .trim();
   if (!base) return `Supplier ${String.fromCharCode(65 + i)}`;
   return base.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Simulated source snippet + confidence per field (real OCR/extraction is the
+// documented next step). A null value yields confidence 0 → rendered "Not found".
+function buildFields(
+  q: Omit<ExtractedQuotation, 'fields'>,
+  h: number,
+): Record<FieldKey, FieldProvenance> {
+  const conf = (base: number, shift: number) =>
+    Math.min(0.99, Math.round((base + ((h >> shift) % 12) / 100) * 100) / 100);
+
+  return {
+    supplierName: {
+      snippet: `${q.supplierName} — quotation letterhead`,
+      page: 1,
+      confidence: conf(0.9, 2),
+    },
+    totalCost:
+      q.totalCost == null
+        ? { snippet: null, confidence: 0 }
+        : {
+            snippet: `Grand Total: ${money(q.totalCost)} ${q.currency}`,
+            page: 2,
+            confidence: conf(0.85, 5),
+          },
+    deliveryDays:
+      q.deliveryDays == null
+        ? { snippet: null, confidence: 0 }
+        : {
+            snippet: `Estimated delivery: ${q.deliveryDays} days from PO`,
+            page: 1,
+            confidence: conf(0.8, 8),
+          },
+    paymentTerms:
+      q.paymentTerms == null
+        ? { snippet: null, confidence: 0 }
+        : {
+            snippet: `Payment terms: ${q.paymentTerms}`,
+            page: 2,
+            confidence: conf(0.82, 11),
+          },
+    warranty:
+      q.warranty == null
+        ? { snippet: null, confidence: 0 } // genuinely not found in the document
+        : {
+            snippet: `Warranty: ${q.warranty} on parts & labour`,
+            page: 3,
+            confidence: conf(0.75, 14),
+          },
+  };
 }
 
 // Distinct supplier archetypes with REAL trade-offs so the demo always shows a
@@ -81,7 +133,7 @@ export function buildAnalysis(fileNames: string[]): AnalysisResult {
     const h = hash(fileName + i);
     const jitter = (h % 600) - 300; // ±$300 so repeats differ
     const deliveryJitter = (h >> 4) % 3; // 0-2 extra days
-    return {
+    const base = {
       id: `q_${i}`,
       fileName,
       supplierName: prettySupplier(fileName, i),
@@ -91,6 +143,7 @@ export function buildAnalysis(fileNames: string[]): AnalysisResult {
       paymentTerms: profile.terms,
       warranty: profile.warranty,
     };
+    return { ...base, fields: buildFields(base, h) };
   });
 
   const risks = detectRisks(quotations);

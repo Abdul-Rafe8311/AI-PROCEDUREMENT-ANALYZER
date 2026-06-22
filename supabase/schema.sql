@@ -11,9 +11,14 @@ create extension if not exists "pgcrypto";
 create table if not exists public.analyses (
   id          uuid primary key default gen_random_uuid(),
   created_at  timestamptz not null default now(),
-  title       text
+  title       text,
+  -- Phase 4: full AnalysisResult (quotations w/ per-field source + confidence)
+  result      jsonb
   -- FUTURE: owner_id uuid references auth.users(id)
 );
+
+-- Migration for databases created before Phase 4 (idempotent):
+alter table public.analyses add column if not exists result jsonb;
 
 create table if not exists public.documents (
   id          uuid primary key default gen_random_uuid(),

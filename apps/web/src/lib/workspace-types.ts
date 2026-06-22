@@ -8,6 +8,22 @@ export const ACCEPTED_MIME = [
   'image/jpeg',
 ] as const;
 
+export type FieldKey =
+  | 'supplierName'
+  | 'totalCost'
+  | 'deliveryDays'
+  | 'paymentTerms'
+  | 'warranty';
+
+export interface FieldProvenance {
+  /** source text snippet the value was extracted from (null when not found) */
+  snippet: string | null;
+  /** page number in the source document, if known */
+  page?: number;
+  /** 0..1 extraction confidence; 0 means the field was not found */
+  confidence: number;
+}
+
 export interface ExtractedQuotation {
   id: string;
   fileName: string;
@@ -17,6 +33,8 @@ export interface ExtractedQuotation {
   deliveryDays: number | null;
   paymentTerms: string | null;
   warranty: string | null;
+  /** per-field source snippet + confidence for traceability */
+  fields: Record<FieldKey, FieldProvenance>;
 }
 
 export type RiskType =

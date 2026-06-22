@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { Fragment, type ReactNode, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Clock,
@@ -16,6 +16,9 @@ import { scoreSuppliers, warrantyMonths } from '@/lib/analysis-engine';
 import {
   type AnalysisResult,
   DEFAULT_WEIGHTS,
+  type ExtractedQuotation,
+  type FieldKey,
+  type FieldProvenance,
   formatCurrency,
   formatDelivery,
   type ScoreWeights,
@@ -45,11 +48,88 @@ function cellText(tone: Extreme, mutedWhenNone: boolean): string {
   return mutedWhenNone ? 'text-muted-foreground' : '';
 }
 
-function MissingTag() {
+function NotFoundTag() {
   return (
-    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700">
-      Missing
+    <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+      Not found
     </span>
+  );
+}
+
+function ConfidenceDot({ confidence }: { confidence: number }) {
+  const tone =
+    confidence === 0
+      ? 'bg-muted-foreground/40'
+      : confidence >= 0.85
+        ? 'bg-green-500'
+        : confidence >= 0.65
+          ? 'bg-amber-500'
+          : 'bg-red-500';
+  return (
+    <span
+      className={cn('inline-block h-1.5 w-1.5 shrink-0 rounded-full', tone)}
+      title={`Confidence: ${Math.round(confidence * 100)}%`}
+    />
+  );
+}
+
+const FIELD_LABELS: Record<FieldKey, string> = {
+  supplierName: 'Supplier name',
+  totalCost: 'Total cost',
+  deliveryDays: 'Delivery time',
+  paymentTerms: 'Payment terms',
+  warranty: 'Warranty',
+};
+
+function FieldButton({
+  q,
+  field,
+  display,
+  active,
+  onToggle,
+  className,
+}: {
+  q: ExtractedQuotation;
+  field: FieldKey;
+  display: ReactNode;
+  active: boolean;
+  onToggle: (id: string, field: FieldKey) => void;
+  className?: string;
+}) {
+  const meta = q.fields[field];
+  const notFound = meta.confidence === 0 || display == null || display === '';
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(q.id, field)}
+      title="Show source"
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded text-left transition hover:underline',
+        active && 'underline',
+        className,
+      )}
+    >
+      {notFound ? <NotFoundTag /> : <span>{display}</span>}
+      <ConfidenceDot confidence={meta.confidence} />
+    </button>
+  );
+}
+
+function SourceDetail({ field, meta }: { field: FieldKey; meta: FieldProvenance }) {
+  return (
+    <div className="rounded-lg border border-border bg-background p-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <span className="font-semibold text-foreground">{FIELD_LABELS[field]} — source</span>
+        {meta.page != null && <span>page {meta.page}</span>}
+        <span className="inline-flex items-center gap-1">
+          <ConfidenceDot confidence={meta.confidence} />
+          {Math.round(meta.confidence * 100)}% confidence
+        </span>
+      </div>
+      <p className="mt-2 rounded bg-muted/50 px-3 py-2 font-mono text-xs text-foreground">
+        {meta.snippet ?? 'Not found in the document — please verify manually.'}
+      </p>
+    </div>
   );
 }
 
@@ -89,6 +169,11 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
         }
       : null;
 
+  // Which field's source snippet is currently expanded.
+  const [open, setOpen] = useState<{ id: string; field: FieldKey } | null>(null);
+  const toggleSource = (id: string, field: FieldKey) =>
+    setOpen((prev) => (prev?.id === id && prev.field === field ? null : { id, field }));
+
   return (
     <div className="space-y-6">
       {/* Comparison table */}
@@ -123,29 +208,53 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                   q.warranty == null
                     ? 'worst'
                     : extremeTone(warrantyMonths(q.warranty), minWarr, maxWarr, false);
+                const openMeta = open?.id === q.id ? q.fields[open.field] : null;
+                const isOpen = (field: FieldKey) => open?.id === q.id && open.field === field;
                 return (
-                  <tr key={q.id} className="transition hover:bg-muted/40">
-                    <td className="px-5 py-4">
-                      <div className="font-semibold">{q.supplierName}</div>
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {q.supplierName === best && <Tag tone="primary" icon={Trophy} label="Best overall" />}
-                        {q.supplierName === cheapest && <Tag tone="success" icon={Wallet} label="Lowest cost" />}
-                        {q.supplierName === fastest && <Tag tone="warning" icon={Clock} label="Fastest" />}
-                      </div>
-                    </td>
-                    <td className={cn('px-5 py-4 font-semibold tabular-nums', cellText(costTone, false))}>
-                      {q.totalCost == null ? <MissingTag /> : formatCurrency(q.totalCost, q.currency)}
-                    </td>
-                    <td className={cn('px-5 py-4 tabular-nums', cellText(delTone, true))}>
-                      {q.deliveryDays == null ? <MissingTag /> : formatDelivery(q.deliveryDays)}
-                    </td>
-                    <td className="px-5 py-4 text-muted-foreground">
-                      {q.paymentTerms ?? <MissingTag />}
-                    </td>
-                    <td className={cn('px-5 py-4', cellText(warrTone, true))}>
-                      {q.warranty ?? <MissingTag />}
-                    </td>
-                  </tr>
+                  <Fragment key={q.id}>
+                    <tr className="transition hover:bg-muted/40">
+                      <td className="px-5 py-4">
+                        <FieldButton
+                          q={q}
+                          field="supplierName"
+                          display={q.supplierName}
+                          active={isOpen('supplierName')}
+                          onToggle={toggleSource}
+                          className="font-semibold"
+                        />
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {q.supplierName === best && <Tag tone="primary" icon={Trophy} label="Best overall" />}
+                          {q.supplierName === cheapest && <Tag tone="success" icon={Wallet} label="Lowest cost" />}
+                          {q.supplierName === fastest && <Tag tone="warning" icon={Clock} label="Fastest" />}
+                        </div>
+                      </td>
+                      <td className={cn('px-5 py-4 font-semibold tabular-nums', cellText(costTone, false))}>
+                        <FieldButton q={q} field="totalCost" onToggle={toggleSource}
+                          active={isOpen('totalCost')}
+                          display={q.totalCost == null ? null : formatCurrency(q.totalCost, q.currency)} />
+                      </td>
+                      <td className={cn('px-5 py-4 tabular-nums', cellText(delTone, true))}>
+                        <FieldButton q={q} field="deliveryDays" onToggle={toggleSource}
+                          active={isOpen('deliveryDays')}
+                          display={q.deliveryDays == null ? null : formatDelivery(q.deliveryDays)} />
+                      </td>
+                      <td className="px-5 py-4 text-muted-foreground">
+                        <FieldButton q={q} field="paymentTerms" display={q.paymentTerms}
+                          active={isOpen('paymentTerms')} onToggle={toggleSource} />
+                      </td>
+                      <td className={cn('px-5 py-4', cellText(warrTone, true))}>
+                        <FieldButton q={q} field="warranty" display={q.warranty}
+                          active={isOpen('warranty')} onToggle={toggleSource} />
+                      </td>
+                    </tr>
+                    {openMeta && open && (
+                      <tr className="bg-muted/20">
+                        <td colSpan={5} className="px-5 pb-4 pt-0">
+                          <SourceDetail field={open.field} meta={openMeta} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
