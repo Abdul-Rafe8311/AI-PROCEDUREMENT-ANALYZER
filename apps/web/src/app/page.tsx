@@ -19,6 +19,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ThemeToggle } from '@/components/theme-toggle';
 
 /* ─────────────────────────────────────────────
    Shared button styles (no auth UI on this page)
@@ -172,10 +173,13 @@ function SiteNav() {
           <a href="#features" className="transition hover:text-foreground">Features</a>
           <a href="#demo" className="transition hover:text-foreground">Live demo</a>
         </div>
-        <Link href="/workspace" className={cn(btnPrimary, 'px-4 py-2')}>
-          <Upload className="h-4 w-4" />
-          Upload Quotations
-        </Link>
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          <Link href="/workspace" className={cn(btnPrimary, 'px-4 py-2')}>
+            <Upload className="h-4 w-4" />
+            Upload Quotations
+          </Link>
+        </div>
       </nav>
     </header>
   );

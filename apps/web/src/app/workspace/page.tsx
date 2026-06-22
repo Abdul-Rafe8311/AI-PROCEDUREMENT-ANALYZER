@@ -3,6 +3,7 @@
 import { useCallback, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Sparkles } from 'lucide-react';
+import { ThemeToggle } from '@/components/theme-toggle';
 import { UploadZone } from '@/components/workspace/upload-zone';
 import { AnalysisResults } from '@/components/workspace/analysis-results';
 import { ChatPanel } from '@/components/workspace/chat-panel';
@@ -166,13 +167,16 @@ export default function WorkspacePage() {
             </span>
             <span className="text-base font-semibold tracking-tight">AI Procurement Copilot</span>
           </div>
-          <Link
-            href="/"
-            className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition hover:text-foreground"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Home
-          </Link>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <Link
+              href="/"
+              className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition hover:text-foreground"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Home
+            </Link>
+          </div>
         </div>
       </header>
 

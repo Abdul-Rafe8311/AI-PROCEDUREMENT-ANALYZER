@@ -45,6 +45,46 @@
     --shadow-lg: 0 14px 36px -10px hsl(222 47% 11% / 0.14);
   }
 
+  .dark {
+    color-scheme: dark;
+
+    /* ── Surfaces & text (true dark palette, not inverted) ── */
+    --background: 224 32% 7%;
+    --foreground: 210 30% 96%;
+    --card: 224 28% 10%;
+    --card-foreground: 210 30% 96%;
+    --muted: 224 22% 15%;
+    --muted-foreground: 218 14% 64%;
+    --accent: 224 20% 18%;
+    --accent-foreground: 210 30% 96%;
+    --border: 224 16% 22%;
+    --input: 224 16% 22%;
+
+    /* ── Brand accent (brighter for dark contrast) ── */
+    --primary: 235 90% 68%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 235 90% 68%;
+
+    --secondary: 224 20% 18%;
+    --secondary-foreground: 210 30% 96%;
+
+    /* ── Semantic status (tuned for dark surfaces) ── */
+    --success: 142 60% 48%;
+    --success-foreground: 0 0% 100%;
+    --warning: 36 92% 56%;
+    --warning-foreground: 224 32% 7%;
+    --danger: 0 74% 62%;
+    --danger-foreground: 0 0% 100%;
+    --destructive: 0 74% 62%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* ── Shadows (deeper on dark) ── */
+    --shadow-sm: 0 1px 2px 0 hsl(0 0% 0% / 0.4);
+    --shadow: 0 1px 3px 0 hsl(0 0% 0% / 0.45), 0 1px 2px -1px hsl(0 0% 0% / 0.4);
+    --shadow-md: 0 4px 14px -3px hsl(0 0% 0% / 0.5), 0 2px 6px -2px hsl(0 0% 0% / 0.4);
+    --shadow-lg: 0 14px 36px -10px hsl(0 0% 0% / 0.6);
+  }
+
   * {
     @apply border-border;
   }

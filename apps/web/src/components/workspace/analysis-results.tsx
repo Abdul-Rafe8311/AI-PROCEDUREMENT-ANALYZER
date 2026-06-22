@@ -43,8 +43,8 @@ function extremeTone(
 }
 
 function cellText(tone: Extreme, mutedWhenNone: boolean): string {
-  if (tone === 'best') return 'bg-green-50 text-green-700';
-  if (tone === 'worst') return 'bg-amber-50 text-amber-700';
+  if (tone === 'best') return 'bg-success/10 text-success';
+  if (tone === 'worst') return 'bg-warning/10 text-warning';
   return mutedWhenNone ? 'text-muted-foreground' : '';
 }
 
@@ -61,10 +61,10 @@ function ConfidenceDot({ confidence }: { confidence: number }) {
     confidence === 0
       ? 'bg-muted-foreground/40'
       : confidence >= 0.85
-        ? 'bg-green-500'
+        ? 'bg-success'
         : confidence >= 0.65
-          ? 'bg-amber-500'
-          : 'bg-red-500';
+          ? 'bg-warning'
+          : 'bg-danger';
   return (
     <span
       className={cn('inline-block h-1.5 w-1.5 shrink-0 rounded-full', tone)}
@@ -183,7 +183,7 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
             Quotation Comparison
           </span>
           {analysis.simulated && (
-            <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700">
+            <span className="rounded-full bg-warning/15 px-2.5 py-0.5 text-xs font-medium text-warning">
               Sample analysis
             </span>
           )}
@@ -296,7 +296,7 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                 detail={`Highest weighted score (${bestScorePct}/100) for your current priorities.`} />
             )}
             {best && savings && (
-              <li className="flex items-center gap-2 rounded-xl bg-green-50 px-3 py-2 text-sm font-medium text-green-700">
+              <li className="flex items-center gap-2 rounded-xl bg-success/10 px-3 py-2 text-sm font-medium text-success">
                 <TrendingDown className="h-4 w-4 shrink-0" />
                 {best} saves {formatCurrency(savings.amount, 'USD')} ({savings.pct}%) vs the
                 highest quote.
@@ -306,22 +306,22 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
         </div>
 
         {/* Risk detection */}
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 shadow-sm">
-          <div className="flex items-center gap-2 text-sm font-semibold text-amber-700">
+        <div className="rounded-2xl border border-warning/30 bg-warning/10 p-6 shadow-sm">
+          <div className="flex items-center gap-2 text-sm font-semibold text-warning">
             <ShieldAlert className="h-4 w-4" />
             Risk Detection
           </div>
           {risks.length ? (
-            <ul className="mt-4 space-y-2.5 text-sm text-amber-900">
+            <ul className="mt-4 space-y-2.5 text-sm text-warning">
               {risks.map((r, i) => (
                 <li key={i} className="flex gap-2">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
                   {r.message}
                 </li>
               ))}
             </ul>
           ) : (
-            <p className="mt-4 text-sm text-amber-800">No risks detected across these quotations.</p>
+            <p className="mt-4 text-sm text-warning">No risks detected across these quotations.</p>
           )}
         </div>
       </div>
@@ -332,8 +332,8 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
 type Tone = 'primary' | 'success' | 'warning';
 const toneClasses: Record<Tone, string> = {
   primary: 'bg-primary/10 text-primary',
-  success: 'bg-green-100 text-green-700',
-  warning: 'bg-amber-100 text-amber-700',
+  success: 'bg-success/15 text-success',
+  warning: 'bg-warning/15 text-warning',
 };
 
 function Tag({
