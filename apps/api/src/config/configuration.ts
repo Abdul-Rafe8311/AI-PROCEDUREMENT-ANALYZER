@@ -15,14 +15,10 @@ export interface AppConfig {
     model: string;
     embeddingModel: string;
   };
-  s3: {
-    endpoint: string;
-    publicEndpoint: string;
-    region: string;
+  supabase: {
+    url: string;
+    serviceRoleKey: string;
     bucket: string;
-    accessKey: string;
-    secretKey: string;
-    forcePathStyle: boolean;
   };
   rateLimit: {
     ttl: number;
@@ -48,14 +44,12 @@ export default (): AppConfig => ({
     model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
     embeddingModel: process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small',
   },
-  s3: {
-    endpoint: process.env.S3_ENDPOINT ?? 'http://localhost:9000',
-    publicEndpoint: process.env.S3_PUBLIC_ENDPOINT ?? 'http://localhost:9000',
-    region: process.env.S3_REGION ?? 'us-east-1',
-    bucket: process.env.S3_BUCKET ?? 'quotations',
-    accessKey: process.env.S3_ACCESS_KEY ?? 'minioadmin',
-    secretKey: process.env.S3_SECRET_KEY ?? 'minioadmin',
-    forcePathStyle: (process.env.S3_FORCE_PATH_STYLE ?? 'true') === 'true',
+  supabase: {
+    // No silent fallback — StorageService validates these and fails fast.
+    url: process.env.SUPABASE_URL ?? '',
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? '',
+    // Single source of truth for the storage bucket name.
+    bucket: process.env.SUPABASE_STORAGE_BUCKET ?? 'quotations',
   },
   rateLimit: {
     ttl: parseInt(process.env.RATE_LIMIT_TTL ?? '60', 10),
