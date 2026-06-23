@@ -31,6 +31,8 @@ import {
   type FieldProvenance,
   formatCurrency,
   formatDelivery,
+  type RiskFlag,
+  type RiskSeverity,
   type ScoreWeights,
   type SupplierScore,
 } from '@/lib/workspace-types';
@@ -416,6 +418,8 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
         </div>
       )}
 
+      <SavingsPanel quotations={quotations} bestSupplier={best} />
+
       <div className="grid gap-6 lg:grid-cols-2">
         {/* AI recommendation */}
         <div className="rounded-2xl border border-primary/20 bg-primary/5 p-6 shadow-sm">
@@ -456,24 +460,7 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
         </div>
 
         {/* Risk detection */}
-        <div className="rounded-2xl border border-warning/30 bg-warning/10 p-6 shadow-sm">
-          <div className="flex items-center gap-2 text-sm font-semibold text-warning">
-            <ShieldAlert className="h-4 w-4" />
-            Risk Detection
-          </div>
-          {risks.length ? (
-            <ul className="mt-4 space-y-2.5 text-sm text-warning">
-              {risks.map((r, i) => (
-                <li key={i} className="flex gap-2">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-                  {r.message}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-4 text-sm text-warning">No risks detected across these quotations.</p>
-          )}
-        </div>
+        <RiskPanel risks={risks} />
       </div>
     </div>
   );
@@ -634,6 +621,119 @@ function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// ── Cost-savings panel ──
+function SavingsPanel({
+  quotations,
+  bestSupplier,
+}: {
+  quotations: ExtractedQuotation[];
+  bestSupplier?: string;
+}) {
+  const withCost = quotations.filter((q) => q.totalCostUsd != null);
+  if (withCost.length < 2) return null;
+  const best = withCost.find((q) => q.supplierName === bestSupplier) ?? withCost[0];
+  const bestCost = Math.min(...withCost.map((q) => q.totalCostUsd!));
+  const highCost = Math.max(...withCost.map((q) => q.totalCostUsd!));
+  const recCost = best.totalCostUsd!;
+  const savings = highCost - recCost;
+  const pct = highCost > 0 ? Math.round((savings / highCost) * 1000) / 10 : 0;
+
+  const cells: { label: string; value: string; tone?: string }[] = [
+    { label: 'Recommended supplier cost', value: formatCurrency(recCost, 'USD') },
+    { label: 'Lowest supplier cost', value: formatCurrency(bestCost, 'USD'), tone: 'text-success' },
+    { label: 'Highest supplier cost', value: formatCurrency(highCost, 'USD'), tone: 'text-danger' },
+    { label: 'Potential savings', value: `${formatCurrency(savings, 'USD')} (${pct}%)`, tone: 'text-success' },
+  ];
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+      <div className="flex items-center gap-2 text-sm font-semibold">
+        <TrendingDown className="h-4 w-4 text-success" />
+        Cost Savings Analysis
+      </div>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {cells.map((c) => (
+          <div key={c.label} className="rounded-xl border border-border bg-muted/20 p-4">
+            <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {c.label}
+            </div>
+            <div className={cn('nums mt-1.5 text-xl font-bold tracking-tight', c.tone)}>
+              {c.value}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Risk panel (severity-grouped warning cards) ──
+const SEVERITY_META: Record<
+  RiskSeverity,
+  { label: string; card: string; badge: string; order: number }
+> = {
+  high: { label: 'High', card: 'border-danger/30 bg-danger/5', badge: 'bg-danger/15 text-danger', order: 0 },
+  medium: { label: 'Medium', card: 'border-warning/30 bg-warning/5', badge: 'bg-warning/15 text-warning', order: 1 },
+  low: { label: 'Low', card: 'border-border bg-muted/20', badge: 'bg-muted text-muted-foreground', order: 2 },
+};
+
+function RiskPanel({ risks }: { risks: RiskFlag[] }) {
+  const sorted = [...risks].sort(
+    (a, b) => SEVERITY_META[a.severity].order - SEVERITY_META[b.severity].order,
+  );
+  const counts = risks.reduce(
+    (acc, r) => ((acc[r.severity] = (acc[r.severity] ?? 0) + 1), acc),
+    {} as Record<RiskSeverity, number>,
+  );
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-2 text-sm font-semibold">
+          <ShieldAlert className="h-4 w-4 text-warning" />
+          Risk Detection
+        </span>
+        <div className="flex gap-1.5">
+          {(['high', 'medium', 'low'] as RiskSeverity[])
+            .filter((s) => counts[s])
+            .map((s) => (
+              <span
+                key={s}
+                className={cn('rounded-full px-2 py-0.5 text-xs font-semibold', SEVERITY_META[s].badge)}
+              >
+                {counts[s]} {SEVERITY_META[s].label}
+              </span>
+            ))}
+        </div>
+      </div>
+
+      {sorted.length ? (
+        <ul className="mt-4 space-y-2.5">
+          {sorted.map((r, i) => {
+            const m = SEVERITY_META[r.severity];
+            return (
+              <li key={i} className={cn('flex items-start gap-3 rounded-xl border p-3', m.card)}>
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <span className="text-sm text-foreground">{r.message}</span>
+                </div>
+                <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold', m.badge)}>
+                  {m.label}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <div className="mt-4 flex items-center gap-2 rounded-xl border border-success/30 bg-success/5 p-4 text-sm text-success">
+          <ShieldAlert className="h-4 w-4 shrink-0" />
+          No material risks detected across these quotations.
+        </div>
+      )}
     </div>
   );
 }

@@ -13,6 +13,7 @@ import type {
   LineItem,
   Recommendation,
   RiskFlag,
+  RiskSeverity,
   RiskType,
   ScoreWeights,
   SupplierScore,
@@ -49,16 +50,21 @@ const CATALOG: { name: string; quantity: number; weight: number }[] = [
 ];
 
 // Itemized breakdown that sums (in USD) to the supplier's total cost.
-function buildLineItems(q: Omit<ExtractedQuotation, 'fields' | 'lineItems'>): LineItem[] {
+// `drop` removes the last N catalog items to simulate an incomplete quotation.
+function buildLineItems(
+  q: Omit<ExtractedQuotation, 'fields' | 'lineItems'>,
+  drop = 0,
+): LineItem[] {
   const totalUsd = q.totalCostUsd ?? 0;
   const fx = STATIC_FX[q.currency?.toUpperCase()] ?? 1;
-  const weights = CATALOG.map((item) => {
+  const kept = drop > 0 ? CATALOG.slice(0, CATALOG.length - drop) : CATALOG;
+  const weights = kept.map((item) => {
     const jitter = ((hash(q.id + item.name) % 31) - 15) / 100; // ±15%
     return Math.max(0.02, item.weight * (1 + jitter));
   });
   const wsum = weights.reduce((a, b) => a + b, 0);
 
-  return CATALOG.map((item, i) => {
+  return kept.map((item, i) => {
     const lineUsd = (totalUsd * weights[i]) / wsum;
     const totalPrice = Math.round(lineUsd / fx);
     const unitPrice = item.quantity
@@ -127,15 +133,19 @@ const ARCHETYPES: {
   deliveryRaw: string;
   terms: string;
   warranty: string | null;
+  /** days from "today" the quote stays valid; negative = already expired */
+  validDays: number;
+  /** drop this many line items to simulate an incomplete quotation */
+  dropItems: number;
 }[] = [
   // Cheapest, but slowest AND no warranty (problem). Priced in USD.
-  { amount: 8900, currency: 'USD', deliveryRaw: 'Approx. 4 weeks', terms: 'Net 60', warranty: null },
-  // Fastest, but most expensive AND risky payment terms (problem). Priced in EUR.
-  { amount: 13400, currency: 'EUR', deliveryRaw: '1 week', terms: '100% advance payment', warranty: '12 months' },
-  // Mid-priced (GBP) with the best warranty → typically best overall.
-  { amount: 8300, currency: 'GBP', deliveryRaw: '10 working days', terms: 'Net 30', warranty: '36 months' },
-  // Solid all-rounder, no red flags (for contrast). Priced in USD.
-  { amount: 11200, currency: 'USD', deliveryRaw: '11 days', terms: 'Net 45', warranty: '24 months' },
+  { amount: 8900, currency: 'USD', deliveryRaw: 'Approx. 4 weeks', terms: 'Net 60', warranty: null, validDays: 21, dropItems: 0 },
+  // Fastest, most expensive, risky payment terms, AND expired validity. EUR.
+  { amount: 13400, currency: 'EUR', deliveryRaw: '1 week', terms: '100% advance payment', warranty: '12 months', validDays: -5, dropItems: 0 },
+  // Mid-priced (GBP), best warranty → typically best overall.
+  { amount: 8300, currency: 'GBP', deliveryRaw: '10 working days', terms: 'Net 30', warranty: '36 months', validDays: 30, dropItems: 0 },
+  // All-rounder but with an INCOMPLETE quotation (missing line items). USD.
+  { amount: 11200, currency: 'USD', deliveryRaw: '11 days', terms: 'Net 45', warranty: '24 months', validDays: 14, dropItems: 2 },
 ];
 
 // ── Normalization ──────────────────────────────────────────────
@@ -210,6 +220,9 @@ export function buildAnalysis(fileNames: string[]): AnalysisResult {
     const h = hash(fileName + i);
     const jitter = (h % 600) - 300; // ±300 (original currency) so repeats differ
     const totalCost = profile.amount + jitter;
+    const validUntil = new Date(Date.now() + profile.validDays * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
     const base = {
       id: `q_${i}`,
       fileName,
@@ -221,8 +234,13 @@ export function buildAnalysis(fileNames: string[]): AnalysisResult {
       deliveryDays: normalizeDelivery(profile.deliveryRaw),
       paymentTerms: profile.terms,
       warranty: profile.warranty,
+      validUntil,
     };
-    return { ...base, lineItems: buildLineItems(base), fields: buildFields(base, h) };
+    return {
+      ...base,
+      lineItems: buildLineItems(base, profile.dropItems),
+      fields: buildFields(base, h),
+    };
   });
 
   const risks = detectRisks(quotations);
@@ -279,9 +297,23 @@ export function buildRecommendation(
 const RISK_SEVERITY: Record<RiskType, number> = {
   missing_delivery: 3,
   risky_payment_terms: 3,
+  expired_validity: 3,
+  incomplete_quotation: 3,
+  unusually_low_price: 2,
   missing_warranty: 2,
   long_lead_time: 1,
   unusual_pricing: 1,
+};
+
+const SEVERITY_LABEL: Record<RiskType, RiskSeverity> = {
+  missing_delivery: 'high',
+  risky_payment_terms: 'high',
+  expired_validity: 'high',
+  incomplete_quotation: 'high',
+  unusually_low_price: 'medium',
+  missing_warranty: 'medium',
+  long_lead_time: 'low',
+  unusual_pricing: 'low',
 };
 
 /**
@@ -456,46 +488,49 @@ export function detectRisks(qs: ExtractedQuotation[]): RiskFlag[] {
   const risks: RiskFlag[] = [];
   const costs = qs.filter((q) => q.totalCostUsd != null).map((q) => q.totalCostUsd!);
   const med = costs.length ? median(costs) : 0;
+  const catalogSize = Math.max(...qs.map((q) => q.lineItems.length), 0);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const add = (supplier: string, type: RiskType, message: string) =>
+    risks.push({ supplier, type, severity: SEVERITY_LABEL[type], message });
 
   for (const q of qs) {
+    // Delivery
     if (q.deliveryDays == null) {
-      risks.push({
-        supplier: q.supplierName,
-        type: 'missing_delivery',
-        message: `${q.supplierName}: no delivery date provided.`,
-      });
+      add(q.supplierName, 'missing_delivery', `${q.supplierName}: no delivery date provided.`);
     } else if (q.deliveryDays >= 14) {
-      risks.push({
-        supplier: q.supplierName,
-        type: 'long_lead_time',
-        message: `${q.supplierName}: ${q.deliveryDays}-day lead time may delay milestones.`,
-      });
+      add(q.supplierName, 'long_lead_time', `${q.supplierName}: ${q.deliveryDays}-day lead time may delay milestones.`);
     }
 
+    // Warranty
     if (!q.warranty) {
-      risks.push({
-        supplier: q.supplierName,
-        type: 'missing_warranty',
-        message: `${q.supplierName}: no warranty information found.`,
-      });
+      add(q.supplierName, 'missing_warranty', `${q.supplierName}: no warranty information found.`);
     }
 
+    // Payment terms
     if (q.paymentTerms && isRiskyPaymentTerms(q.paymentTerms)) {
-      risks.push({
-        supplier: q.supplierName,
-        type: 'risky_payment_terms',
-        message: `${q.supplierName}: payment terms "${q.paymentTerms}" require payment upfront / reduce buyer protection.`,
-      });
+      add(q.supplierName, 'risky_payment_terms', `${q.supplierName}: payment terms "${q.paymentTerms}" require payment upfront / reduce buyer protection.`);
     }
 
-    if (q.totalCostUsd != null && med > 0 && q.totalCostUsd > med * 1.25) {
-      risks.push({
-        supplier: q.supplierName,
-        type: 'unusual_pricing',
-        message: `${q.supplierName}: priced ${Math.round(
-          ((q.totalCostUsd - med) / med) * 100,
-        )}% above the median quote.`,
-      });
+    // Pricing outliers (both directions)
+    if (q.totalCostUsd != null && med > 0) {
+      if (q.totalCostUsd > med * 1.25) {
+        add(q.supplierName, 'unusual_pricing', `${q.supplierName}: priced ${Math.round(((q.totalCostUsd - med) / med) * 100)}% above the median quote.`);
+      } else if (q.totalCostUsd < med * 0.7) {
+        add(q.supplierName, 'unusually_low_price', `${q.supplierName}: priced ${Math.round(((med - q.totalCostUsd) / med) * 100)}% below the median — verify scope/quality before award.`);
+      }
+    }
+
+    // Expired quotation validity
+    if (q.validUntil && q.validUntil < today) {
+      add(q.supplierName, 'expired_validity', `${q.supplierName}: quotation validity expired on ${q.validUntil}.`);
+    }
+
+    // Incomplete quotation (missing line items, or any line missing a price)
+    const missingPrice = q.lineItems.some((li) => li.unitPrice == null || li.totalPrice == null);
+    if (q.lineItems.length < catalogSize || missingPrice) {
+      const missing = catalogSize - q.lineItems.length;
+      add(q.supplierName, 'incomplete_quotation', `${q.supplierName}: incomplete quotation${missing > 0 ? ` — ${missing} line item${missing === 1 ? '' : 's'} not provided` : ' — some line items missing prices'}.`);
     }
   }
 

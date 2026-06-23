@@ -49,6 +49,8 @@ export interface ExtractedQuotation {
   deliveryDays: number | null;
   paymentTerms: string | null;
   warranty: string | null;
+  /** quotation validity expiry (ISO date) — null when not stated */
+  validUntil: string | null;
   /** extracted line items (shared catalog across suppliers) */
   lineItems: LineItem[];
   /** per-field source snippet + confidence for traceability */
@@ -59,12 +61,18 @@ export type RiskType =
   | 'missing_delivery'
   | 'missing_warranty'
   | 'unusual_pricing'
+  | 'unusually_low_price'
   | 'long_lead_time'
-  | 'risky_payment_terms';
+  | 'risky_payment_terms'
+  | 'expired_validity'
+  | 'incomplete_quotation';
+
+export type RiskSeverity = 'high' | 'medium' | 'low';
 
 export interface RiskFlag {
   supplier: string;
   type: RiskType;
+  severity: RiskSeverity;
   message: string;
 }
 
