@@ -38,6 +38,7 @@ import {
 } from '@/lib/workspace-types';
 import { ComparisonMatrix } from './comparison-matrix';
 import { KpiCards } from './kpi-cards';
+import { CurrencyToggle, MoneyDual, useCurrencyMode } from './currency-mode';
 
 // Lazy-load charts (recharts is heavy) — keeps initial JS lean for Lighthouse.
 const AnalysisCharts = dynamic(() => import('./analysis-charts'), {
@@ -261,6 +262,9 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
     [quotations.length, savings, best, bestScorePct, risks.length],
   );
 
+  // Currency display mode (session-persisted) — applies to table + matrix.
+  const [currencyMode, setCurrencyMode] = useCurrencyMode();
+
   // Which field's source snippet is currently expanded.
   const [open, setOpen] = useState<{ id: string; field: FieldKey } | null>(null);
   const toggleSource = (id: string, field: FieldKey) =>
@@ -277,11 +281,14 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
             <Table2 className="h-4 w-4 text-primary" />
             Quotation Comparison
           </span>
-          {analysis.simulated && (
-            <span className="rounded-full bg-warning/15 px-2.5 py-0.5 text-xs font-medium text-warning">
-              Sample analysis
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            {analysis.simulated && (
+              <span className="rounded-full bg-warning/15 px-2.5 py-0.5 text-xs font-medium text-warning">
+                Sample analysis
+              </span>
+            )}
+            <CurrencyToggle mode={currencyMode} onChange={setCurrencyMode} />
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -330,15 +337,13 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                           <FieldButton q={q} field="totalCost" onToggle={toggleSource}
                             active={isOpen('totalCost')}
                             display={
-                              q.totalCost == null ? null : (
-                                <span className="inline-flex flex-col items-end leading-tight">
-                                  <span>{formatCurrency(q.totalCost, q.currency)}</span>
-                                  {q.currency !== 'USD' && q.totalCostUsd != null && (
-                                    <span className="text-xs font-normal text-muted-foreground">
-                                      ≈ {formatCurrency(q.totalCostUsd, 'USD')}
-                                    </span>
-                                  )}
-                                </span>
+                              q.totalCost == null && q.totalCostUsd == null ? null : (
+                                <MoneyDual
+                                  amount={q.totalCost}
+                                  currency={q.currency}
+                                  usd={q.totalCostUsd}
+                                  mode={currencyMode}
+                                />
                               )
                             } />
                         </span>
@@ -402,7 +407,7 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
         </div>
       </div>
 
-      <ComparisonMatrix quotations={quotations} />
+      <ComparisonMatrix quotations={quotations} mode={currencyMode} />
 
       <AnalysisCharts quotations={quotations} scored={scored} />
 

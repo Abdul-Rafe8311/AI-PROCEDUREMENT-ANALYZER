@@ -3,14 +3,21 @@
 import { Layers } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toUsd } from '@/lib/analysis-engine';
-import { type ExtractedQuotation, formatCurrency } from '@/lib/workspace-types';
+import { type ExtractedQuotation } from '@/lib/workspace-types';
+import { type CurrencyMode, MoneyDual } from './currency-mode';
 
 // Loose key so the same material from different PDFs ("Reinforcement Steel Bars"
 // vs "Steel Reinforcement Bar 12mm") lines up in one row.
 const norm = (s: string) =>
   s.toLowerCase().replace(/\(.*?\)/g, '').replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
 
-export function ComparisonMatrix({ quotations }: { quotations: ExtractedQuotation[] }) {
+export function ComparisonMatrix({
+  quotations,
+  mode,
+}: {
+  quotations: ExtractedQuotation[];
+  mode: CurrencyMode;
+}) {
   const hasItems = quotations.some((q) => q.lineItems.length > 0);
   if (!quotations.length || !hasItems) return null;
 
@@ -27,8 +34,11 @@ export function ComparisonMatrix({ quotations }: { quotations: ExtractedQuotatio
   const totals = quotations.map((q) => q.totalCostUsd);
   const minTotal = Math.min(...totals.filter((v): v is number => v != null));
 
+  const lineFor = (q: ExtractedQuotation, key: string) =>
+    q.lineItems.find((l) => norm(l.name) === key);
+  // USD value drives the "lowest" comparison regardless of display mode.
   const unitUsd = (q: ExtractedQuotation, key: string): number | null => {
-    const li = q.lineItems.find((l) => norm(l.name) === key);
+    const li = lineFor(q, key);
     return li?.unitPrice == null ? null : toUsd(li.unitPrice, li.currency);
   };
 
@@ -40,7 +50,8 @@ export function ComparisonMatrix({ quotations }: { quotations: ExtractedQuotatio
           Line-Item Comparison Matrix
         </span>
         <span className="text-xs text-muted-foreground">
-          Unit price · USD-normalized · <span className="text-success">green = lowest</span>
+          Unit price · {mode === 'usd' ? 'USD-normalized' : 'original currency'} ·{' '}
+          <span className="text-success">green = lowest</span>
         </span>
       </div>
       <div className="overflow-x-auto">
@@ -77,6 +88,7 @@ export function ComparisonMatrix({ quotations }: { quotations: ExtractedQuotatio
                   {quotations.map((q, i) => {
                     const v = vals[i];
                     const isMin = v != null && v === min;
+                    const li = lineFor(q, key);
                     return (
                       <td
                         key={q.id}
@@ -85,7 +97,16 @@ export function ComparisonMatrix({ quotations }: { quotations: ExtractedQuotatio
                           isMin ? 'bg-success/10 font-semibold text-success' : 'text-muted-foreground',
                         )}
                       >
-                        {v == null ? '—' : formatCurrency(v, 'USD')}
+                        {v == null ? (
+                          '—'
+                        ) : (
+                          <MoneyDual
+                            amount={li?.unitPrice ?? null}
+                            currency={li?.currency ?? 'USD'}
+                            usd={v}
+                            mode={mode}
+                          />
+                        )}
                       </td>
                     );
                   })}
@@ -102,7 +123,11 @@ export function ComparisonMatrix({ quotations }: { quotations: ExtractedQuotatio
                     key={q.id}
                     className={cn('nums px-5 py-3 text-right', isMin && 'text-success')}
                   >
-                    {v == null ? '—' : formatCurrency(v, 'USD')}
+                    {v == null && q.totalCost == null ? (
+                      '—'
+                    ) : (
+                      <MoneyDual amount={q.totalCost} currency={q.currency} usd={v} mode={mode} />
+                    )}
                   </td>
                 );
               })}
