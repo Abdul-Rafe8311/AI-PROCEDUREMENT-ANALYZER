@@ -98,13 +98,23 @@ export default function AnalysisCharts({
 
   const { materialData, supplierKeys } = useMemo(() => {
     const keys = quotations.map((q) => shortName(q.supplierName));
-    const items = quotations[0]?.lineItems.map((li) => li.name) ?? [];
-    const data = items.map((name) => {
+    const norm = (s: string) =>
+      s.toLowerCase().replace(/\(.*?\)/g, '').replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+    // Union of items across suppliers (arbitrary per document), capped for readability.
+    const seen = new Map<string, string>();
+    for (const q of quotations) {
+      for (const li of q.lineItems) {
+        const k = norm(li.name);
+        if (k && !seen.has(k)) seen.set(k, li.name);
+      }
+    }
+    const items = [...seen.entries()].slice(0, 8);
+    const data = items.map(([key, label]) => {
       const row: Record<string, string | number> = {
-        item: name.replace(/\s*\(.*\)/, '').split(' ').slice(0, 2).join(' '),
+        item: label.replace(/\s*\(.*\)/, '').split(' ').slice(0, 2).join(' '),
       };
       quotations.forEach((q) => {
-        const li = q.lineItems.find((l) => l.name === name);
+        const li = q.lineItems.find((l) => norm(l.name) === key);
         row[shortName(q.supplierName)] = li?.unitPrice != null ? toUsd(li.unitPrice, li.currency) ?? 0 : 0;
       });
       return row;

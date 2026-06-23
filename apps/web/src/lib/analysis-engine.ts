@@ -167,18 +167,25 @@ const STATIC_FX: Record<string, number> = {
   USD: 1,
   EUR: 1.08,
   GBP: 1.27,
+  SAR: 0.2666,
+  AED: 0.2723,
   CAD: 0.73,
   AUD: 0.66,
-  AED: 0.27,
+  QAR: 0.2747,
+  KWD: 3.25,
   INR: 0.012,
   JPY: 0.0064,
 };
 
+/** USD-per-unit FX rate for a currency (1 when unknown). */
+export function getUsdRate(currency: string): number {
+  return STATIC_FX[currency?.toUpperCase()] ?? 1;
+}
+
 /** Convert an amount in `currency` to a normalized USD value. */
 export function toUsd(amount: number | null, currency: string): number | null {
   if (amount == null) return null;
-  const rate = STATIC_FX[currency?.toUpperCase()] ?? 1;
-  return Math.round(amount * rate);
+  return Math.round(amount * getUsdRate(currency));
 }
 
 /** Normalize free-text delivery ("2 weeks", "ASAP", a date) to integer days. */
@@ -248,6 +255,8 @@ export function buildAnalysis(fileNames: string[]): AnalysisResult {
       paymentTerms: profile.terms,
       warranty: profile.warranty,
       validUntil,
+      currencyConfidence: 1,
+      usdRate: getUsdRate(profile.currency),
     };
     return {
       ...base,
@@ -256,12 +265,20 @@ export function buildAnalysis(fileNames: string[]): AnalysisResult {
     };
   });
 
+  return assembleAnalysis(quotations, true);
+}
+
+/** Assemble a full AnalysisResult (risks + recommendation) from quotations. */
+export function assembleAnalysis(
+  quotations: ExtractedQuotation[],
+  simulated: boolean,
+): AnalysisResult {
   const risks = detectRisks(quotations);
   return {
     quotations,
     recommendation: buildRecommendation(quotations, risks),
     risks,
-    simulated: true,
+    simulated,
   };
 }
 

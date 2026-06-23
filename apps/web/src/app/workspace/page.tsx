@@ -6,8 +6,10 @@ import { ArrowLeft, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { UploadZone } from '@/components/workspace/upload-zone';
 import { AnalysisResults } from '@/components/workspace/analysis-results';
+import { ExtractionDebug } from '@/components/workspace/extraction-debug';
 import { ChatPanel } from '@/components/workspace/chat-panel';
 import { isSupabaseConfigured, STORAGE_BUCKET, supabase } from '@/lib/supabase';
+import { buildAnalysis } from '@/lib/analysis-engine';
 import type { AnalysisResult, ChatMessage } from '@/lib/workspace-types';
 
 export default function WorkspacePage() {
@@ -73,21 +75,38 @@ export default function WorkspacePage() {
 
     try {
       setAnalyzing(true);
-      const res = await fetch('/api/extract', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ files: files.map((f) => f.name) }),
-      });
-      if (!res.ok) throw new Error('extract failed');
-      const data = (await res.json()) as AnalysisResult;
-      setAnalysis(data);
+      // Send the actual file bytes for real extraction.
+      const form = new FormData();
+      files.forEach((f) => form.append('files', f, f.name));
+      const res = await fetch('/api/extract', { method: 'POST', body: form });
+      const data = await res.json();
+
+      if (!res.ok) {
+        // Clear error state — never silently substitute sample data.
+        setAnalysis(null);
+        setError(
+          data?.error ??
+            'Could not extract data from the uploaded file(s). Please try a text-based PDF or DOCX.',
+        );
+        return;
+      }
+
+      setAnalysis(data as AnalysisResult);
       setMessages([]);
-      if (id) void persistResult(id, data);
+      if (id) void persistResult(id, data as AnalysisResult);
     } catch {
-      setError('Could not analyze the quotations. Please try again.');
+      setAnalysis(null);
+      setError('Could not reach the extraction service. Please try again.');
     } finally {
       setAnalyzing(false);
     }
+  }
+
+  // Sample analysis is only ever shown via this explicit action.
+  function loadSample() {
+    setError(null);
+    setMessages([]);
+    setAnalysis(buildAnalysis([]));
   }
 
   // Best-effort: store the full analysis (with per-field source + confidence).
@@ -160,7 +179,7 @@ export default function WorkspacePage() {
     <div className="min-h-screen bg-background">
       {/* Top bar */}
       <header className="sticky top-0 z-40 border-b border-border/70 bg-background/80 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-4xl items-center justify-between px-6">
+        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
           <div className="flex items-center gap-2.5">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
               <Sparkles className="h-4 w-4" />
@@ -180,7 +199,7 @@ export default function WorkspacePage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-4xl px-6 py-10">
+      <main className="mx-auto max-w-6xl px-6 py-10">
         <div className="mb-8 text-center">
           <h1 className="text-balance text-3xl font-bold tracking-tight sm:text-4xl">
             Analyze supplier quotations
@@ -192,20 +211,34 @@ export default function WorkspacePage() {
         </div>
 
         <div className="space-y-8">
-          <UploadZone
-            files={files}
-            onAdd={addFiles}
-            onRemove={removeFile}
-            onAnalyze={handleAnalyze}
-            busy={uploading}
-            analyzing={analyzing}
-          />
+          <div className="mx-auto max-w-2xl">
+            <UploadZone
+              files={files}
+              onAdd={addFiles}
+              onRemove={removeFile}
+              onAnalyze={handleAnalyze}
+              busy={uploading}
+              analyzing={analyzing}
+            />
+            <div className="mt-3 text-center">
+              <button
+                type="button"
+                onClick={loadSample}
+                disabled={analyzing}
+                className="text-xs font-medium text-muted-foreground underline decoration-dotted underline-offset-2 transition hover:text-foreground disabled:opacity-50"
+              >
+                or load a sample analysis
+              </button>
+            </div>
+          </div>
 
           {error && (
-            <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            <div className="mx-auto max-w-2xl rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
               {error}
-            </p>
+            </div>
           )}
+
+          {analysis?.debug && <ExtractionDebug debug={analysis.debug} />}
 
           {analysis && <AnalysisResults analysis={analysis} />}
 

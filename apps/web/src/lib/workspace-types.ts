@@ -51,7 +51,11 @@ export interface ExtractedQuotation {
   warranty: string | null;
   /** quotation validity expiry (ISO date) — null when not stated */
   validUntil: string | null;
-  /** extracted line items (shared catalog across suppliers) */
+  /** detected-currency confidence 0..1 (1 = explicit currency in document) */
+  currencyConfidence: number;
+  /** FX rate used to normalize `currency` -> USD (1 when already USD) */
+  usdRate: number;
+  /** extracted line items — arbitrary per document, not a fixed catalog */
   lineItems: LineItem[];
   /** per-field source snippet + confidence for traceability */
   fields: Record<FieldKey, FieldProvenance>;
@@ -115,12 +119,28 @@ export interface SupplierScore {
   overall: number;
 }
 
+export interface ExtractionDebug {
+  fileName: string;
+  method: string;
+  textLength: number;
+  supplier: string;
+  currency: string;
+  currencyConfidence: number;
+  total: number | null;
+  delivery: string | null;
+  payment: string | null;
+  warranty: string | null;
+  lineItems: number;
+}
+
 export interface AnalysisResult {
   quotations: ExtractedQuotation[];
   recommendation: Recommendation;
   risks: RiskFlag[];
-  /** true when results are simulated (no real extraction backend wired yet) */
+  /** true when results are the built-in sample (explicit "Load sample" only) */
   simulated: boolean;
+  /** per-file extraction diagnostics (real uploads only) */
+  debug?: ExtractionDebug[];
 }
 
 export interface ChatMessage {
@@ -130,14 +150,22 @@ export interface ChatMessage {
   createdAt: string;
 }
 
-export const formatCurrency = (value: number | null, currency = 'USD') =>
-  value == null
-    ? '—'
-    : new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency,
-        maximumFractionDigits: 0,
-      }).format(value);
+// Always shows the ISO code prefix (e.g. "SAR 308,994", "USD 120,000") so the
+// original document currency is unambiguous — never silently rendered as $.
+export const formatCurrency = (value: number | null, currency = 'USD') => {
+  if (value == null) return '—';
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currency || 'USD',
+      currencyDisplay: 'code',
+      maximumFractionDigits: 0,
+    }).format(value);
+  } catch {
+    // Unknown/non-ISO currency code — fall back to a plain prefixed number.
+    return `${currency} ${Math.round(value).toLocaleString('en-US')}`;
+  }
+};
 
 export const formatDelivery = (days: number | null) =>
   days == null ? '—' : `${days} day${days === 1 ? '' : 's'}`;

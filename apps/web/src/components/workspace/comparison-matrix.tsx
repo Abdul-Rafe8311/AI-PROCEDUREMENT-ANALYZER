@@ -5,15 +5,30 @@ import { cn } from '@/lib/utils';
 import { toUsd } from '@/lib/analysis-engine';
 import { type ExtractedQuotation, formatCurrency } from '@/lib/workspace-types';
 
-export function ComparisonMatrix({ quotations }: { quotations: ExtractedQuotation[] }) {
-  if (!quotations.length || !quotations[0].lineItems.length) return null;
+// Loose key so the same material from different PDFs ("Reinforcement Steel Bars"
+// vs "Steel Reinforcement Bar 12mm") lines up in one row.
+const norm = (s: string) =>
+  s.toLowerCase().replace(/\(.*?\)/g, '').replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
 
-  const items = quotations[0].lineItems.map((li) => li.name);
+export function ComparisonMatrix({ quotations }: { quotations: ExtractedQuotation[] }) {
+  const hasItems = quotations.some((q) => q.lineItems.length > 0);
+  if (!quotations.length || !hasItems) return null;
+
+  // Union of item names across ALL suppliers (arbitrary per document).
+  const seen = new Map<string, string>(); // normalized -> display name
+  for (const q of quotations) {
+    for (const li of q.lineItems) {
+      const k = norm(li.name);
+      if (k && !seen.has(k)) seen.set(k, li.name);
+    }
+  }
+  const items = [...seen.entries()].map(([key, label]) => ({ key, label }));
+
   const totals = quotations.map((q) => q.totalCostUsd);
   const minTotal = Math.min(...totals.filter((v): v is number => v != null));
 
-  const unitUsd = (q: ExtractedQuotation, name: string): number | null => {
-    const li = q.lineItems.find((l) => l.name === name);
+  const unitUsd = (q: ExtractedQuotation, key: string): number | null => {
+    const li = q.lineItems.find((l) => norm(l.name) === key);
     return li?.unitPrice == null ? null : toUsd(li.unitPrice, li.currency);
   };
 
@@ -41,15 +56,18 @@ export function ComparisonMatrix({ quotations }: { quotations: ExtractedQuotatio
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {items.map((name) => {
-              const vals = quotations.map((q) => unitUsd(q, name));
+            {items.map(({ key, label }) => {
+              const vals = quotations.map((q) => unitUsd(q, key));
               const present = vals.filter((v): v is number => v != null);
               const min = present.length ? Math.min(...present) : null;
-              const qty = quotations[0].lineItems.find((l) => l.name === name)?.quantity ?? null;
+              const qty =
+                quotations
+                  .flatMap((q) => q.lineItems)
+                  .find((l) => norm(l.name) === key)?.quantity ?? null;
               return (
-                <tr key={name} className="transition hover:bg-muted/40">
+                <tr key={key} className="transition hover:bg-muted/40">
                   <td className="px-5 py-3">
-                    <div className="font-medium">{name}</div>
+                    <div className="font-medium">{label}</div>
                     {qty != null && (
                       <div className="nums text-xs text-muted-foreground">
                         Qty {qty.toLocaleString('en-US')}
@@ -92,6 +110,22 @@ export function ComparisonMatrix({ quotations }: { quotations: ExtractedQuotatio
           </tbody>
         </table>
       </div>
+      <FxNote quotations={quotations} />
+    </div>
+  );
+}
+
+// Shows the exchange rates used when suppliers quote in different currencies.
+function FxNote({ quotations }: { quotations: ExtractedQuotation[] }) {
+  const rates = new Map<string, number>();
+  for (const q of quotations) {
+    if (q.currency && q.currency !== 'USD') rates.set(q.currency, q.usdRate);
+  }
+  if (!rates.size) return null;
+  return (
+    <div className="border-t border-border px-5 py-2.5 text-xs text-muted-foreground">
+      Cross-currency totals normalized to USD —{' '}
+      {[...rates.entries()].map(([c, r]) => `1 ${c} = $${r.toFixed(4)}`).join(' · ')}
     </div>
   );
 }
