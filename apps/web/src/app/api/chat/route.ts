@@ -39,9 +39,13 @@ export async function POST(req: Request) {
 
   try {
     const system = [
-      'You are a procurement analyst assistant. Answer concisely and only from the',
-      'supplier quotation data provided as JSON. Use figures from the data. If asked',
-      'something the data cannot answer, say so briefly.',
+      'You are a procurement analyst assistant for construction/manufacturing buyers.',
+      'Answer concisely and ONLY from the supplier quotation data provided as JSON.',
+      'The data includes per-supplier totals, delivery days, payment terms, warranty,',
+      'risk flags (with severity), and itemized lineItems (name, quantity, unitPrice,',
+      'totalPrice, currency). For item questions (e.g. "lowest steel price") compare the',
+      'matching lineItems across suppliers. Always state the currency. Use totalCostUsd',
+      'for cross-currency comparisons and say so. If the data cannot answer, say so briefly.',
       '',
       `QUOTATION DATA:\n${JSON.stringify(analysis, null, 2)}`,
     ].join('\n');

@@ -49,6 +49,19 @@ const CATALOG: { name: string; quantity: number; weight: number }[] = [
   { name: 'Fasteners & Fixings (set)', quantity: 1200, weight: 0.12 },
 ];
 
+// Map a free-text keyword to a catalog item name (for chat queries).
+const ITEM_KEYWORDS: { re: RegExp; name: string }[] = [
+  { re: /steel|rebar|bar/i, name: 'Reinforced Steel Bars (12mm)' },
+  { re: /cement|concrete/i, name: 'Portland Cement (50kg)' },
+  { re: /timber|wood|beam|lumber/i, name: 'Structural Timber Beams' },
+  { re: /roof|sheet/i, name: 'Galvanized Roofing Sheets' },
+  { re: /fasten|fixing|bolt|screw|nut/i, name: 'Fasteners & Fixings (set)' },
+];
+
+export function matchCatalogItem(text: string): string | null {
+  return ITEM_KEYWORDS.find((k) => k.re.test(text))?.name ?? null;
+}
+
 // Itemized breakdown that sums (in USD) to the supplier's total cost.
 // `drop` removes the last N catalog items to simulate an incomplete quotation.
 function buildLineItems(
@@ -550,6 +563,43 @@ export function answerFromData(question: string, analysis: AnalysisResult): stri
   const q = question.toLowerCase();
   const { quotations: qs, recommendation: rec } = analysis;
   if (!qs.length) return 'Upload and analyze some quotations first, then ask me anything about them.';
+
+  // 1) Per-item / material price queries ("lowest steel price", "compare cement")
+  const item = matchCatalogItem(q);
+  if (item) {
+    const rows = qs
+      .map((s) => {
+        const li = s.lineItems.find((l) => l.name === item);
+        return { supplier: s.supplierName, usd: li?.unitPrice == null ? null : toUsd(li.unitPrice, li.currency) };
+      })
+      .filter((r): r is { supplier: string; usd: number } => r.usd != null)
+      .sort((a, b) => a.usd - b.usd);
+    if (!rows.length) return `None of the quotations list a unit price for ${item}.`;
+    const lines = rows.map((r, i) => `• ${r.supplier}: ${money(r.usd)}${i === 0 ? '  ← lowest' : ''}`);
+    return `${item} unit price (USD-normalized):\n${lines.join('\n')}\n\nCheapest: ${rows[0].supplier} at ${money(rows[0].usd)}.`;
+  }
+
+  // 2) Warranty threshold ("warranty longer than 12 months")
+  const warrThresh = q.match(/warrant\w*[^0-9]*(\d+)\s*(month|year)/);
+  if (warrThresh && /(longer|more|over|above|greater|at least|>|than)/.test(q)) {
+    const n = parseInt(warrThresh[1], 10) * (/year/.test(warrThresh[2]) ? 12 : 1);
+    const matches = qs.filter((s) => warrantyMonths(s.warranty) > n);
+    if (!matches.length) return `No supplier offers a warranty longer than ${n} months.`;
+    return `Suppliers with warranty over ${n} months:\n${matches
+      .map((s) => `• ${s.supplierName}: ${s.warranty}`)
+      .join('\n')}`;
+  }
+
+  // 3) Highest-risk query
+  if (/(highest|most|biggest|worst).*(risk|riskiest)|riskiest|most risky/.test(q)) {
+    const ranked = qs
+      .map((s) => ({ supplier: s.supplierName, score: riskScoreFor(s.supplierName, analysis.risks) }))
+      .sort((a, b) => b.score - a.score);
+    if (!ranked[0]?.score) return 'No material risks were detected for any supplier.';
+    const top = ranked[0];
+    const flags = analysis.risks.filter((r) => r.supplier === top.supplier);
+    return `${top.supplier} has the highest risk:\n${flags.map((f) => `⚠ ${f.message}`).join('\n')}`;
+  }
 
   if (/(cheap|lowest|least|price|cost|budget)/.test(q) && rec.lowestCost) {
     return `${rec.lowestCost.supplier} is the cheapest — ${rec.lowestCost.detail}`;

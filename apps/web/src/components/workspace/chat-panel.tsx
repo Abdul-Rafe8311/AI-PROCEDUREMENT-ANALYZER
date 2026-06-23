@@ -6,9 +6,10 @@ import { cn } from '@/lib/utils';
 import type { ChatMessage } from '@/lib/workspace-types';
 
 const SUGGESTIONS = [
-  'Which supplier is cheapest?',
-  'Compare payment terms.',
   'Which supplier has the lowest steel price?',
+  'Compare payment terms.',
+  'Show suppliers with warranty longer than 12 months.',
+  'Which quotation has the highest risk?',
 ];
 
 export function ChatPanel({
