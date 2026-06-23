@@ -84,10 +84,11 @@ export default function WorkspacePage() {
       if (!res.ok) {
         // Clear error state — never silently substitute sample data.
         setAnalysis(null);
-        setError(
+        const base =
           data?.error ??
-            'Could not extract data from the uploaded file(s). Please try a text-based PDF or DOCX.',
-        );
+          'Could not extract data from the uploaded file(s). Please try a text-based PDF or DOCX.';
+        // `detail` is only present in development for debugging.
+        setError(data?.detail ? `${base}\n\n${data.detail}` : base);
         return;
       }
 
@@ -233,7 +234,7 @@ export default function WorkspacePage() {
           </div>
 
           {error && (
-            <div className="mx-auto max-w-2xl rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            <div className="mx-auto max-w-2xl whitespace-pre-wrap rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
               {error}
             </div>
           )}

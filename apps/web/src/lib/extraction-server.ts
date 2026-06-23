@@ -20,7 +20,11 @@ export interface ExtractionResult {
   textLength: number;
   /** how extraction was performed, for the debug panel */
   method: 'llm' | 'heuristic' | 'unreadable';
+  /** technical failure reason (null on success) — logged + shown in dev */
+  error: string | null;
 }
+
+const log = (...args: unknown[]) => console.error('[extract]', ...args);
 
 const SUPPORTED_CURRENCIES = ['SAR', 'AED', 'USD', 'EUR', 'GBP', 'QAR', 'KWD'] as const;
 
@@ -29,14 +33,18 @@ export async function extractText(
   buffer: Buffer,
   fileName: string,
   mime: string,
-): Promise<string> {
+): Promise<{ text: string; error: string | null }> {
   const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
   try {
     if (ext === 'pdf' || mime === 'application/pdf') {
       const { extractText: extractPdf, getDocumentProxy } = await import('unpdf');
       const doc = await getDocumentProxy(new Uint8Array(buffer));
       const { text } = await extractPdf(doc, { mergePages: true });
-      return text ?? '';
+      const t = text ?? '';
+      return {
+        text: t,
+        error: t.trim() ? null : 'PDF parsed but contained no text (likely a scanned/image PDF — needs OCR).',
+      };
     }
     if (
       ext === 'docx' ||
@@ -44,15 +52,16 @@ export async function extractText(
     ) {
       const mammoth = (await import('mammoth')).default ?? (await import('mammoth'));
       const { value } = await mammoth.extractRawText({ buffer });
-      return value ?? '';
+      return { text: value ?? '', error: value?.trim() ? null : 'DOCX contained no text.' };
     }
-    // Images (png/jpg) would need OCR — not handled server-side yet.
     if (['png', 'jpg', 'jpeg'].includes(ext) || mime.startsWith('image/')) {
-      return '';
+      return { text: '', error: 'Image files need OCR, which is not enabled yet. Use a text-based PDF or DOCX.' };
     }
-    return buffer.toString('utf8');
-  } catch {
-    return '';
+    return { text: buffer.toString('utf8'), error: null };
+  } catch (err) {
+    const msg = `Text extraction failed for "${fileName}" (${ext}): ${(err as Error).message}`;
+    log(msg);
+    return { text: '', error: msg };
   }
 }
 
@@ -86,9 +95,15 @@ interface LlmQuotation {
 }
 
 // ── LLM structured extraction (Groq preferred, OpenAI fallback) ──
-async function llmExtract(text: string): Promise<LlmQuotation | null> {
+async function llmExtract(
+  text: string,
+): Promise<{ data: LlmQuotation | null; error: string | null }> {
   const provider = resolveProvider();
-  if (!provider) return null;
+  if (!provider) {
+    const error = 'No LLM provider configured — set GROQ_API_KEY (or OPENAI_API_KEY).';
+    log(error);
+    return { data: null, error };
+  }
 
   const system = [
     'You extract structured data from a single supplier quotation document.',
@@ -117,13 +132,30 @@ async function llmExtract(text: string): Promise<LlmQuotation | null> {
         ],
       }),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      const error = `LLM HTTP ${res.status} (model "${provider.model}"): ${body.slice(0, 300)}`;
+      log(error);
+      return { data: null, error };
+    }
     const data = await res.json();
     const content = data?.choices?.[0]?.message?.content;
-    if (!content) return null;
-    return JSON.parse(content) as LlmQuotation;
-  } catch {
-    return null;
+    if (!content) {
+      const error = 'LLM returned an empty response.';
+      log(error);
+      return { data: null, error };
+    }
+    try {
+      return { data: JSON.parse(content) as LlmQuotation, error: null };
+    } catch {
+      const error = `LLM returned non-JSON content: ${String(content).slice(0, 200)}`;
+      log(error);
+      return { data: null, error };
+    }
+  } catch (err) {
+    const error = `LLM request failed: ${(err as Error).message}`;
+    log(error);
+    return { data: null, error };
   }
 }
 
@@ -161,15 +193,20 @@ export async function extractQuotation(
   mime: string,
   index: number,
 ): Promise<ExtractionResult> {
-  const text = await extractText(buffer, fileName, mime);
+  const { text, error: textError } = await extractText(buffer, fileName, mime);
   const id = `q_${index}`;
 
   if (!text.trim()) {
-    return { quotation: emptyQuotation(id, fileName), textLength: 0, method: 'unreadable' };
+    return {
+      quotation: emptyQuotation(id, fileName),
+      textLength: 0,
+      method: 'unreadable',
+      error: textError ?? 'No text could be extracted from this file.',
+    };
   }
 
   const detected = detectCurrency(text);
-  const llm = await llmExtract(text);
+  const { data: llm, error: llmError } = await llmExtract(text);
   const method: ExtractionResult['method'] = llm ? 'llm' : 'heuristic';
 
   // Currency: trust the document text detection; fall back to LLM's guess.
@@ -215,7 +252,7 @@ export async function extractQuotation(
     fields,
   };
 
-  return { quotation, textLength: text.length, method };
+  return { quotation, textLength: text.length, method, error: llmError };
 }
 
 function fileNameToSupplier(fileName: string): string {
