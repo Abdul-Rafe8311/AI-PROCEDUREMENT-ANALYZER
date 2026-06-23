@@ -49,6 +49,30 @@ const CATALOG: { name: string; quantity: number; weight: number }[] = [
   { name: 'Fasteners & Fixings (set)', quantity: 1200, weight: 0.12 },
 ];
 
+// ── Chat routing: comparison (analysis JSON) vs document (RAG over full text) ──
+export type QuestionKind = 'comparison' | 'document';
+
+const DOC_SIGNALS =
+  /(section|clause|paragraph|page\s*\d|appendix|exhibit|annex|sub-?clause|article)\b|\bp\.?\s*\d+|\d+\.\d+|what does|does (it|the document|the quote|the contract) say|summari[sz]e|penalt|liquidated|scope of work|specification|terms (and|&) conditions|force majeure|indemnif|liabilit|governing law|sla\b/i;
+
+const COMPARISON_SIGNALS =
+  /cheapest|lowest|highest|compare|comparison|cost|price|delivery|fastest|payment terms|warranty|risk|score|saving|recommend|which supplier|best (overall|value|supplier)|most expensive/i;
+
+/**
+ * Classify a chat question. Comparison questions are answered from the analysis
+ * JSON (existing path); document questions go to RAG over the full PDF text.
+ * When ambiguous and the document is indexed, prefer document search.
+ */
+export function classifyQuestion(text: string, deepSearchReady: boolean): QuestionKind {
+  const doc = DOC_SIGNALS.test(text);
+  const cmp = COMPARISON_SIGNALS.test(text);
+  if (doc && !cmp) return 'document';
+  if (cmp && !doc) return 'comparison';
+  if (doc && cmp) return deepSearchReady ? 'document' : 'comparison';
+  // No strong signal: prefer deep search only when it's available.
+  return deepSearchReady ? 'document' : 'comparison';
+}
+
 // Map a free-text keyword to a catalog item name (for chat queries).
 const ITEM_KEYWORDS: { re: RegExp; name: string }[] = [
   { re: /steel|rebar|bar/i, name: 'Reinforced Steel Bars (12mm)' },

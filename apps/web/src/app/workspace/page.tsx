@@ -9,7 +9,7 @@ import { AnalysisResults } from '@/components/workspace/analysis-results';
 import { ExtractionDebug } from '@/components/workspace/extraction-debug';
 import { ChatPanel } from '@/components/workspace/chat-panel';
 import { isSupabaseConfigured, STORAGE_BUCKET, supabase } from '@/lib/supabase';
-import { buildAnalysis } from '@/lib/analysis-engine';
+import { buildAnalysis, classifyQuestion } from '@/lib/analysis-engine';
 import type { AnalysisResult, ChatMessage } from '@/lib/workspace-types';
 
 export default function WorkspacePage() {
@@ -21,6 +21,8 @@ export default function WorkspacePage() {
   const [sending, setSending] = useState(false);
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Becomes true once background RAG indexing completes (wired in a later phase).
+  const [deepSearchReady] = useState(false);
 
   const addFiles = useCallback((incoming: File[]) => {
     setFiles((prev) => {
@@ -139,6 +141,20 @@ export default function WorkspacePage() {
     };
     setMessages((prev) => [...prev, userMsg]);
     void persistMessage('user', text);
+
+    // Route: comparison questions -> analysis JSON; document questions -> RAG.
+    // Deep search lands in a later phase; until ready, explain instead of erroring.
+    const kind = classifyQuestion(text, deepSearchReady);
+    if (kind === 'document' && !deepSearchReady) {
+      const note =
+        'That looks like a question about the document’s wording. Deep document search is still being set up for your upload — for now I can answer comparison questions (cost, delivery, payment terms, warranty, risk, scores).';
+      setMessages((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), role: 'assistant', content: note, createdAt: new Date().toISOString() },
+      ]);
+      void persistMessage('assistant', note);
+      return;
+    }
 
     try {
       setSending(true);
