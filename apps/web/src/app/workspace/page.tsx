@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -10,6 +10,13 @@ import { ExtractionDebug } from '@/components/workspace/extraction-debug';
 import { ChatPanel } from '@/components/workspace/chat-panel';
 import { isSupabaseConfigured, STORAGE_BUCKET, supabase } from '@/lib/supabase';
 import { buildAnalysis, classifyQuestion } from '@/lib/analysis-engine';
+import {
+  type DocStatus,
+  type IndexStatus,
+  fetchStatus,
+  searchDocument,
+  startIndexing,
+} from '@/lib/rag-client';
 import type { AnalysisResult, ChatMessage } from '@/lib/workspace-types';
 
 export default function WorkspacePage() {
@@ -21,8 +28,43 @@ export default function WorkspacePage() {
   const [sending, setSending] = useState(false);
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Becomes true once background RAG indexing completes (wired in a later phase).
-  const [deepSearchReady] = useState(false);
+
+  // Per-document deep-search index status (RAG).
+  interface DocEntry {
+    documentId: string;
+    fileName: string;
+    status: IndexStatus;
+    error: string | null;
+  }
+  const [docs, setDocs] = useState<DocEntry[]>([]);
+  const deepSearchReady = docs.some((d) => d.status === 'ready');
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Poll index status while any document is still pending/indexing.
+  useEffect(() => {
+    const active = docs.filter((d) => d.status === 'pending' || d.status === 'indexing');
+    if (!active.length) {
+      if (pollRef.current) clearInterval(pollRef.current);
+      return;
+    }
+    const ids = docs.map((d) => d.documentId);
+    const tick = async () => {
+      const statuses = await fetchStatus(ids);
+      if (!statuses.length) return;
+      const byId = new Map<string, DocStatus>(statuses.map((s) => [s.documentId, s]));
+      setDocs((prev) =>
+        prev.map((d) => {
+          const s = byId.get(d.documentId);
+          return s ? { ...d, status: s.status, error: s.error } : d;
+        }),
+      );
+    };
+    pollRef.current = setInterval(tick, 3000);
+    void tick();
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [docs]);
 
   const addFiles = useCallback((incoming: File[]) => {
     setFiles((prev) => {
@@ -40,7 +82,11 @@ export default function WorkspacePage() {
   }, []);
 
   // Best-effort upload + persistence. Never blocks the analysis flow.
-  async function persistUpload(): Promise<string | null> {
+  // Returns the analysis id and the created document records (for RAG indexing).
+  async function persistUpload(): Promise<{
+    id: string;
+    docs: { documentId: string; fileName: string; fileUrl: string; isPdf: boolean }[];
+  } | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
       setUploading(true);
@@ -50,6 +96,7 @@ export default function WorkspacePage() {
         .insert({ id, title: files.map((f) => f.name).join(', ').slice(0, 120) });
       if (aErr) throw aErr;
 
+      const docs: { documentId: string; fileName: string; fileUrl: string; isPdf: boolean }[] = [];
       for (const file of files) {
         const path = `${id}/${Date.now()}-${file.name}`;
         const { error: upErr } = await supabase.storage
@@ -57,12 +104,22 @@ export default function WorkspacePage() {
           .upload(path, file, { upsert: false });
         if (upErr) continue;
         const { data: pub } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
-        await supabase
+        const { data: inserted } = await supabase
           .from('documents')
-          .insert({ analysis_id: id, file_name: file.name, file_url: pub.publicUrl });
+          .insert({ analysis_id: id, file_name: file.name, file_url: pub.publicUrl })
+          .select('id')
+          .single();
+        if (inserted?.id) {
+          docs.push({
+            documentId: inserted.id,
+            fileName: file.name,
+            fileUrl: pub.publicUrl,
+            isPdf: /\.pdf$/i.test(file.name) || file.type === 'application/pdf',
+          });
+        }
       }
       setAnalysisId(id);
-      return id;
+      return { id, docs };
     } catch {
       return null; // degrade silently to in-session mode
     } finally {
@@ -73,7 +130,8 @@ export default function WorkspacePage() {
   async function handleAnalyze() {
     if (!files.length) return;
     setError(null);
-    const id = await persistUpload();
+    setDocs([]);
+    const persisted = await persistUpload();
 
     try {
       setAnalyzing(true);
@@ -96,7 +154,22 @@ export default function WorkspacePage() {
 
       setAnalysis(data as AnalysisResult);
       setMessages([]);
-      if (id) void persistResult(id, data as AnalysisResult);
+      if (persisted) {
+        void persistResult(persisted.id, data as AnalysisResult);
+        // Kick off background deep-search indexing for PDF documents.
+        const pdfs = persisted.docs.filter((d) => d.isPdf);
+        if (pdfs.length) {
+          setDocs(
+            pdfs.map((d) => ({
+              documentId: d.documentId,
+              fileName: d.fileName,
+              status: 'pending' as IndexStatus,
+              error: null,
+            })),
+          );
+          pdfs.forEach((d) => void startIndexing(d.documentId, d.fileUrl));
+        }
+      }
     } catch {
       setAnalysis(null);
       setError('Could not reach the extraction service. Please try again.');
@@ -142,17 +215,47 @@ export default function WorkspacePage() {
     setMessages((prev) => [...prev, userMsg]);
     void persistMessage('user', text);
 
-    // Route: comparison questions -> analysis JSON; document questions -> RAG.
-    // Deep search lands in a later phase; until ready, explain instead of erroring.
-    const kind = classifyQuestion(text, deepSearchReady);
-    if (kind === 'document' && !deepSearchReady) {
-      const note =
-        'That looks like a question about the document’s wording. Deep document search is still being set up for your upload — for now I can answer comparison questions (cost, delivery, payment terms, warranty, risk, scores).';
+    const push = (content: string) => {
       setMessages((prev) => [
         ...prev,
-        { id: crypto.randomUUID(), role: 'assistant', content: note, createdAt: new Date().toISOString() },
+        { id: crypto.randomUUID(), role: 'assistant', content, createdAt: new Date().toISOString() },
       ]);
-      void persistMessage('assistant', note);
+      void persistMessage('assistant', content);
+    };
+
+    // Route: comparison questions -> analysis JSON; document questions -> RAG.
+    const kind = classifyQuestion(text, deepSearchReady);
+    if (kind === 'document') {
+      const ready = docs.filter((d) => d.status === 'ready');
+      if (!ready.length) {
+        const indexing = docs.some((d) => d.status === 'indexing' || d.status === 'pending');
+        const failed = docs.find((d) => d.status === 'failed');
+        push(
+          indexing
+            ? 'That looks like a question about the document’s wording. It’s still being indexed for deep search — please try again in a moment.'
+            : failed
+              ? `Deep search isn’t available for this upload (${failed.error ?? 'indexing failed'}). I can still answer comparison questions.`
+              : 'Deep document search isn’t available for this upload. I can answer comparison questions (cost, delivery, payment terms, warranty, risk, scores).',
+        );
+        return;
+      }
+      try {
+        setSending(true);
+        // Phase: scope to the first ready document; label which one.
+        const target = ready[0];
+        const result = await searchDocument(target.documentId, text);
+        if (!result) {
+          push('Deep search is temporarily unavailable. Please try again shortly.');
+          return;
+        }
+        const cites = result.citations?.length
+          ? `\n\nSources: ${result.citations.map((c) => `p.${c.page}`).join(', ')}`
+          : '';
+        const label = ready.length > 1 ? `From ${target.fileName}:\n\n` : '';
+        push(`${label}${result.answer}${cites}`);
+      } finally {
+        setSending(false);
+      }
       return;
     }
 
@@ -259,6 +362,8 @@ export default function WorkspacePage() {
 
           {analysis && <AnalysisResults analysis={analysis} />}
 
+          {docs.length > 0 && <DeepSearchStatus docs={docs} />}
+
           <ChatPanel
             messages={messages}
             onSend={handleSend}
@@ -273,6 +378,44 @@ export default function WorkspacePage() {
             : 'Running in demo mode — add Supabase keys to persist uploads and history.'}
         </p>
       </main>
+    </div>
+  );
+}
+
+function DeepSearchStatus({
+  docs,
+}: {
+  docs: { documentId: string; fileName: string; status: IndexStatus; error: string | null }[];
+}) {
+  const meta: Record<IndexStatus, { label: string; cls: string; dot: string }> = {
+    pending: { label: 'Queued for deep search', cls: 'text-muted-foreground', dot: 'bg-muted-foreground/50' },
+    indexing: { label: 'Indexing for deep search…', cls: 'text-primary', dot: 'bg-primary animate-pulse' },
+    ready: { label: 'Deep search ready', cls: 'text-success', dot: 'bg-success' },
+    failed: { label: 'Deep search unavailable', cls: 'text-warning', dot: 'bg-warning' },
+    unknown: { label: 'Unknown', cls: 'text-muted-foreground', dot: 'bg-muted-foreground/50' },
+  };
+  return (
+    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Deep document search
+      </div>
+      <ul className="space-y-1.5">
+        {docs.map((d) => {
+          const m = meta[d.status];
+          return (
+            <li key={d.documentId} className="flex items-center gap-2 text-sm">
+              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${m.dot}`} />
+              <span className="truncate font-medium">{d.fileName}</span>
+              <span className={`shrink-0 ${m.cls}`}>· {m.label}</span>
+              {d.status === 'failed' && d.error && (
+                <span className="truncate text-xs text-muted-foreground" title={d.error}>
+                  — {d.error}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
