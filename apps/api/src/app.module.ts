@@ -15,6 +15,7 @@ import { QuotationsModule } from './quotations/quotations.module';
 import { ComparisonModule } from './comparison/comparison.module';
 import { ReportsModule } from './reports/reports.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { WorkspaceRagModule } from './workspace-rag/workspace-rag.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { AppController } from './app.controller';
@@ -47,6 +48,7 @@ import { AppController } from './app.controller';
     ComparisonModule,
     ReportsModule,
     AnalyticsModule,
+    WorkspaceRagModule,
   ],
   controllers: [AppController],
   providers: [
