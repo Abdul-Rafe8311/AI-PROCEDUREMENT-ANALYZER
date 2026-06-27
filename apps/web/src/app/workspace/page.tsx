@@ -372,11 +372,6 @@ export default function WorkspacePage() {
           />
         </div>
 
-        <p className="mt-10 text-center text-xs text-muted-foreground">
-          {isSupabaseConfigured
-            ? 'Uploads and history are saved to your Supabase project.'
-            : 'Running in demo mode — add Supabase keys to persist uploads and history.'}
-        </p>
       </main>
     </div>
   );
