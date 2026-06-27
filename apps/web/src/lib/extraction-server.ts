@@ -94,6 +94,42 @@ interface LlmQuotation {
   lineItems: { name: string; quantity: number | null; unitPrice: number | null; totalPrice: number | null }[];
 }
 
+// Build the text sent to the extraction LLM. Sends the whole document when it
+// fits; for long documents, keeps the head (supplier/currency/totals/terms) AND
+// every window that looks like a goods/pricing schedule — wherever it appears —
+// so item tables deep in the document (Schedule A/B, Annex, BoQ…) are never lost.
+const EXTRACTION_CHAR_BUDGET = 48000; // ~12k tokens — safe for large contexts
+const HEAD_CHARS = 16000;
+const WINDOW = 2500;
+const SCHEDULE_RE =
+  /schedule\s+[a-z0-9]|\bannex\b|\bappendix\b|bill of quantit|description of goods|scope of supply|unit price|unit rate|\bqty\b|quantit|line total|\bitem\s*(no|#|description)/gi;
+
+export function buildExtractionInput(text: string): string {
+  if (text.length <= EXTRACTION_CHAR_BUDGET) return text;
+
+  const head = text.slice(0, HEAD_CHARS);
+  let budget = EXTRACTION_CHAR_BUDGET - HEAD_CHARS;
+
+  // Collect non-overlapping windows around schedule/pricing keywords (past head).
+  const ranges: [number, number][] = [];
+  SCHEDULE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = SCHEDULE_RE.exec(text)) && budget > 0) {
+    const start = Math.max(HEAD_CHARS, m.index - WINDOW);
+    const end = Math.min(text.length, m.index + WINDOW);
+    const last = ranges[ranges.length - 1];
+    if (last && start <= last[1]) {
+      last[1] = Math.max(last[1], end); // merge overlapping
+    } else {
+      ranges.push([start, end]);
+      budget -= end - start;
+    }
+  }
+
+  const windows = ranges.map(([s, e]) => text.slice(s, e)).join('\n…\n');
+  return windows ? `${head}\n…\n${windows}` : head;
+}
+
 // ── LLM structured extraction (Groq preferred, OpenAI fallback) ──
 async function llmExtract(
   text: string,
@@ -106,16 +142,24 @@ async function llmExtract(
   }
 
   const system = [
-    'You extract structured data from a single supplier quotation document.',
-    'Return ONLY valid JSON matching this TypeScript type, no prose:',
+    'You extract structured data from a single supplier quotation or supply',
+    'agreement. Return ONLY valid JSON matching this TypeScript type, no prose:',
     '{ supplierName: string|null, currency: string|null (ISO code e.g. SAR, USD, AED, EUR, GBP),',
     '  totalAmount: number|null, deliveryTime: string|null, paymentTerms: string|null,',
     '  warranty: string|null, validUntil: string|null (ISO date),',
     '  lineItems: { name: string, quantity: number|null, unitPrice: number|null, totalPrice: number|null }[] }',
     'Rules: use ONLY values present in the document. Detect the currency from the text',
     '(e.g. "SAR", "Saudi Riyal", "﷼"). Never convert currencies. Numbers must be plain',
-    '(no thousands separators or symbols). If a field is absent, use null. Extract EVERY',
-    'line item you find with its real name, quantity, unit price and line total.',
+    '(no thousands separators or symbols). If a field is absent, use null.',
+    '',
+    'LINE ITEMS — scan the ENTIRE document, not just the top. The goods/pricing',
+    'list may appear ANYWHERE and under ANY heading: "Schedule A", "Schedule B",',
+    '"Annex", "Appendix", "Bill of Quantities", "Description of Goods", "Scope of',
+    'Supply", an items/qty/unit-price table, etc. Extract EVERY item you find.',
+    'If quantities and prices are in SEPARATE tables/schedules (e.g. Schedule A has',
+    'item + quantity, Schedule B has item + unit price), MATCH them by item',
+    'description and MERGE into a single line item carrying both quantity and price.',
+    'Preserve each item\'s real description (e.g. "Reinforcement Bars 12mm").',
   ].join('\n');
 
   try {
@@ -128,7 +172,7 @@ async function llmExtract(
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: system },
-          { role: 'user', content: `DOCUMENT TEXT:\n${text.slice(0, 12000)}` },
+          { role: 'user', content: `DOCUMENT TEXT:\n${buildExtractionInput(text)}` },
         ],
       }),
     });

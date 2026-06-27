@@ -45,7 +45,12 @@ export async function POST(req: Request) {
       'risk flags (with severity), and itemized lineItems (name, quantity, unitPrice,',
       'totalPrice, currency). For item questions (e.g. "lowest steel price") compare the',
       'matching lineItems across suppliers. Always state the currency. Use totalCostUsd',
-      'for cross-currency comparisons and say so. If the data cannot answer, say so briefly.',
+      'for cross-currency comparisons and say so.',
+      'If asked to list items/goods and lineItems is EMPTY for every supplier, do NOT',
+      'just say "cannot answer" — explain that no itemized goods/pricing table was',
+      'extracted from the document, and suggest asking about cost, delivery, payment',
+      'terms, or warranty, or using deep document search for the contract wording.',
+      'For other unanswerable questions, say so briefly.',
       '',
       `QUOTATION DATA:\n${JSON.stringify(analysis, null, 2)}`,
     ].join('\n');

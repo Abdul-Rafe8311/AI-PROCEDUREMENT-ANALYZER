@@ -4,7 +4,7 @@
 // swapped in behind /api/extract without changing the UI, since this module
 // produces the same AnalysisResult shape.
 
-import { DEFAULT_WEIGHTS } from './workspace-types';
+import { DEFAULT_WEIGHTS, formatCurrency } from './workspace-types';
 import type {
   AnalysisResult,
   ExtractedQuotation,
@@ -618,6 +618,25 @@ export function answerFromData(question: string, analysis: AnalysisResult): stri
     if (!rows.length) return `None of the quotations list a unit price for ${item}.`;
     const lines = rows.map((r, i) => `• ${r.supplier}: ${money(r.usd)}${i === 0 ? '  ← lowest' : ''}`);
     return `${item} unit price (USD-normalized):\n${lines.join('\n')}\n\nCheapest: ${rows[0].supplier} at ${money(rows[0].usd)}.`;
+  }
+
+  // 1b) "list the items / what goods are in this" — list extracted line items,
+  // or be honest about why there are none.
+  if (/(list|show|what).*(item|good|product|material)|^items?\b|^goods\b|line items?|what('| i)?s in (this|the)/.test(q)) {
+    const withItems = qs.filter((s) => s.lineItems.length > 0);
+    if (!withItems.length) {
+      return 'No itemized goods/pricing table was extracted from this document. The line-item list may be in a schedule/annex the extractor could not parse. You can still ask about total cost, delivery, payment terms, or warranty — or use deep document search for the contract wording.';
+    }
+    return withItems
+      .map((s) => {
+        const lines = s.lineItems.map((li) => {
+          const qty = li.quantity != null ? ` ×${li.quantity}` : '';
+          const price = li.unitPrice != null ? ` — ${formatCurrency(li.unitPrice, li.currency)}` : '';
+          return `   • ${li.name}${qty}${price}`;
+        });
+        return `${s.supplierName}:\n${lines.join('\n')}`;
+      })
+      .join('\n\n');
   }
 
   // 2) Warranty threshold ("warranty longer than 12 months")
