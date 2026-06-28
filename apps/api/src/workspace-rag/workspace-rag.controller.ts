@@ -33,7 +33,9 @@ export class WorkspaceRagController {
   async status(@Query('ids') ids?: string) {
     const list = (ids ?? '').split(',').map((s) => s.trim()).filter(Boolean);
     if (!list.length) return { documents: [] };
-    const placeholders = list.map((_, i) => `$${i + 1}`).join(', ');
+    // Cast each param to uuid — Postgres binds string params as text, and
+    // `uuid = text` has no operator (fails with a generic DB error otherwise).
+    const placeholders = list.map((_, i) => `$${i + 1}::uuid`).join(', ');
     const rows = await this.prisma.$queryRawUnsafe<
       {
         id: string;

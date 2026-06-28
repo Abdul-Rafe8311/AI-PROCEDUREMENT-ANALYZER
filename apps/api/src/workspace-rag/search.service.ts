@@ -21,7 +21,7 @@ export class SearchService {
   async search(documentId: string, query: string): Promise<SearchAnswer> {
     const docRows = await this.prisma.$queryRawUnsafe<
       { index_status: string | null; file_name: string | null }[]
-    >(`select index_status, file_name from documents where id = $1`, documentId);
+    >(`select index_status, file_name from documents where id = $1::uuid`, documentId);
     const doc = docRows[0];
     const status = doc?.index_status ?? 'unknown';
 
@@ -43,7 +43,7 @@ export class SearchService {
     >(
       `select page, content, embedding <=> $1::vector as distance
        from document_chunks
-       where document_id = $2
+       where document_id = $2::uuid
        order by distance asc
        limit ${SearchService.TOP_K}`,
       qVec,

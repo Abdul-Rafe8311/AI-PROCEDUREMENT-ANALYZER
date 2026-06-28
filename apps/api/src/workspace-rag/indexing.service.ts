@@ -56,7 +56,7 @@ export class IndexingService {
     }
     vals.push(id);
     await this.prisma.$executeRawUnsafe(
-      `update documents set ${sets.join(', ')} where id = $${n}`,
+      `update documents set ${sets.join(', ')} where id = $${n}::uuid`,
       ...vals,
     );
   }
@@ -72,7 +72,7 @@ export class IndexingService {
     const rows = await this.prisma.$queryRawUnsafe<
       { full_text: string | null; index_status: string | null; indexed_chunks: number | null }[]
     >(
-      `select full_text, index_status, indexed_chunks from documents where id = $1`,
+      `select full_text, index_status, indexed_chunks from documents where id = $1::uuid`,
       documentId,
     );
     const doc = rows[0];
@@ -81,7 +81,7 @@ export class IndexingService {
     // Permanent rejection (e.g. too large) — don't retry automatically.
     if (doc.index_status === 'failed') {
       const errRows = await this.prisma.$queryRawUnsafe<{ index_error: string | null }[]>(
-        `select index_error from documents where id = $1`,
+        `select index_error from documents where id = $1::uuid`,
         documentId,
       );
       if (/too large/i.test(errRows[0]?.index_error ?? '')) return;
@@ -117,7 +117,7 @@ export class IndexingService {
 
     // 4) Resume from the last completed batch.
     const done = await this.prisma.$queryRawUnsafe<{ c: bigint }[]>(
-      `select count(*)::int as c from document_chunks where document_id = $1`,
+      `select count(*)::int as c from document_chunks where document_id = $1::uuid`,
       documentId,
     );
     let indexed = Number(done[0]?.c ?? 0);
@@ -150,7 +150,7 @@ export class IndexingService {
       const vec = `[${(vectors[j] ?? []).join(',')}]`;
       await this.prisma.$executeRawUnsafe(
         `insert into document_chunks (document_id, chunk_index, page, content, embedding)
-         values ($1, $2, $3, $4, $5::vector)
+         values ($1::uuid, $2, $3, $4, $5::vector)
          on conflict (document_id, chunk_index) do nothing`,
         documentId,
         c.index,
