@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Public } from '../common/decorators/public.decorator';
-import { PrismaService } from '../prisma/prisma.service';
+import { RagPrismaService } from './rag-prisma.service';
 import { IndexingService } from './indexing.service';
 import { SearchService } from './search.service';
 
@@ -11,7 +11,7 @@ import { SearchService } from './search.service';
 @Controller('public/rag')
 export class WorkspaceRagController {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly prisma: RagPrismaService,
     private readonly indexing: IndexingService,
     private readonly search: SearchService,
   ) {}

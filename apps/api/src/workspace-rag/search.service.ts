@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { RagPrismaService } from './rag-prisma.service';
 import { EmbeddingService } from './embedding.service';
 
 export interface SearchAnswer {
@@ -14,7 +14,7 @@ export class SearchService {
   private static readonly TOP_K = 6;
 
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly prisma: RagPrismaService,
     private readonly embedder: EmbeddingService,
   ) {}
 

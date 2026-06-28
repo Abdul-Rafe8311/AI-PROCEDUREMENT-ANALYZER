@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { RagPrismaService } from './rag-prisma.service';
 import { EmbeddingService } from './embedding.service';
 
 // ── Free-tier (512 MB) safety limits ──
@@ -28,7 +28,7 @@ export class IndexingService {
   private readonly inFlight = new Set<string>();
 
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly prisma: RagPrismaService,
     private readonly embedder: EmbeddingService,
   ) {}
 
