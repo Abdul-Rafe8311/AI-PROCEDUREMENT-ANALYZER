@@ -68,6 +68,7 @@ export class IndexingService {
 
   /** Main pipeline: parse → guard → batched, resumable embed+store. */
   private async run(documentId: string, fileUrl: string): Promise<void> {
+    this.logger.log(`[rag] start indexing ${documentId} (${fileUrl})`);
     const rows = await this.prisma.$queryRawUnsafe<
       { full_text: string | null; index_status: string | null; indexed_chunks: number | null }[]
     >(

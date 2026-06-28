@@ -35,6 +35,9 @@ export default function WorkspacePage() {
     fileName: string;
     status: IndexStatus;
     error: string | null;
+    chunkCount: number;
+    indexedChunks: number;
+    startedAt: number; // when we began tracking (for the "stuck pending" hint)
   }
   const [docs, setDocs] = useState<DocEntry[]>([]);
   const deepSearchReady = docs.some((d) => d.status === 'ready');
@@ -42,8 +45,8 @@ export default function WorkspacePage() {
 
   // Poll index status while any document is still pending/indexing.
   useEffect(() => {
-    const active = docs.filter((d) => d.status === 'pending' || d.status === 'indexing');
-    if (!active.length) {
+    const active = docs.some((d) => d.status === 'pending' || d.status === 'indexing');
+    if (!active) {
       if (pollRef.current) clearInterval(pollRef.current);
       return;
     }
@@ -55,7 +58,15 @@ export default function WorkspacePage() {
       setDocs((prev) =>
         prev.map((d) => {
           const s = byId.get(d.documentId);
-          return s ? { ...d, status: s.status, error: s.error } : d;
+          return s
+            ? {
+                ...d,
+                status: s.status,
+                error: s.error,
+                chunkCount: s.chunkCount,
+                indexedChunks: s.indexedChunks,
+              }
+            : d;
         }),
       );
     };
@@ -165,6 +176,9 @@ export default function WorkspacePage() {
               fileName: d.fileName,
               status: 'pending' as IndexStatus,
               error: null,
+              chunkCount: 0,
+              indexedChunks: 0,
+              startedAt: Date.now(),
             })),
           );
           pdfs.forEach((d) => void startIndexing(d.documentId, d.fileUrl));
@@ -377,35 +391,90 @@ export default function WorkspacePage() {
   );
 }
 
-function DeepSearchStatus({
-  docs,
-}: {
-  docs: { documentId: string; fileName: string; status: IndexStatus; error: string | null }[];
-}) {
-  const meta: Record<IndexStatus, { label: string; cls: string; dot: string }> = {
-    pending: { label: 'Queued for deep search', cls: 'text-muted-foreground', dot: 'bg-muted-foreground/50' },
-    indexing: { label: 'Indexing for deep search…', cls: 'text-primary', dot: 'bg-primary animate-pulse' },
-    ready: { label: 'Deep search ready', cls: 'text-success', dot: 'bg-success' },
-    failed: { label: 'Deep search unavailable', cls: 'text-warning', dot: 'bg-warning' },
-    unknown: { label: 'Unknown', cls: 'text-muted-foreground', dot: 'bg-muted-foreground/50' },
+interface DeepDoc {
+  documentId: string;
+  fileName: string;
+  status: IndexStatus;
+  error: string | null;
+  chunkCount: number;
+  indexedChunks: number;
+  startedAt: number;
+}
+
+function DeepSearchStatus({ docs }: { docs: DeepDoc[] }) {
+  // Self-tick so the "Starting shortly…" hint appears even if status polling
+  // returns nothing (e.g. backend waking up).
+  const [, setNow] = useState(Date.now());
+  useEffect(() => {
+    const active = docs.some((d) => d.status === 'pending' || d.status === 'indexing');
+    if (!active) return;
+    const t = setInterval(() => setNow(Date.now()), 2000);
+    return () => clearInterval(t);
+  }, [docs]);
+
+  const dot: Record<IndexStatus, string> = {
+    pending: 'bg-muted-foreground/50',
+    indexing: 'bg-primary animate-pulse',
+    ready: 'bg-success',
+    failed: 'bg-warning',
+    unknown: 'bg-muted-foreground/50',
   };
+
+  const describe = (d: DeepDoc): { label: string; cls: string } => {
+    switch (d.status) {
+      case 'indexing': {
+        const pct =
+          d.chunkCount > 0
+            ? Math.min(100, Math.round((d.indexedChunks / d.chunkCount) * 100))
+            : null;
+        return {
+          cls: 'text-primary',
+          label: `Indexing for deep search…${pct != null ? ` ${pct}%` : ''}`,
+        };
+      }
+      case 'ready':
+        return { cls: 'text-success', label: 'Ready for deep search' };
+      case 'failed':
+        return { cls: 'text-warning', label: 'Deep search unavailable' };
+      case 'pending':
+      default: {
+        const stuck = Date.now() - d.startedAt > 30_000;
+        return {
+          cls: 'text-muted-foreground',
+          label: stuck ? 'Starting shortly…' : 'Queued for deep search',
+        };
+      }
+    }
+  };
+
   return (
     <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
       <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         Deep document search
       </div>
-      <ul className="space-y-1.5">
+      <ul className="space-y-2">
         {docs.map((d) => {
-          const m = meta[d.status];
+          const { label, cls } = describe(d);
+          const pct =
+            d.status === 'indexing' && d.chunkCount > 0
+              ? Math.min(100, Math.round((d.indexedChunks / d.chunkCount) * 100))
+              : null;
           return (
-            <li key={d.documentId} className="flex items-center gap-2 text-sm">
-              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${m.dot}`} />
-              <span className="truncate font-medium">{d.fileName}</span>
-              <span className={`shrink-0 ${m.cls}`}>· {m.label}</span>
-              {d.status === 'failed' && d.error && (
-                <span className="truncate text-xs text-muted-foreground" title={d.error}>
-                  — {d.error}
-                </span>
+            <li key={d.documentId} className="text-sm">
+              <div className="flex items-center gap-2">
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot[d.status]}`} />
+                <span className="truncate font-medium">{d.fileName}</span>
+                <span className={`shrink-0 ${cls}`}>· {label}</span>
+                {d.status === 'failed' && d.error && (
+                  <span className="truncate text-xs text-muted-foreground" title={d.error}>
+                    — {d.error}
+                  </span>
+                )}
+              </div>
+              {pct != null && (
+                <div className="ml-3.5 mt-1 h-1 w-full max-w-xs overflow-hidden rounded-full bg-muted">
+                  <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+                </div>
               )}
             </li>
           );
