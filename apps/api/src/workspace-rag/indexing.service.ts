@@ -126,9 +126,13 @@ export class IndexingService {
       const batch = chunks.slice(i, i + BATCH_SIZE);
       try {
         const vectors = await this.embedder.embed(batch.map((c) => c.content));
-        await this.persistBatch(documentId, batch, vectors);
+        // Retry transient connection drops (the session pooler can close an idle
+        // connection during the one-time model download); Prisma reconnects.
+        await this.withRetry(() => this.persistBatch(documentId, batch, vectors));
         indexed += batch.length;
-        await this.setStatus(documentId, 'indexing', { indexed_chunks: indexed });
+        await this.withRetry(() =>
+          this.setStatus(documentId, 'indexing', { indexed_chunks: indexed }),
+        );
       } catch (err) {
         // Leave status 'indexing' + progress saved so a later call resumes here.
         return this.fail(
@@ -143,22 +147,39 @@ export class IndexingService {
     this.logger.log(`[rag] ${documentId}: indexed ${indexed} chunks (ready).`);
   }
 
-  /** Insert a batch of chunks with their vectors (idempotent upsert). */
+  /** Insert a whole batch in ONE multi-row statement (idempotent upsert). */
   private async persistBatch(documentId: string, batch: Chunk[], vectors: number[][]): Promise<void> {
-    for (let j = 0; j < batch.length; j++) {
-      const c = batch[j];
-      const vec = `[${(vectors[j] ?? []).join(',')}]`;
-      await this.prisma.$executeRawUnsafe(
-        `insert into document_chunks (document_id, chunk_index, page, content, embedding)
-         values ($1::uuid, $2, $3, $4, $5::vector)
-         on conflict (document_id, chunk_index) do nothing`,
-        documentId,
-        c.index,
-        c.page,
-        c.content,
-        vec,
-      );
+    if (!batch.length) return;
+    const params: unknown[] = [];
+    const tuples = batch.map((c, j) => {
+      const base = j * 5;
+      params.push(documentId, c.index, c.page, c.content, `[${(vectors[j] ?? []).join(',')}]`);
+      return `($${base + 1}::uuid, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}::vector)`;
+    });
+    await this.prisma.$executeRawUnsafe(
+      `insert into document_chunks (document_id, chunk_index, page, content, embedding)
+       values ${tuples.join(', ')}
+       on conflict (document_id, chunk_index) do nothing`,
+      ...params,
+    );
+  }
+
+  /** Retry a DB op on transient connection errors (pooler dropping idle conns). */
+  private async withRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= tries; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastErr = err;
+        const msg = (err as Error).message ?? '';
+        const transient = /reach database server|connection|closed|terminat|ECONNRESET|timed out/i.test(msg);
+        if (!transient || attempt === tries) break;
+        this.logger.warn(`[rag] transient DB error (attempt ${attempt}/${tries}); retrying…`);
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+      }
     }
+    throw lastErr;
   }
 
   /** Download + parse a PDF into per-page text (for page citations). */
