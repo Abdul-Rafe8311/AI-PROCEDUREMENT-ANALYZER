@@ -3,10 +3,12 @@ import { RagPrismaService } from './rag-prisma.service';
 import { EmbeddingService } from './embedding.service';
 
 // ── Free-tier (512 MB) safety limits ──
-// A document larger than this is rejected up front instead of risking an OOM.
-const MAX_PAGES = 60;
-const MAX_CHUNKS = 300;
-const BATCH_SIZE = 50; // embed + persist this many chunks at a time
+// The full NestJS app (~200 MB) + onnxruntime/MiniLM-q8 (~120 MB) already use
+// most of 512 MB, so we keep per-batch work tiny and reject large documents up
+// front rather than risk an OOM that kills the whole instance.
+const MAX_PAGES = 50; // safe limit for deep-search indexing on the free tier
+const MAX_CHUNKS = 200;
+const BATCH_SIZE = 8; // embed + persist 8 chunks at a time (low peak memory)
 const CHUNK_SIZE = 900;
 const CHUNK_OVERLAP = 150;
 
@@ -105,12 +107,13 @@ export class IndexingService {
     // 2) Build chunks deterministically (same input → same chunk_index).
     const chunks = this.chunk(pages);
 
-    // 3) Pre-flight memory guard — reject up front, clearly.
+    // 3) Pre-flight memory guard — reject up front, clearly (never attempt it).
     if (pages.length > MAX_PAGES || chunks.length > MAX_CHUNKS) {
       return this.fail(
         documentId,
-        `Document too large to index on the current plan (${pages.length} pages). ` +
-          `Try a smaller file, or contact us to enable large-document support.`,
+        `This document is too large to index for deep search on the current plan ` +
+          `(${pages.length} pages, safe limit ~${MAX_PAGES} pages). ` +
+          `Comparison and extraction are unaffected.`,
       );
     }
     await this.setStatus(documentId, 'indexing', { chunk_count: chunks.length });

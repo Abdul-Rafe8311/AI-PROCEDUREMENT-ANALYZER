@@ -17,11 +17,20 @@ export class EmbeddingService {
     if (this.extractor) return this.extractor as never;
     if (!this.loading) {
       this.loading = (async () => {
-        this.logger.log('Loading all-MiniLM-L6-v2 embedding model…');
-        const { pipeline } = await import('@huggingface/transformers');
-        const pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+        this.logger.log('Loading all-MiniLM-L6-v2 (quantized) embedding model…');
+        const { pipeline, env } = await import('@huggingface/transformers');
+        // Minimize the 512 MB-instance footprint: single ONNX thread.
+        try {
+          const onnx = (env.backends as Record<string, { numThreads?: number }>).onnx;
+          if (onnx) onnx.numThreads = 1;
+        } catch {
+          /* best-effort */
+        }
+        const pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+          dtype: 'q8', // 8-bit quantized weights (~4x smaller, much lower RAM)
+        });
         this.extractor = pipe;
-        this.logger.log('Embedding model ready.');
+        this.logger.log('Embedding model ready (q8, 1 thread).');
         return pipe;
       })();
     }
