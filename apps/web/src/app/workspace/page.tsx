@@ -13,6 +13,7 @@ import { buildAnalysis, classifyQuestion } from '@/lib/analysis-engine';
 import {
   type DocStatus,
   type IndexStatus,
+  answerFromChunks,
   fetchStatus,
   searchDocument,
   startIndexing,
@@ -255,18 +256,26 @@ export default function WorkspacePage() {
       }
       try {
         setSending(true);
-        // Phase: scope to the first ready document; label which one.
+        // Scope to the first ready document; label which one when multiple.
         const target = ready[0];
         const result = await searchDocument(target.documentId, text);
         if (!result) {
           push('Deep search is temporarily unavailable. Please try again shortly.');
           return;
         }
-        const cites = result.citations?.length
-          ? `\n\nSources: ${result.citations.map((c) => `p.${c.page}`).join(', ')}`
-          : '';
+        if (!result.chunks.length) {
+          push(result.message ?? 'I could not find anything relevant in the document.');
+          return;
+        }
+        // Retrieval on Render -> synthesize a real answer on Vercel (Groq).
+        const synth = await answerFromChunks(text, result.fileName ?? target.fileName, result.chunks);
+        const answer = synth?.answer ?? result.chunks[0].content;
+        const pages = synth?.citations?.length
+          ? synth.citations.map((c) => c.page)
+          : [...new Set(result.chunks.map((c) => c.page))].sort((a, b) => a - b);
+        const cites = pages.length ? `\n\nSources: ${pages.map((p) => `p.${p}`).join(', ')}` : '';
         const label = ready.length > 1 ? `From ${target.fileName}:\n\n` : '';
-        push(`${label}${result.answer}${cites}`);
+        push(`${label}${answer}${cites}`);
       } finally {
         setSending(false);
       }

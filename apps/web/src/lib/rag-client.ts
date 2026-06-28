@@ -14,10 +14,22 @@ export interface DocStatus {
   indexedChunks: number;
 }
 
+export interface RetrievedChunk {
+  page: number;
+  content: string;
+  distance: number;
+}
+
+export interface SearchResult {
+  status: string;
+  fileName: string | null;
+  message: string | null;
+  chunks: RetrievedChunk[];
+}
+
 export interface DeepAnswer {
   answer: string;
-  citations: { page: number; snippet: string }[];
-  status: string;
+  citations: { page: number }[];
 }
 
 export const ragEnabled = Boolean(API_BASE);
@@ -47,13 +59,33 @@ export async function fetchStatus(ids: string[]): Promise<DocStatus[]> {
   }
 }
 
-export async function searchDocument(documentId: string, query: string): Promise<DeepAnswer | null> {
+// Retrieve relevance-filtered chunks from the Render backend.
+export async function searchDocument(documentId: string, query: string): Promise<SearchResult | null> {
   if (!API_BASE) return null;
   try {
     const res = await fetch(`${API_BASE}/api/public/rag/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ documentId, query }),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as SearchResult;
+  } catch {
+    return null;
+  }
+}
+
+// Synthesize a plain-language answer from retrieved chunks (Vercel/Groq).
+export async function answerFromChunks(
+  question: string,
+  fileName: string | null,
+  chunks: RetrievedChunk[],
+): Promise<DeepAnswer | null> {
+  try {
+    const res = await fetch('/api/doc-answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, fileName, chunks }),
     });
     if (!res.ok) return null;
     return (await res.json()) as DeepAnswer;

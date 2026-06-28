@@ -60,12 +60,13 @@ export class WorkspaceRagController {
     };
   }
 
-  // Deep-document question over a single document's indexed chunks.
+  // Deep-document retrieval: returns relevance-filtered chunks for the caller
+  // to synthesize a plain-language answer (synthesis runs on Vercel/Groq).
   @Post('search')
   async query(@Body() body: { documentId?: string; query?: string }) {
     const { documentId, query } = body ?? {};
     if (!documentId || !query?.trim()) {
-      return { answer: 'documentId and query are required.', citations: [], status: 'error' };
+      return { status: 'error', message: 'documentId and query are required.', chunks: [] };
     }
     return this.search.search(documentId, query);
   }
