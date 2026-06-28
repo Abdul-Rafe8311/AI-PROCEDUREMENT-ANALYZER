@@ -84,8 +84,12 @@ create table if not exists public.document_chunks (
   embedding vector(384),
   unique (document_id, chunk_index)
 );
-create index if not exists document_chunks_embedding_idx
-  on public.document_chunks using ivfflat (embedding vector_cosine_ops);
+-- NOTE: no ivfflat index. An ivfflat index built on an empty table has
+-- degenerate clusters and silently drops results (with probes=1 a query can
+-- land on an empty cluster -> 0 rows). At our scale (hundreds of chunks per
+-- doc, filtered by document_id) an exact scan is sub-millisecond and correct.
+create index if not exists document_chunks_doc_idx
+  on public.document_chunks(document_id);
 
 -- FUTURE: multi-tenant auth
 --   1. Add owner_id uuid references auth.users(id) to each table.
