@@ -33,8 +33,14 @@ create table if not exists public.messages (
   analysis_id uuid not null references public.analyses(id) on delete cascade,
   role        text not null check (role in ('user', 'assistant')),
   content     text not null,
+  -- optional chart directive rendered under an assistant message, e.g.
+  -- {"metric":"cost","title":"Total cost by supplier"} (Phase 6 charts-in-chat)
+  chart       jsonb,
   created_at  timestamptz not null default now()
 );
+
+-- For databases created before the chart column existed:
+alter table public.messages add column if not exists chart jsonb;
 
 create index if not exists documents_analysis_id_idx on public.documents(analysis_id);
 create index if not exists messages_analysis_id_idx on public.messages(analysis_id);

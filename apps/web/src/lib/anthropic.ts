@@ -6,6 +6,7 @@
 // model via ANTHROPIC_EXTRACTION_MODEL without touching this chat/answer path.
 
 import Anthropic from '@anthropic-ai/sdk';
+import { CHART_METRICS, type ChartDirective, type ChartMetric } from './workspace-types';
 
 /** Thrown when ANTHROPIC_API_KEY is not configured — callers degrade gracefully. */
 export class MissingAnthropicKeyError extends Error {
@@ -37,6 +38,94 @@ function getClient(): Anthropic {
 export interface ClaudeTurn {
   role: 'user' | 'assistant';
   content: string;
+}
+
+// ── Chat with optional chart (Claude tool use) ──
+// The model may call show_chart to VISUALIZE a comparison. It only picks a
+// metric — the app renders the chart from real analysis data (never invented).
+const SHOW_CHART_TOOL: Anthropic.Tool = {
+  name: 'show_chart',
+  description:
+    'Display a chart in the chat to help the buyer VISUALIZE a comparison. Call this ONLY when the user asks to see, visualize, plot, graph, or chart something, or clearly wants a visual comparison. Pick the SINGLE metric that best answers the question. The app renders the chart from the real analysis data — do NOT provide any numbers or data points.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      metric: {
+        type: 'string',
+        enum: [...CHART_METRICS],
+        description:
+          'cost = total cost per supplier (USD); score = overall procurement score 0-100; delivery = delivery time in days; material = per-item unit prices across suppliers',
+      },
+      title: { type: 'string', description: 'Optional short chart title, e.g. "Total cost by supplier".' },
+    },
+    required: ['metric'],
+  },
+};
+
+/**
+ * Answer a comparison question, optionally returning a data-free chart directive
+ * when the model decides a visual helps. Uses one tool round-trip: if the model
+ * calls show_chart, we return the tool result so it can finish its text answer.
+ * Throws MissingAnthropicKeyError when the key is unset.
+ */
+export async function answerWithClaudeChart(opts: {
+  system: string;
+  messages: ClaudeTurn[];
+  maxTokens?: number;
+}): Promise<{ answer: string; chart: ChartDirective | null }> {
+  const anthropic = getClient();
+  const maxTokens = opts.maxTokens ?? 1024;
+  const baseMessages: Anthropic.MessageParam[] = opts.messages.map((m) => ({ role: m.role, content: m.content }));
+
+  const textOf = (blocks: Anthropic.ContentBlock[]) =>
+    blocks
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map((b) => b.text)
+      .join('')
+      .trim();
+
+  const first = await anthropic.messages.create({
+    model: CHAT_MODEL,
+    max_tokens: maxTokens,
+    system: opts.system,
+    messages: baseMessages,
+    tools: [SHOW_CHART_TOOL],
+  });
+
+  const toolUse = first.content.find((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+  if (first.stop_reason !== 'tool_use' || !toolUse) {
+    return { answer: textOf(first.content), chart: null };
+  }
+
+  const input = (toolUse.input ?? {}) as { metric?: string; title?: string };
+  const chart: ChartDirective | null =
+    input.metric && (CHART_METRICS as readonly string[]).includes(input.metric)
+      ? { metric: input.metric as ChartMetric, ...(input.title ? { title: input.title } : {}) }
+      : null;
+
+  // Feed the tool result back (no tools this turn) so the model writes its text.
+  const second = await anthropic.messages.create({
+    model: CHAT_MODEL,
+    max_tokens: maxTokens,
+    system: opts.system,
+    messages: [
+      ...baseMessages,
+      { role: 'assistant', content: first.content as unknown as Anthropic.ContentBlockParam[] },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: chart ? `The ${chart.metric} chart is now shown to the user.` : 'No chart could be shown.',
+          },
+        ],
+      },
+    ],
+  });
+
+  const answer = textOf(second.content) || textOf(first.content) || 'Here is the chart you asked for.';
+  return { answer, chart };
 }
 
 export type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';

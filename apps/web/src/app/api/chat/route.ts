@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { answerFromData } from '@/lib/analysis-engine';
-import { answerWithClaude, CHAT_MODEL, isAnthropicConfigured } from '@/lib/anthropic';
+import { answerWithClaudeChart, CHAT_MODEL, isAnthropicConfigured } from '@/lib/anthropic';
 import type { AnalysisResult, ChatMessage } from '@/lib/workspace-types';
 
 export const runtime = 'nodejs';
@@ -67,13 +67,15 @@ export async function POST(req: Request) {
     '- Bold every important value — prices, delivery days, savings, supplier names, scores — with **…**.',
     '- Use a Markdown table ONLY for a compact side-by-side comparison (it renders as a clean table).',
     '- Put caveats / risks / things to verify in a blockquote ("> …") — it renders as a yellow warning card.',
+    '- If the user asks to SEE / visualize / plot / graph / chart a comparison, call the show_chart tool',
+    '  (choose ONE metric); the app draws the chart from the real data. Still give a short written answer too.',
     '- Keep it scannable: short paragraphs and sections. No raw HTML.',
     '',
     `QUOTATION DATA:\n${JSON.stringify(analysis, null, 2)}`,
   ].join('\n');
 
   try {
-    const answer = await answerWithClaude({
+    const { answer, chart } = await answerWithClaudeChart({
       system,
       messages: [
         ...history.slice(-6).map((m) => ({ role: m.role, content: m.content })),
@@ -84,7 +86,7 @@ export async function POST(req: Request) {
     if (!answer) {
       return NextResponse.json({ answer: answerFromData(question, analysis), source: 'rules' });
     }
-    return NextResponse.json({ answer, source: 'claude', model: CHAT_MODEL });
+    return NextResponse.json({ answer, source: 'claude', model: CHAT_MODEL, ...(chart ? { chart } : {}) });
   } catch (err) {
     // Claude failed (rate limit, outage, bad key) — degrade to real computed data.
     log(`Claude chat failed: ${(err as Error).message}`);

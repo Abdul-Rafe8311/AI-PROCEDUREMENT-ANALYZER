@@ -200,11 +200,25 @@ export interface AnalysisResult {
   debug?: ExtractionDebug[];
 }
 
+// Charts the chat can render. The LLM only chooses the metric (a data-free
+// directive) — the app draws the chart from the real analysis data, so values
+// are never invented.
+export const CHART_METRICS = ['cost', 'score', 'delivery', 'material'] as const;
+export type ChartMetric = (typeof CHART_METRICS)[number];
+
+export interface ChartDirective {
+  metric: ChartMetric;
+  /** optional short chart title suggested by the model */
+  title?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   createdAt: string;
+  /** when present, render this chart (from real analysis data) under the message */
+  chart?: ChartDirective;
 }
 
 // Always shows the ISO code prefix (e.g. "SAR 308,994", "USD 120,000") so the

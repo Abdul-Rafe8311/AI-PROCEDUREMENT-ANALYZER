@@ -1,10 +1,14 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { Loader2, MessageSquare, SendHorizonal, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { ChatMessage } from '@/lib/workspace-types';
+import type { AnalysisResult, ChatMessage } from '@/lib/workspace-types';
 import { ChatMarkdown } from './chat-markdown';
+
+// Lazy-load charts (recharts is heavy) — matches the dashboard's chart loading.
+const ChatChart = dynamic(() => import('./chat-chart').then((m) => m.ChatChart), { ssr: false });
 
 const SUGGESTIONS = [
   'Which supplier has the lowest steel price?',
@@ -18,11 +22,13 @@ export function ChatPanel({
   onSend,
   sending,
   disabled,
+  analysis,
 }: {
   messages: ChatMessage[];
   onSend: (text: string) => void;
   sending: boolean;
   disabled: boolean;
+  analysis: AnalysisResult | null;
 }) {
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -92,6 +98,7 @@ export function ChatPanel({
                   </span>
                   <div className="min-w-0 max-w-[90%] rounded-2xl rounded-tl-md border border-border bg-muted/40 px-4 py-3 shadow-sm">
                     <ChatMarkdown content={m.content} />
+                    {m.chart && analysis && <ChatChart analysis={analysis} directive={m.chart} />}
                   </div>
                 </div>
               ),

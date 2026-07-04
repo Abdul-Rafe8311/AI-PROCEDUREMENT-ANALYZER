@@ -18,7 +18,7 @@ import {
   searchDocument,
   startIndexing,
 } from '@/lib/rag-client';
-import type { AnalysisResult, ChatMessage } from '@/lib/workspace-types';
+import { type AnalysisResult, CHART_METRICS, type ChartDirective, type ChatMessage } from '@/lib/workspace-types';
 
 export default function WorkspacePage() {
   const [files, setFiles] = useState<File[]>([]);
@@ -210,10 +210,12 @@ export default function WorkspacePage() {
     }
   }
 
-  async function persistMessage(role: ChatMessage['role'], content: string) {
+  async function persistMessage(role: ChatMessage['role'], content: string, chart?: ChartDirective) {
     if (!isSupabaseConfigured || !supabase || !analysisId) return;
     try {
-      await supabase.from('messages').insert({ analysis_id: analysisId, role, content });
+      // `chart` needs the messages.chart jsonb column (see supabase/schema.sql).
+      // If it isn't migrated yet the insert throws and is ignored — no breakage.
+      await supabase.from('messages').insert({ analysis_id: analysisId, role, content, ...(chart ? { chart } : {}) });
     } catch {
       /* ignore */
     }
@@ -297,14 +299,20 @@ export default function WorkspacePage() {
       const data = await res.json();
       const answer: string = data?.answer ?? 'Sorry, I could not answer that.';
       const notice: string = data?.notice ? `\n\n⚠️ ${data.notice}` : '';
+      const chart: ChartDirective | undefined =
+        data?.chart && CHART_METRICS.includes(data.chart.metric)
+          ? { metric: data.chart.metric, ...(data.chart.title ? { title: data.chart.title } : {}) }
+          : undefined;
+      const content = `${answer}${notice}`;
       const aiMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: `${answer}${notice}`,
+        content,
         createdAt: new Date().toISOString(),
+        ...(chart ? { chart } : {}),
       };
       setMessages((prev) => [...prev, aiMsg]);
-      void persistMessage('assistant', answer);
+      void persistMessage('assistant', content, chart);
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -394,6 +402,7 @@ export default function WorkspacePage() {
             onSend={handleSend}
             sending={sending}
             disabled={!analysis}
+            analysis={analysis}
           />
         </div>
 
