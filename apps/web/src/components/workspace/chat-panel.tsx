@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Loader2, MessageSquare, SendHorizonal, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ChatMessage } from '@/lib/workspace-types';
+import { ChatMarkdown } from './chat-markdown';
 
 const SUGGESTIONS = [
   'Which supplier has the lowest steel price?',
@@ -70,27 +71,37 @@ export function ChatPanel({
             )}
           </div>
         ) : (
-          <div className="space-y-4">
-            {messages.map((m) => (
-              <div
-                key={m.id}
-                className={cn('flex', m.role === 'user' ? 'justify-end' : 'justify-start')}
-              >
+          <div className="space-y-5">
+            {messages.map((m) =>
+              m.role === 'user' ? (
                 <div
-                  className={cn(
-                    'max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed',
-                    m.role === 'user'
-                      ? 'bg-primary text-primary-foreground'
-                      : 'border border-border bg-muted/50 text-foreground',
-                  )}
+                  key={m.id}
+                  className="flex justify-end duration-200 animate-in fade-in slide-in-from-bottom-1"
                 >
-                  {m.content}
+                  <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground shadow-sm">
+                    {m.content}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ) : (
+                <div
+                  key={m.id}
+                  className="flex justify-start gap-2.5 duration-300 animate-in fade-in slide-in-from-bottom-1"
+                >
+                  <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <Sparkles className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 max-w-[90%] rounded-2xl rounded-tl-md border border-border bg-muted/40 px-4 py-3 shadow-sm">
+                    <ChatMarkdown content={m.content} />
+                  </div>
+                </div>
+              ),
+            )}
             {sending && (
-              <div className="flex justify-start">
-                <div className="flex items-center gap-2 rounded-2xl border border-border bg-muted/50 px-4 py-2.5 text-sm text-muted-foreground">
+              <div className="flex justify-start gap-2.5 duration-300 animate-in fade-in">
+                <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Sparkles className="h-4 w-4" />
+                </span>
+                <div className="flex items-center gap-2 rounded-2xl rounded-tl-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground shadow-sm">
                   <Loader2 className="h-4 w-4 animate-spin" /> Thinking…
                 </div>
               </div>

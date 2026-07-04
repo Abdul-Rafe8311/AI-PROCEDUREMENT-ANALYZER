@@ -9,8 +9,10 @@ import {
   ArrowUp,
   BarChart3,
   Clock,
+  Download,
   HelpCircle,
   Info,
+  Loader2,
   ShieldAlert,
   Sparkles,
   Table2,
@@ -369,13 +371,15 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
   const minWarr = Math.min(...warrs);
   const maxWarr = Math.max(...warrs);
 
-  // Savings of the recommended supplier vs the highest quote.
-  const bestQ = scored[0]?.quotation;
+  // Potential savings = highest − lowest quote (USD-normalized) across all
+  // quotations that actually have a total. Independent of which supplier is
+  // recommended, so it is never wrongly 0 when the recommended supplier isn't
+  // the cheapest. Failed/empty quotations (null cost) are already excluded.
   const savings =
-    bestQ?.totalCostUsd != null && Number.isFinite(maxCost) && maxCost > bestQ.totalCostUsd
+    Number.isFinite(minCost) && Number.isFinite(maxCost) && maxCost > minCost
       ? {
-          amount: maxCost - bestQ.totalCostUsd,
-          pct: Math.round(((maxCost - bestQ.totalCostUsd) / maxCost) * 100),
+          amount: maxCost - minCost,
+          pct: Math.round(((maxCost - minCost) / maxCost) * 100),
         }
       : null;
 
@@ -401,6 +405,17 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
 
   return (
     <div className="space-y-6">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">Analysis Report</h2>
+          <p className="text-sm text-muted-foreground">
+            {quotations.length} supplier{quotations.length === 1 ? '' : 's'} compared
+            {risks.length ? ` · ${risks.length} risk${risks.length === 1 ? '' : 's'} flagged` : ''}
+          </p>
+        </div>
+        <DownloadReportButton analysis={analysis} />
+      </div>
+
       <KpiCards data={kpi} />
 
       {/* Comparison table */}
@@ -615,6 +630,60 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
         {/* Risk detection */}
         <RiskPanel risks={risks} />
       </div>
+    </div>
+  );
+}
+
+// Generates the printable PDF report on demand. @react-pdf/renderer is loaded
+// only on click (dynamic import) so it never ships in the main bundle.
+function DownloadReportButton({ analysis }: { analysis: AnalysisResult }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleDownload() {
+    if (loading) return;
+    setError(null);
+    setLoading(true);
+    try {
+      const { generateReportPdf } = await import('@/lib/report-pdf');
+      const blob = await generateReportPdf(analysis);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `procurement-report-${new Date().toISOString().slice(0, 10)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (err) {
+      console.error('[report-pdf] generation failed', err);
+      setError('Could not generate the PDF. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={handleDownload}
+        disabled={loading}
+        className="inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {loading ? (
+          <>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Generating…
+          </>
+        ) : (
+          <>
+            <Download className="h-4 w-4" />
+            Download Report (PDF)
+          </>
+        )}
+      </button>
+      {error && <span className="text-xs text-danger">{error}</span>}
     </div>
   );
 }

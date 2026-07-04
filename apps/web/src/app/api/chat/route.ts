@@ -60,6 +60,15 @@ export async function POST(req: Request) {
     'terms, or warranty, or using deep document search for the contract wording.',
     'For other unanswerable questions, say so briefly.',
     '',
+    'FORMAT your answer as clean Markdown — it is rendered into a rich card UI, not shown as raw text:',
+    '- When you recommend a supplier, lead with a heading like "## Recommended: <Supplier>"',
+    '  (the word "Recommend" turns it into a highlighted card).',
+    '- Give the key reasons as a short bullet list (each bullet renders as a check item).',
+    '- Bold every important value — prices, delivery days, savings, supplier names, scores — with **…**.',
+    '- Use a Markdown table ONLY for a compact side-by-side comparison (it renders as a clean table).',
+    '- Put caveats / risks / things to verify in a blockquote ("> …") — it renders as a yellow warning card.',
+    '- Keep it scannable: short paragraphs and sections. No raw HTML.',
+    '',
     `QUOTATION DATA:\n${JSON.stringify(analysis, null, 2)}`,
   ].join('\n');
 

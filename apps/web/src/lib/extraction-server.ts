@@ -237,6 +237,10 @@ const SCAN_NOTE = [
   'tables, stamps and handwriting where legible, and transcribe numbers EXACTLY.',
   'If a value is genuinely illegible, use null rather than guessing. A single',
   'scanned form may still compare MULTIPLE suppliers side by side — capture each one.',
+  'ALWAYS capture each supplier\'s real COMPANY / SUPPLIER NAME (from the column',
+  'header, letterhead, stamp, signature block, or an "M/s <name>" line) into',
+  'supplierName. Do NOT use the file name. Only leave supplierName null if no',
+  'company name appears anywhere for that supplier.',
 ].join('\n');
 
 // ── LLM structured extraction (Groq preferred, OpenAI fallback) ──
@@ -429,9 +433,11 @@ function mapSupplier(
   const deliveryRaw = s.deliveryTime ?? null;
   const deliveryTerms = s.deliveryTerms?.trim() || null;
   const reference = s.reference?.trim() || null;
+  // Never fall back to the uploaded filename as a supplier name — use the
+  // extracted company name, else a neutral placeholder. (A screenshot named
+  // "Screenshot 2026-…png" must never appear as the supplier.)
   const supplierName =
-    s.supplierName?.trim() ||
-    (count > 1 ? `${fileNameToSupplier(fileName)} — Supplier ${index + 1}` : fileNameToSupplier(fileName));
+    s.supplierName?.trim() || (count > 1 ? `Supplier ${index + 1}` : 'Unknown Supplier');
 
   // Fold deliveryTerms / reference / alternate-currency totals into provenance
   // snippets so they stay auditable without new UI popover fields.
@@ -674,17 +680,12 @@ export async function extractQuotations(
   return { quotations, textLength: text.length, method: 'llm', error: llmError };
 }
 
-function fileNameToSupplier(fileName: string): string {
-  const base = fileName.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim();
-  return base ? base.replace(/\b\w/g, (c) => c.toUpperCase()) : 'Unknown Supplier';
-}
-
 function emptyQuotation(id: string, fileName: string): ExtractedQuotation {
   const empty = (): FieldProvenance => ({ snippet: null, confidence: 0 });
   return {
     id,
     fileName,
-    supplierName: fileNameToSupplier(fileName),
+    supplierName: 'Unknown Supplier',
     totalCost: null,
     currency: 'USD',
     totalCostUsd: null,
