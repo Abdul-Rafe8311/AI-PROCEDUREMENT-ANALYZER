@@ -11,6 +11,7 @@ import type {
   FieldKey,
   FieldProvenance,
   LineItem,
+  MetricScore,
   Recommendation,
   RiskFlag,
   RiskSeverity,
@@ -356,6 +357,7 @@ const RISK_SEVERITY: Record<RiskType, number> = {
   unusually_low_price: 2,
   missing_warranty: 2,
   long_lead_time: 1,
+  short_validity: 1,
   unusual_pricing: 1,
 };
 
@@ -367,8 +369,79 @@ const SEVERITY_LABEL: Record<RiskType, RiskSeverity> = {
   unusually_low_price: 'medium',
   missing_warranty: 'medium',
   long_lead_time: 'low',
+  short_validity: 'low',
   unusual_pricing: 'low',
 };
+
+// ── Risk detection thresholds (single source of truth, referenced by both the
+// detector and the plain-language "How risks are detected" catalog) ──
+const RISK_THRESHOLDS = {
+  /** lead time at/above this many days is flagged as a long lead time */
+  longLeadDays: 14,
+  /** quotation still valid but expiring within this many days is flagged as short */
+  shortValidityDays: 30,
+  /** price this fraction above the median is flagged as unusually high */
+  highPriceMedianMult: 1.25,
+  /** price this fraction of the median (or below) is flagged as unusually low */
+  lowPriceMedianMult: 0.7,
+};
+
+export interface RiskRuleDoc {
+  title: string;
+  severity: RiskSeverity;
+  detail: string;
+}
+
+/**
+ * Plain-language catalog of EVERY risk rule, shown in the "How risks are
+ * detected" dialog. Thresholds come from RISK_THRESHOLDS so this buyer-facing
+ * copy can never drift from what the detector actually does.
+ */
+export const RISK_RULE_CATALOG: RiskRuleDoc[] = [
+  {
+    title: 'Missing delivery date',
+    severity: 'high',
+    detail: 'The quotation gives no delivery date or lead time, so the schedule can’t be verified.',
+  },
+  {
+    title: 'Missing warranty',
+    severity: 'medium',
+    detail: 'No warranty is stated, so there’s no cover if the goods fail after delivery.',
+  },
+  {
+    title: 'Risky payment terms',
+    severity: 'high',
+    detail:
+      'Terms that require paying up front or on delivery (e.g. 100% advance, cash on delivery) remove the protection of paying only after you’ve received and checked the goods.',
+  },
+  {
+    title: 'Unusual price vs. peers',
+    severity: 'medium',
+    detail: `The price sits far from the median of all quotes — more than ${Math.round((RISK_THRESHOLDS.highPriceMedianMult - 1) * 100)}% above it (unusually expensive), or below ${Math.round(RISK_THRESHOLDS.lowPriceMedianMult * 100)}% of it (unusually cheap, which can signal missing scope or lower quality).`,
+  },
+  {
+    title: 'Expired validity',
+    severity: 'high',
+    detail:
+      'The quotation’s validity date has already passed, so the price is no longer guaranteed and must be re-confirmed with the supplier.',
+  },
+  {
+    title: 'Short validity',
+    severity: 'low',
+    detail: `The quotation is still valid but expires within ${RISK_THRESHOLDS.shortValidityDays} days, so you’d need to decide quickly before the price can change.`,
+  },
+  {
+    title: 'Long lead time',
+    severity: 'low',
+    detail: `Delivery takes ${RISK_THRESHOLDS.longLeadDays} days or more, which can delay your project milestones.`,
+  },
+  {
+    title: 'Incomplete quotation',
+    severity: 'high',
+    detail:
+      'One or more line items are missing, or are missing a price, so the compared total may not reflect the full payable cost.',
+  },
+];
 
 /**
  * Days of supplier credit from payment terms — higher is better for the buyer.
@@ -399,17 +472,90 @@ export function riskScoreFor(supplierName: string, risks: RiskFlag[]): number {
     .reduce((sum, r) => sum + (RISK_SEVERITY[r.type] ?? 1), 0);
 }
 
-// Normalize to 0..1. If all values are equal, everyone gets 1 (no divide-by-zero).
-function normalize(value: number, min: number, max: number, higherIsBetter: boolean): number {
-  if (max === min) return 1;
-  const t = (value - min) / (max - min);
-  return higherIsBetter ? t : 1 - t;
+const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+
+// Absolute 0..1 benchmarks. Used ONLY when suppliers cannot be compared to each
+// other on a metric — a single supplier, or every supplier tied — so the score
+// still reflects the value's own merit instead of defaulting to full marks.
+// Deliberately conservative and documented so a single-supplier score is
+// defensible on paper.
+const BENCH = {
+  delivery: (days: number) => (45 - days) / (45 - 7), // ≤7d → 1.0, ≥45d → 0
+  payment: (netDays: number) => netDays / 60,         // 60d credit → 1.0, advance/COD → 0
+  warranty: (months: number) => months / 24,          // ≥24mo → 1.0, none → 0
+  risk: (severity: number) => 1 - severity / 6,        // 0 flags → 1.0, heavy risk → 0
+};
+
+/** A per-supplier metric input: its value, and whether it was actually present. */
+interface MetricInput {
+  present: boolean;
+  value: number;
 }
 
 /**
- * Pure deterministic ranking. Each metric is normalized to 0..1 (higher is
- * better), combined with the given weights (renormalized to sum to 1), and the
- * result is sorted best-first. Does NOT call any LLM.
+ * Score one criterion across all suppliers, honestly:
+ *  - a MISSING value scores 0 and is labelled "missing — 0" (never full marks);
+ *  - when peers differ, values are normalized relative to each other (0..1);
+ *  - when peers can't be compared (single supplier, or all tied) we fall back to
+ *    an absolute `benchmark`, or mark it "no comparison available" when no
+ *    benchmark makes sense (e.g. price, which is only meaningful vs peers).
+ */
+function scoreMetric(
+  entries: MetricInput[],
+  higherIsBetter: boolean,
+  benchmark: ((v: number) => number) | null,
+  label: string,
+): MetricScore[] {
+  const present = entries.filter((e) => e.present).map((e) => e.value);
+  const min = present.length ? Math.min(...present) : 0;
+  const max = present.length ? Math.max(...present) : 0;
+  const canRank = present.length >= 2 && max > min;
+  const single = present.length < 2;
+
+  return entries.map((e) => {
+    if (!e.present) {
+      return { score: 0, status: 'missing', note: `${label}: missing — 0` };
+    }
+    if (canRank) {
+      const t = (e.value - min) / (max - min);
+      return { score: clamp(higherIsBetter ? t : 1 - t, 0, 1), status: 'ranked', note: '' };
+    }
+    if (benchmark) {
+      return {
+        score: clamp(benchmark(e.value), 0, 1),
+        status: 'benchmark',
+        note: single
+          ? `${label}: single supplier — scored vs absolute benchmark`
+          : `${label}: all suppliers equal — scored vs absolute benchmark`,
+      };
+    }
+    return {
+      score: 0,
+      status: 'no-comparison',
+      note: `${label}: no comparison available — single supplier`,
+    };
+  });
+}
+
+/** Renormalize weights to sum to 1 (guard the all-zero case). */
+function renormWeights(weights: ScoreWeights): ScoreWeights {
+  const sum =
+    weights.price + weights.delivery + weights.payment + weights.warranty + weights.risk;
+  if (sum <= 0) return { price: 0.2, delivery: 0.2, payment: 0.2, warranty: 0.2, risk: 0.2 };
+  return {
+    price: weights.price / sum,
+    delivery: weights.delivery / sum,
+    payment: weights.payment / sum,
+    warranty: weights.warranty / sum,
+    risk: weights.risk / sum,
+  };
+}
+
+/**
+ * Pure deterministic ranking. Each criterion is scored 0..1 (higher = better)
+ * with honest handling of missing data and single-supplier / all-tied cases
+ * (see `scoreMetric`), combined with the given weights, and sorted best-first.
+ * Does NOT call any LLM.
  */
 export function scoreSuppliers(
   quotations: ExtractedQuotation[],
@@ -417,48 +563,77 @@ export function scoreSuppliers(
   weights: ScoreWeights = DEFAULT_WEIGHTS,
 ): SupplierScore[] {
   if (!quotations.length) return [];
+  const singleSupplier = quotations.length === 1;
 
-  const prices = quotations.map((q) => q.totalCostUsd ?? 0); // normalized USD
-  const deliveries = quotations.map((q) => q.deliveryDays ?? 0);
-  const payments = quotations.map((q) => paymentDays(q.paymentTerms));
-  const warranties = quotations.map((q) => warrantyMonths(q.warranty));
-  const riskScores = quotations.map((q) => riskScoreFor(q.supplierName, risks));
+  // Presence is decided from the source value being null/absent — a missing
+  // value is NOT coerced to 0/"best", it is excluded from the peer min/max and
+  // scored 0 by scoreMetric.
+  const priceIn: MetricInput[] = quotations.map((q) => ({
+    present: q.totalCostUsd != null,
+    value: q.totalCostUsd ?? 0,
+  }));
+  const deliveryIn: MetricInput[] = quotations.map((q) => ({
+    present: q.deliveryDays != null,
+    value: q.deliveryDays ?? 0,
+  }));
+  const paymentIn: MetricInput[] = quotations.map((q) => {
+    const present = !!(q.paymentTerms && q.paymentTerms.trim());
+    return { present, value: present ? paymentDays(q.paymentTerms) : 0 };
+  });
+  const warrantyIn: MetricInput[] = quotations.map((q) => {
+    const months = warrantyMonths(q.warranty); // 0 for null / "no warranty"
+    return { present: months > 0, value: months };
+  });
+  // Risk is always derived (never "missing"); lower summed severity is better.
+  const riskIn: MetricInput[] = quotations.map((q) => ({
+    present: true,
+    value: riskScoreFor(q.supplierName, risks),
+  }));
 
-  const minP = Math.min(...prices), maxP = Math.max(...prices);
-  const minD = Math.min(...deliveries), maxD = Math.max(...deliveries);
-  const minPay = Math.min(...payments), maxPay = Math.max(...payments);
-  const minW = Math.min(...warranties), maxW = Math.max(...warranties);
-  const maxRisk = Math.max(...riskScores);
-  const allRiskEqual = riskScores.every((r) => r === riskScores[0]);
+  // Price has no meaningful absolute benchmark → "no comparison" for a lone
+  // supplier rather than a fabricated full score.
+  const price = scoreMetric(priceIn, false, null, 'Price');
+  const delivery = scoreMetric(deliveryIn, false, BENCH.delivery, 'Delivery');
+  const payment = scoreMetric(paymentIn, true, BENCH.payment, 'Payment terms');
+  const warranty = scoreMetric(warrantyIn, true, BENCH.warranty, 'Warranty');
+  const risk = scoreMetric(riskIn, false, BENCH.risk, 'Risk');
 
-  // Renormalize weights so they always sum to 1 (guard the all-zero case).
-  const sum =
-    weights.price + weights.delivery + weights.payment + weights.warranty + weights.risk;
-  const w =
-    sum > 0
-      ? {
-          price: weights.price / sum,
-          delivery: weights.delivery / sum,
-          payment: weights.payment / sum,
-          warranty: weights.warranty / sum,
-          risk: weights.risk / sum,
-        }
-      : { price: 0.2, delivery: 0.2, payment: 0.2, warranty: 0.2, risk: 0.2 };
+  const w = renormWeights(weights);
 
   return quotations
     .map<SupplierScore>((q, i) => {
-      const price = normalize(prices[i], minP, maxP, false); // lower is better
-      const delivery = normalize(deliveries[i], minD, maxD, false); // lower is better
-      const payment = normalize(payments[i], minPay, maxPay, true); // more credit is better
-      const warranty = normalize(warranties[i], minW, maxW, true); // higher is better
-      const risk = allRiskEqual ? 1 : 1 - riskScores[i] / maxRisk; // fewer/less severe is better
-      const overall =
-        w.price * price +
-        w.delivery * delivery +
-        w.payment * payment +
-        w.warranty * warranty +
-        w.risk * risk;
-      return { quotation: q, price, delivery, payment, warranty, risk, overall };
+      const metrics: Record<keyof ScoreWeights, MetricScore> = {
+        price: price[i],
+        delivery: delivery[i],
+        payment: payment[i],
+        warranty: warranty[i],
+        risk: risk[i],
+      };
+
+      // Overall = weighted average over criteria we can actually judge.
+      // 'no-comparison' (price with a single supplier) is excluded and its
+      // weight redistributed; 'missing' stays in and scores 0, so a missing
+      // warranty/delivery correctly drags the score down instead of inflating it.
+      let wsum = 0;
+      let acc = 0;
+      (Object.keys(metrics) as (keyof ScoreWeights)[]).forEach((k) => {
+        if (metrics[k].status === 'no-comparison') return;
+        wsum += w[k];
+        acc += w[k] * metrics[k].score;
+      });
+      const overall = wsum > 0 ? acc / wsum : 0;
+
+      return {
+        quotation: q,
+        price: price[i].score,
+        delivery: delivery[i].score,
+        payment: payment[i].score,
+        warranty: warranty[i].score,
+        risk: risk[i].score,
+        metrics,
+        singleSupplier,
+        overall,
+      };
     })
     .sort((a, b) => b.overall - a.overall);
 }
@@ -538,53 +713,119 @@ export function buildExecutiveSummary(
   return summary;
 }
 
+/** Whole days from today until an ISO date (negative once the date has passed). */
+function daysUntil(isoDate: string, today: string): number {
+  return Math.round((Date.parse(isoDate) - Date.parse(today)) / 86_400_000);
+}
+
 export function detectRisks(qs: ExtractedQuotation[]): RiskFlag[] {
   const risks: RiskFlag[] = [];
   const costs = qs.filter((q) => q.totalCostUsd != null).map((q) => q.totalCostUsd!);
   const med = costs.length ? median(costs) : 0;
   const catalogSize = Math.max(...qs.map((q) => q.lineItems.length), 0);
   const today = new Date().toISOString().slice(0, 10);
+  const T = RISK_THRESHOLDS;
 
-  const add = (supplier: string, type: RiskType, message: string) =>
-    risks.push({ supplier, type, severity: SEVERITY_LABEL[type], message });
+  // `message` = short list label; `explanation` = plain-language "why", with the
+  // exact triggering value + threshold, shown in the hover/tap tooltip.
+  const add = (supplier: string, type: RiskType, message: string, explanation: string) =>
+    risks.push({ supplier, type, severity: SEVERITY_LABEL[type], message, explanation });
 
   for (const q of qs) {
     // Delivery
     if (q.deliveryDays == null) {
-      add(q.supplierName, 'missing_delivery', `${q.supplierName}: no delivery date provided.`);
-    } else if (q.deliveryDays >= 14) {
-      add(q.supplierName, 'long_lead_time', `${q.supplierName}: ${q.deliveryDays}-day lead time may delay milestones.`);
+      add(
+        q.supplierName,
+        'missing_delivery',
+        `${q.supplierName}: no delivery date provided.`,
+        'Flagged: this quotation gives no delivery date or lead time, so the schedule can’t be verified before you commit.',
+      );
+    } else if (q.deliveryDays >= T.longLeadDays) {
+      add(
+        q.supplierName,
+        'long_lead_time',
+        `${q.supplierName}: ${q.deliveryDays}-day lead time may delay milestones.`,
+        `Flagged: the lead time is ${q.deliveryDays} days. We flag anything from ${T.longLeadDays} days upward because a long wait can delay your project milestones.`,
+      );
     }
 
     // Warranty
     if (!q.warranty) {
-      add(q.supplierName, 'missing_warranty', `${q.supplierName}: no warranty information found.`);
+      add(
+        q.supplierName,
+        'missing_warranty',
+        `${q.supplierName}: no warranty information found.`,
+        'Flagged: no warranty is stated, so there would be no cover if the goods fail after delivery — you carry that risk.',
+      );
     }
 
     // Payment terms
     if (q.paymentTerms && isRiskyPaymentTerms(q.paymentTerms)) {
-      add(q.supplierName, 'risky_payment_terms', `${q.supplierName}: payment terms "${q.paymentTerms}" require payment upfront / reduce buyer protection.`);
+      add(
+        q.supplierName,
+        'risky_payment_terms',
+        `${q.supplierName}: payment terms "${q.paymentTerms}" require payment upfront / reduce buyer protection.`,
+        `Flagged: the payment terms are “${q.paymentTerms}”, which require paying up front or on delivery. That removes the protection of paying only after you’ve received and checked the goods.`,
+      );
     }
 
     // Pricing outliers (both directions)
     if (q.totalCostUsd != null && med > 0) {
-      if (q.totalCostUsd > med * 1.25) {
-        add(q.supplierName, 'unusual_pricing', `${q.supplierName}: priced ${Math.round(((q.totalCostUsd - med) / med) * 100)}% above the median quote.`);
-      } else if (q.totalCostUsd < med * 0.7) {
-        add(q.supplierName, 'unusually_low_price', `${q.supplierName}: priced ${Math.round(((med - q.totalCostUsd) / med) * 100)}% below the median — verify scope/quality before award.`);
+      if (q.totalCostUsd > med * T.highPriceMedianMult) {
+        const pct = Math.round(((q.totalCostUsd - med) / med) * 100);
+        add(
+          q.supplierName,
+          'unusual_pricing',
+          `${q.supplierName}: priced ${pct}% above the median quote.`,
+          `Flagged: this quote is ${pct}% higher than the median of all quotes (${money(med)}) — unusually expensive versus the other suppliers, so it’s worth questioning what’s included.`,
+        );
+      } else if (q.totalCostUsd < med * T.lowPriceMedianMult) {
+        const pct = Math.round(((med - q.totalCostUsd) / med) * 100);
+        add(
+          q.supplierName,
+          'unusually_low_price',
+          `${q.supplierName}: priced ${pct}% below the median — verify scope/quality before award.`,
+          `Flagged: this quote is ${pct}% lower than the median of all quotes (${money(med)}). A price this far below the pack can mean missing scope or lower quality — verify what’s included before you award.`,
+        );
       }
     }
 
-    // Expired quotation validity
-    if (q.validUntil && q.validUntil < today) {
-      add(q.supplierName, 'expired_validity', `${q.supplierName}: quotation validity expired on ${q.validUntil}.`);
+    // Quotation validity — expired, or valid but expiring soon
+    if (q.validUntil) {
+      if (q.validUntil < today) {
+        add(
+          q.supplierName,
+          'expired_validity',
+          `${q.supplierName}: quotation validity expired on ${q.validUntil}.`,
+          `Flagged: the quotation’s validity expired on ${q.validUntil}. The price is no longer guaranteed and must be re-confirmed with the supplier before you rely on it.`,
+        );
+      } else {
+        const left = daysUntil(q.validUntil, today);
+        if (left <= T.shortValidityDays) {
+          add(
+            q.supplierName,
+            'short_validity',
+            `${q.supplierName}: quotation valid for only ${left} more day${left === 1 ? '' : 's'} (until ${q.validUntil}).`,
+            `Flagged: this quotation is only valid until ${q.validUntil} — that’s ${left} day${left === 1 ? '' : 's'} from today, below our ${T.shortValidityDays}-day threshold. You’d need to decide quickly before the price can change.`,
+          );
+        }
+      }
     }
 
     // Incomplete quotation (missing line items, or any line missing a price)
     const missingPrice = q.lineItems.some((li) => li.unitPrice == null || li.totalPrice == null);
     if (q.lineItems.length < catalogSize || missingPrice) {
       const missing = catalogSize - q.lineItems.length;
-      add(q.supplierName, 'incomplete_quotation', `${q.supplierName}: incomplete quotation${missing > 0 ? ` — ${missing} line item${missing === 1 ? '' : 's'} not provided` : ' — some line items missing prices'}.`);
+      const detail =
+        missing > 0
+          ? ` — ${missing} line item${missing === 1 ? '' : 's'} not provided`
+          : ' — some line items missing prices';
+      add(
+        q.supplierName,
+        'incomplete_quotation',
+        `${q.supplierName}: incomplete quotation${detail}.`,
+        `Flagged: the quotation looks incomplete${detail}. The compared total may not reflect the full cost, so treat this supplier’s comparison with caution.`,
+      );
     }
   }
 
@@ -598,8 +839,9 @@ const money = (n: number) =>
     maximumFractionDigits: 0,
   }).format(n);
 
-// Rule-based chat fallback when OPENAI_API_KEY is not configured.
-// Computes genuine answers from the analysis data.
+// Deterministic chat fallback used when ANTHROPIC_API_KEY is not configured (or
+// Claude is temporarily unavailable). Computes genuine answers from the analysis
+// data — never sample/fabricated data.
 export function answerFromData(question: string, analysis: AnalysisResult): string {
   const q = question.toLowerCase();
   const { quotations: qs, recommendation: rec } = analysis;

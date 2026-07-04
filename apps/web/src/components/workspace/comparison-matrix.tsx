@@ -3,7 +3,7 @@
 import { Layers } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toUsd } from '@/lib/analysis-engine';
-import { type ExtractedQuotation } from '@/lib/workspace-types';
+import { type ExtractedQuotation, type LineItemCategory } from '@/lib/workspace-types';
 import { type CurrencyMode, MoneyDual } from './currency-mode';
 
 // Loose key so the same material from different PDFs ("Reinforcement Steel Bars"
@@ -23,13 +23,21 @@ export function ComparisonMatrix({
 
   // Union of item names across ALL suppliers (arbitrary per document).
   const seen = new Map<string, string>(); // normalized -> display name
+  const catByKey = new Map<string, LineItemCategory>();
   for (const q of quotations) {
     for (const li of q.lineItems) {
       const k = norm(li.name);
-      if (k && !seen.has(k)) seen.set(k, li.name);
+      if (!k) continue;
+      if (!seen.has(k)) seen.set(k, li.name);
+      const cat = li.category ?? 'product';
+      if (cat !== 'product' && !catByKey.has(k)) catByKey.set(k, cat);
     }
   }
-  const items = [...seen.entries()].map(([key, label]) => ({ key, label }));
+  // Products first, then charge lines (freight/shipping/…) so charges read as
+  // add-ons that are still counted in the total.
+  const items = [...seen.entries()]
+    .map(([key, label]) => ({ key, label, category: catByKey.get(key) ?? ('product' as LineItemCategory) }))
+    .sort((a, b) => Number(a.category !== 'product') - Number(b.category !== 'product'));
 
   const totals = quotations.map((q) => q.totalCostUsd);
   const minTotal = Math.min(...totals.filter((v): v is number => v != null));
@@ -67,7 +75,7 @@ export function ComparisonMatrix({
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {items.map(({ key, label }) => {
+            {items.map(({ key, label, category }) => {
               const vals = quotations.map((q) => unitUsd(q, key));
               const present = vals.filter((v): v is number => v != null);
               const min = present.length ? Math.min(...present) : null;
@@ -78,8 +86,15 @@ export function ComparisonMatrix({
               return (
                 <tr key={key} className="transition hover:bg-muted/40">
                   <td className="px-5 py-3">
-                    <div className="font-medium">{label}</div>
-                    {qty != null && (
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{label}</span>
+                      {category !== 'product' && (
+                        <span className="rounded-full bg-warning/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-warning">
+                          {category}
+                        </span>
+                      )}
+                    </div>
+                    {qty != null && category === 'product' && (
                       <div className="nums text-xs text-muted-foreground">
                         Qty {qty.toLocaleString('en-US')}
                       </div>

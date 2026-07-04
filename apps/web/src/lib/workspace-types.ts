@@ -24,6 +24,19 @@ export interface FieldProvenance {
   confidence: number;
 }
 
+/**
+ * Products vs charge lines. Charge lines (freight/shipping/insurance/handling)
+ * are still counted in the payable total but shown distinctly so the buyer can
+ * see they were included.
+ */
+export type LineItemCategory =
+  | 'product'
+  | 'freight'
+  | 'shipping'
+  | 'insurance'
+  | 'handling'
+  | 'other';
+
 export interface LineItem {
   name: string;
   quantity: number | null;
@@ -31,6 +44,14 @@ export interface LineItem {
   unitPrice: number | null;
   /** line total in `currency` */
   totalPrice: number | null;
+  currency: string;
+  /** product (default) or a charge line — see LineItemCategory */
+  category?: LineItemCategory;
+}
+
+/** A grand total exactly as stated in the document, with its own currency. */
+export interface StatedTotal {
+  amount: number;
   currency: string;
 }
 
@@ -51,6 +72,12 @@ export interface ExtractedQuotation {
   warranty: string | null;
   /** quotation validity expiry (ISO date) — null when not stated */
   validUntil: string | null;
+  /** supplier's own quotation / reference number, when the document states one */
+  reference?: string | null;
+  /** incoterms / delivery terms as written, e.g. "CFR Jeddah", "CIF Jeddah", "EXW" */
+  deliveryTerms?: string | null;
+  /** every grand total as stated, each with its own currency (multi-currency docs) */
+  statedTotals?: StatedTotal[];
   /** detected-currency confidence 0..1 (1 = explicit currency in document) */
   currencyConfidence: number;
   /** FX rate used to normalize `currency` -> USD (1 when already USD) */
@@ -69,6 +96,7 @@ export type RiskType =
   | 'long_lead_time'
   | 'risky_payment_terms'
   | 'expired_validity'
+  | 'short_validity'
   | 'incomplete_quotation';
 
 export type RiskSeverity = 'high' | 'medium' | 'low';
@@ -77,7 +105,13 @@ export interface RiskFlag {
   supplier: string;
   type: RiskType;
   severity: RiskSeverity;
+  /** short one-line label shown in the risk list */
   message: string;
+  /**
+   * Plain-language explanation of WHY this was flagged, including the exact
+   * triggering value and the threshold — shown in the hover/tap tooltip.
+   */
+  explanation: string;
 }
 
 export interface RecommendationItem {
@@ -108,14 +142,37 @@ export const DEFAULT_WEIGHTS: ScoreWeights = {
   risk: 0.1,
 };
 
+/**
+ * How a single criterion was scored for one supplier:
+ *  - `ranked`        — normalized against the other suppliers (the normal case)
+ *  - `benchmark`     — no peer comparison possible (single supplier or all tied),
+ *                      so scored against an absolute benchmark instead
+ *  - `missing`       — the value was not found in the document → scores 0
+ *  - `no-comparison` — cannot be judged in isolation (e.g. price with a single
+ *                      supplier); excluded from the weighted total, never full marks
+ */
+export type MetricStatus = 'ranked' | 'benchmark' | 'missing' | 'no-comparison';
+
+export interface MetricScore {
+  /** 0..1, higher = better; always 0 for a missing value */
+  score: number;
+  status: MetricStatus;
+  /** short auditable note, e.g. "Warranty: missing — 0" ('' for a plain ranked value) */
+  note: string;
+}
+
 export interface SupplierScore {
   quotation: ExtractedQuotation;
-  /** each normalized to 0..1 where higher = better */
+  /** each normalized to 0..1 where higher = better (mirror of metrics[x].score) */
   price: number;
   delivery: number;
   payment: number;
   warranty: number;
   risk: number;
+  /** per-criterion score + status (missing / benchmark / no-comparison) for auditability */
+  metrics: Record<keyof ScoreWeights, MetricScore>;
+  /** true when only one supplier was analyzed → no peer comparison is possible */
+  singleSupplier: boolean;
   overall: number;
 }
 

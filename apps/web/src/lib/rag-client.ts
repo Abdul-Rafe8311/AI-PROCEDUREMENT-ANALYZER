@@ -30,6 +30,10 @@ export interface SearchResult {
 export interface DeepAnswer {
   answer: string;
   citations: { page: number }[];
+  /** 'claude' (AI) | 'extract' (degraded — raw passages) */
+  source?: string;
+  /** set when degraded (e.g. key missing / AI unavailable) — surfaced to the user */
+  notice?: string;
 }
 
 export const ragEnabled = Boolean(API_BASE);

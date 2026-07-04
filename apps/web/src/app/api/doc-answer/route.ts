@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
+import { answerWithClaude, CHAT_MODEL, isAnthropicConfigured } from '@/lib/anthropic';
 
 export const runtime = 'nodejs';
+export const maxDuration = 30;
+
+const log = (...args: unknown[]) => console.error('[api/doc-answer]', ...args);
 
 interface Chunk {
   page: number;
@@ -8,8 +12,11 @@ interface Chunk {
 }
 
 // POST /api/doc-answer
-// Synthesizes a plain-language answer to a document question from the
-// retrieved chunks (retrieval happens on the Render backend). Uses Groq.
+// Synthesizes a plain-language answer to a document question from the retrieved
+// chunks (retrieval happens on the Render backend). Primary: Anthropic Claude
+// (claude-sonnet-4-6). If ANTHROPIC_API_KEY is missing or the call fails, it
+// degrades to a concise extract of the ACTUAL retrieved passages (never sample
+// data) and says so via `notice`.
 export async function POST(req: Request) {
   let body: { question?: string; fileName?: string; chunks?: Chunk[] };
   try {
@@ -28,15 +35,18 @@ export async function POST(req: Request) {
 
   const pages = [...new Set(chunks.map((c) => c.page))].sort((a, b) => a - b);
   const citations = pages.map((page) => ({ page }));
+  const extract = (n: number) =>
+    chunks.slice(0, n).map((c) => c.content.replace(/\s+/g, ' ').trim()).join(' ');
 
-  const provider = resolveProvider();
-  if (!provider) {
-    // No LLM key: return a concise extract rather than a raw dump.
-    const answer = chunks
-      .slice(0, 3)
-      .map((c) => c.content.replace(/\s+/g, ' ').trim())
-      .join(' ');
-    return NextResponse.json({ answer, citations, source: 'extract' });
+  // Clear degraded state when the AI provider is not configured — no silent
+  // failure, no sample data: a concise extract of the real passages + notice.
+  if (!isAnthropicConfigured()) {
+    return NextResponse.json({
+      answer: extract(3),
+      citations,
+      source: 'extract',
+      notice: 'AI answer synthesis is not configured (ANTHROPIC_API_KEY missing) — showing an extract of the matching passages.',
+    });
   }
 
   const context = chunks
@@ -57,49 +67,22 @@ export async function POST(req: Request) {
   ].join('\n');
 
   try {
-    const res = await fetch(provider.url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
-      body: JSON.stringify({
-        model: provider.model,
-        temperature: 0.2,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: question },
-        ],
-      }),
+    const answer = await answerWithClaude({
+      system,
+      messages: [{ role: 'user', content: question }],
+      maxTokens: 1024,
     });
-    if (!res.ok) {
-      const answer = chunks.slice(0, 2).map((c) => c.content.trim()).join(' ');
-      return NextResponse.json({ answer, citations, source: 'extract' });
+    if (!answer) {
+      return NextResponse.json({ answer: extract(2), citations, source: 'extract' });
     }
-    const data = await res.json();
-    const answer: string =
-      data?.choices?.[0]?.message?.content?.trim() ||
-      chunks.slice(0, 2).map((c) => c.content.trim()).join(' ');
-    return NextResponse.json({ answer, citations, source: provider.name });
-  } catch {
-    const answer = chunks.slice(0, 2).map((c) => c.content.trim()).join(' ');
-    return NextResponse.json({ answer, citations, source: 'extract' });
+    return NextResponse.json({ answer, citations, source: 'claude', model: CHAT_MODEL });
+  } catch (err) {
+    log(`Claude doc-answer failed: ${(err as Error).message}`);
+    return NextResponse.json({
+      answer: extract(2),
+      citations,
+      source: 'extract',
+      notice: 'AI answer synthesis is temporarily unavailable — showing an extract of the matching passages.',
+    });
   }
-}
-
-function resolveProvider() {
-  const groq = process.env.GROQ_API_KEY;
-  if (groq)
-    return {
-      name: 'groq',
-      apiKey: groq,
-      url: 'https://api.groq.com/openai/v1/chat/completions',
-      model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
-    };
-  const openai = process.env.OPENAI_API_KEY;
-  if (openai)
-    return {
-      name: 'openai',
-      apiKey: openai,
-      url: 'https://api.openai.com/v1/chat/completions',
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    };
-  return null;
 }

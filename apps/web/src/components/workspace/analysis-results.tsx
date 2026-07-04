@@ -1,6 +1,7 @@
 'use client';
 
-import { Fragment, type ReactNode, useMemo, useState } from 'react';
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import dynamic from 'next/dynamic';
 import {
   AlertTriangle,
@@ -8,6 +9,8 @@ import {
   ArrowUp,
   BarChart3,
   Clock,
+  HelpCircle,
+  Info,
   ShieldAlert,
   Sparkles,
   Table2,
@@ -18,11 +21,20 @@ import {
 import { cn } from '@/lib/utils';
 import {
   buildExecutiveSummary,
+  RISK_RULE_CATALOG,
   type RiskLevel,
   riskLevelFor,
   scoreSuppliers,
   warrantyMonths,
 } from '@/lib/analysis-engine';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import {
   type AnalysisResult,
   DEFAULT_WEIGHTS,
@@ -115,6 +127,94 @@ function ColumnFlag({ tone, lowerIsBetter }: { tone: Extreme; lowerIsBetter: boo
   );
 }
 
+/**
+ * Lightweight tooltip/popover that works on hover, keyboard focus, AND tap
+ * (mobile). Rendered through a portal so it is never clipped by the comparison
+ * table's horizontal scroll container. No extra dependency required.
+ */
+function InfoTip({
+  trigger,
+  children,
+  ariaLabel = 'More information',
+  className,
+  contentClassName,
+}: {
+  trigger: ReactNode;
+  children: ReactNode;
+  ariaLabel?: string;
+  className?: string;
+  contentClassName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const ref = useRef<HTMLButtonElement>(null);
+
+  const place = () => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const left = Math.min(Math.max(r.left + r.width / 2, 168), window.innerWidth - 168);
+    setPos({ top: r.bottom + 8, left });
+  };
+  const show = () => {
+    place();
+    setOpen(true);
+  };
+  const hide = () => setOpen(false);
+
+  useEffect(() => {
+    if (!open) return;
+    // Tap/click anywhere outside closes it (mobile); Escape closes it (keyboard).
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('click', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('click', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <>
+      <button
+        ref={ref}
+        type="button"
+        aria-label={ariaLabel}
+        className={cn('inline-flex items-center', className)}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+        onClick={(e) => {
+          e.stopPropagation();
+          show();
+        }}
+      >
+        {trigger}
+      </button>
+      {open &&
+        pos &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            role="tooltip"
+            style={{ position: 'fixed', top: pos.top, left: pos.left, transform: 'translateX(-50%)' }}
+            className={cn(
+              'z-[60] w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-card p-3 text-left text-xs leading-relaxed text-foreground shadow-xl',
+              contentClassName,
+            )}
+          >
+            {children}
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
 function ScoreBadge({ score }: { score: number }) {
   const tone =
     score >= 85 ? 'bg-success/15 text-success' : score >= 70 ? 'bg-primary/10 text-primary' : 'bg-warning/15 text-warning';
@@ -125,17 +225,44 @@ function ScoreBadge({ score }: { score: number }) {
   );
 }
 
-function RiskBadge({ level }: { level: RiskLevel }) {
+function RiskBadge({
+  level,
+  flags,
+  supplier,
+}: {
+  level: RiskLevel;
+  flags: RiskFlag[];
+  supplier: string;
+}) {
   const map: Record<RiskLevel, string> = {
     Low: 'bg-success/15 text-success',
     Medium: 'bg-warning/15 text-warning',
     High: 'bg-danger/15 text-danger',
   };
-  return (
-    <span className={cn('inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold', map[level])}>
+  const badge = (
+    <span className={cn('inline-flex cursor-help items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold', map[level])}>
       <span className={cn('h-1.5 w-1.5 rounded-full', level === 'Low' ? 'bg-success' : level === 'Medium' ? 'bg-warning' : 'bg-danger')} />
       {level}
     </span>
+  );
+  return (
+    <InfoTip ariaLabel={`Why ${supplier} is ${level} risk`} trigger={badge}>
+      <p className="font-semibold text-foreground">
+        {supplier} — {level} risk
+      </p>
+      {flags.length ? (
+        <ul className="mt-1.5 space-y-1.5 text-muted-foreground">
+          {flags.map((f, i) => (
+            <li key={i} className="flex gap-1.5">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" />
+              <span>{f.explanation}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1 text-muted-foreground">No risks were detected for this supplier.</p>
+      )}
+    </InfoTip>
   );
 }
 
@@ -222,9 +349,11 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
     () => buildExecutiveSummary(scored, risks),
     [scored, risks],
   );
+  const singleSupplier = quotations.length === 1;
   // Confidence reflects how decisively the top supplier leads the runner-up.
+  // With a single supplier there is nothing to compare, so confidence is n/a.
   const confidence = useMemo(() => {
-    if (scored.length < 2) return scored.length ? 90 : 0;
+    if (scored.length < 2) return null;
     const margin = scored[0].overall - scored[1].overall;
     return Math.round(Math.min(0.98, 0.6 + margin * 2.5) * 100);
   }, [scored]);
@@ -325,6 +454,9 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                           onToggle={toggleSource}
                           className="font-semibold"
                         />
+                        {q.reference && (
+                          <div className="mt-0.5 text-xs text-muted-foreground">Ref: {q.reference}</div>
+                        )}
                         <div className="mt-1 flex flex-wrap gap-1">
                           {q.supplierName === best && <Tag tone="primary" icon={Trophy} label="Best overall" />}
                           {q.supplierName === cheapest && <Tag tone="success" icon={Wallet} label="Lowest cost" />}
@@ -355,6 +487,9 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                             active={isOpen('deliveryDays')}
                             display={q.deliveryDays == null ? null : formatDelivery(q.deliveryDays)} />
                         </span>
+                        {q.deliveryTerms && (
+                          <div className="text-xs font-normal text-muted-foreground">{q.deliveryTerms}</div>
+                        )}
                       </td>
                       <td className="px-5 py-4 text-muted-foreground">
                         <FieldButton q={q} field="paymentTerms" display={q.paymentTerms}
@@ -371,7 +506,11 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                         <ScoreBadge score={scoreOf.get(q.supplierName) ?? 0} />
                       </td>
                       <td className="px-5 py-4 text-center">
-                        <RiskBadge level={riskLevelFor(q.supplierName, risks)} />
+                        <RiskBadge
+                          level={riskLevelFor(q.supplierName, risks)}
+                          flags={risks.filter((r) => r.supplier === q.supplierName)}
+                          supplier={q.supplierName}
+                        />
                       </td>
                     </tr>
                     {openMeta && open && (
@@ -444,7 +583,11 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
             {best && (
               <RecRow icon={Trophy} tone="primary" title="Recommended Supplier" highlight
                 supplier={best}
-                detail={`Highest procurement score (${bestScorePct}/100) on the system methodology.`} />
+                detail={
+                  singleSupplier
+                    ? `Only supplier analyzed — procurement score ${bestScorePct}/100 against absolute benchmarks (no peer comparison available).`
+                    : `Highest procurement score (${bestScorePct}/100) on the system methodology.`
+                } />
             )}
             {best && savings && (
               <li className="flex items-center gap-2 rounded-xl bg-success/10 px-3 py-2 text-sm font-medium text-success">
@@ -459,7 +602,12 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
               <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Confidence score
               </span>
-              <span className="nums text-lg font-bold text-primary">{confidence}%</span>
+              <span
+                className="nums text-lg font-bold text-primary"
+                title={confidence == null ? 'Only one supplier — no peer comparison to be confident against.' : undefined}
+              >
+                {confidence == null ? 'n/a' : `${confidence}%`}
+              </span>
             </div>
           )}
         </div>
@@ -537,19 +685,24 @@ function RecRow({
 }
 
 // ── Read-only scoring methodology + auditable per-criterion breakdown ──
-const CRITERIA: { key: keyof typeof DEFAULT_WEIGHTS; label: string; dim: keyof SupplierScore }[] = [
-  { key: 'price', label: 'Price', dim: 'price' },
-  { key: 'delivery', label: 'Delivery', dim: 'delivery' },
-  { key: 'payment', label: 'Payment Terms', dim: 'payment' },
-  { key: 'warranty', label: 'Warranty', dim: 'warranty' },
-  { key: 'risk', label: 'Risk', dim: 'risk' },
+const CRITERIA: { key: keyof typeof DEFAULT_WEIGHTS; label: string }[] = [
+  { key: 'price', label: 'Price' },
+  { key: 'delivery', label: 'Delivery' },
+  { key: 'payment', label: 'Payment Terms' },
+  { key: 'warranty', label: 'Warranty' },
+  { key: 'risk', label: 'Risk' },
 ];
 
 function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
   if (!scored.length) return null;
-  // Points = weight% applied to the 0..1 dimension score (so Price caps at 40).
-  const pts = (s: SupplierScore, key: keyof typeof DEFAULT_WEIGHTS, dim: keyof SupplierScore) =>
-    Math.round(DEFAULT_WEIGHTS[key] * (s[dim] as number) * 100);
+  const singleSupplier = scored[0].singleSupplier;
+  // Points = weight% applied to the 0..1 criterion score (so Price caps at 40).
+  const pts = (s: SupplierScore, key: keyof typeof DEFAULT_WEIGHTS) =>
+    Math.round(DEFAULT_WEIGHTS[key] * s.metrics[key].score * 100);
+  // A criterion excluded from the total (price with a lone supplier) → footnote.
+  const hasExcluded = scored.some((s) =>
+    CRITERIA.some((c) => s.metrics[c.key].status === 'no-comparison'),
+  );
 
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
@@ -560,11 +713,19 @@ function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
         </span>
         <span
           className="cursor-help text-xs text-muted-foreground underline decoration-dotted underline-offset-2"
-          title="Each supplier is scored 0-100. Every criterion is normalized across suppliers (0-1, higher is better) then multiplied by its fixed weight. Weights are system-defined and cannot be edited, so rankings are data-driven and auditable."
+          title="Each supplier is scored 0-100. Every criterion is normalized across suppliers (0-1, higher is better) then multiplied by its fixed weight. A value missing from the document scores 0 for that criterion (shown as 'missing — 0'), never full marks. With a single supplier — or when every supplier ties — a criterion is graded against an absolute benchmark instead (shown with ≈), and price (only meaningful versus peers) is marked 'n/a' and excluded. Weights are system-defined and cannot be edited, so rankings are data-driven and auditable."
         >
           How is this calculated?
         </span>
       </div>
+
+      {singleSupplier && (
+        <div className="border-b border-border bg-warning/10 px-5 py-3 text-xs text-warning">
+          <span className="font-semibold">No comparison available — single supplier.</span>{' '}
+          Scores below are graded against absolute benchmarks, not competing quotes.
+          Price cannot be benchmarked without peers, so it is excluded from the total.
+        </div>
+      )}
 
       {/* Fixed weights (read-only) */}
       <div className="flex flex-wrap gap-2 border-b border-border bg-muted/30 px-5 py-3 text-xs">
@@ -592,22 +753,50 @@ function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
           </thead>
           <tbody className="divide-y divide-border">
             {CRITERIA.map((c) => {
-              const vals = scored.map((s) => pts(s, c.key, c.dim));
-              const max = Math.max(...vals);
+              // Highlight the best cell only among comparable (ranked/benchmark) values —
+              // a "missing — 0" or "n/a" is never marked best.
+              const numeric = scored
+                .filter((s) => {
+                  const st = s.metrics[c.key].status;
+                  return st === 'ranked' || st === 'benchmark';
+                })
+                .map((s) => pts(s, c.key));
+              const max = numeric.length ? Math.max(...numeric) : null;
               return (
                 <tr key={c.key} className="transition hover:bg-muted/40">
                   <td className="px-5 py-3 font-medium">{c.label}</td>
                   <td className="nums px-5 py-3 text-right text-muted-foreground">
                     {Math.round(DEFAULT_WEIGHTS[c.key] * 100)}%
                   </td>
-                  {vals.map((v, i) => (
-                    <td
-                      key={scored[i].quotation.id}
-                      className={cn('nums px-5 py-3 text-right', v === max ? 'font-semibold text-success' : 'text-muted-foreground')}
-                    >
-                      {v}
-                    </td>
-                  ))}
+                  {scored.map((s) => {
+                    const m = s.metrics[c.key];
+                    if (m.status === 'missing') {
+                      return (
+                        <td key={s.quotation.id} className="nums px-5 py-3 text-right font-medium text-danger" title={m.note}>
+                          missing — 0
+                        </td>
+                      );
+                    }
+                    if (m.status === 'no-comparison') {
+                      return (
+                        <td key={s.quotation.id} className="px-5 py-3 text-right text-muted-foreground" title={m.note}>
+                          n/a
+                        </td>
+                      );
+                    }
+                    const v = pts(s, c.key);
+                    const isMax = max != null && v === max;
+                    return (
+                      <td
+                        key={s.quotation.id}
+                        className={cn('nums px-5 py-3 text-right', isMax ? 'font-semibold text-success' : 'text-muted-foreground')}
+                        title={m.status === 'benchmark' ? m.note : undefined}
+                      >
+                        {v}
+                        {m.status === 'benchmark' && <span className="text-muted-foreground/70"> ≈</span>}
+                      </td>
+                    );
+                  })}
                 </tr>
               );
             })}
@@ -618,7 +807,7 @@ function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
                 const isTop = s.quotation.supplierName === scored[0].quotation.supplierName;
                 return (
                   <td key={s.quotation.id} className={cn('nums px-5 py-3 text-right', isTop && 'text-primary')}>
-                    {total}{isTop && ' ★'}
+                    {total}{isTop && !singleSupplier && ' ★'}
                   </td>
                 );
               })}
@@ -626,6 +815,13 @@ function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
           </tbody>
         </table>
       </div>
+
+      {hasExcluded && (
+        <div className="border-t border-border px-5 py-3 text-[11px] leading-relaxed text-muted-foreground">
+          ≈ graded against an absolute benchmark (no peer comparison). &ldquo;n/a&rdquo; criteria are
+          excluded from the total and the remaining weights are renormalized so the score still totals out of 100.
+        </div>
+      )}
     </div>
   );
 }
@@ -686,6 +882,50 @@ const SEVERITY_META: Record<
   low: { label: 'Low', card: 'border-border bg-muted/20', badge: 'bg-muted text-muted-foreground', order: 2 },
 };
 
+// Plain-language reference of ALL risk rules — opened from the Risk panel.
+function RiskRulesDialog() {
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-0.5 text-xs font-medium text-muted-foreground transition hover:bg-muted/60 hover:text-foreground"
+        >
+          <HelpCircle className="h-3.5 w-3.5" />
+          How risks are detected
+        </button>
+      </DialogTrigger>
+      <DialogContent className="max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>How risks are detected</DialogTitle>
+          <DialogDescription>
+            Every quotation is checked against these plain rules. When a rule matches, that
+            supplier gets a flag — hover or tap any flag to see the exact reason and value.
+          </DialogDescription>
+        </DialogHeader>
+        <ul className="space-y-3">
+          {RISK_RULE_CATALOG.map((rule) => (
+            <li key={rule.title} className="rounded-xl border border-border p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold text-foreground">{rule.title}</span>
+                <span
+                  className={cn(
+                    'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold',
+                    SEVERITY_META[rule.severity].badge,
+                  )}
+                >
+                  {SEVERITY_META[rule.severity].label}
+                </span>
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{rule.detail}</p>
+            </li>
+          ))}
+        </ul>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function RiskPanel({ risks }: { risks: RiskFlag[] }) {
   const sorted = [...risks].sort(
     (a, b) => SEVERITY_META[a.severity].order - SEVERITY_META[b.severity].order,
@@ -697,12 +937,12 @@ function RiskPanel({ risks }: { risks: RiskFlag[] }) {
 
   return (
     <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="flex items-center gap-2 text-sm font-semibold">
           <ShieldAlert className="h-4 w-4 text-warning" />
           Risk Detection
         </span>
-        <div className="flex gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           {(['high', 'medium', 'low'] as RiskSeverity[])
             .filter((s) => counts[s])
             .map((s) => (
@@ -713,6 +953,7 @@ function RiskPanel({ risks }: { risks: RiskFlag[] }) {
                 {counts[s]} {SEVERITY_META[s].label}
               </span>
             ))}
+          <RiskRulesDialog />
         </div>
       </div>
 
@@ -729,6 +970,14 @@ function RiskPanel({ risks }: { risks: RiskFlag[] }) {
                 <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold', m.badge)}>
                   {m.label}
                 </span>
+                <InfoTip
+                  ariaLabel="Why was this flagged?"
+                  className="mt-0.5 shrink-0 text-muted-foreground transition hover:text-foreground"
+                  trigger={<Info className="h-4 w-4" />}
+                >
+                  <p className="font-semibold text-foreground">Why this was flagged</p>
+                  <p className="mt-1 text-muted-foreground">{r.explanation}</p>
+                </InfoTip>
               </li>
             );
           })}

@@ -71,12 +71,19 @@ export function ExtractionDebug({ debug }: { debug: Debug[] }) {
                         'rounded-full px-2 py-0.5 text-xs font-semibold',
                         d.method === 'llm'
                           ? 'bg-success/15 text-success'
-                          : d.method === 'heuristic'
-                            ? 'bg-warning/15 text-warning'
-                            : 'bg-danger/15 text-danger',
+                          : d.method === 'vision'
+                            ? 'bg-primary/10 text-primary'
+                            : d.method === 'heuristic'
+                              ? 'bg-warning/15 text-warning'
+                              : 'bg-danger/15 text-danger',
                       )}
+                      title={
+                        d.method === 'vision'
+                          ? 'Extracted from a scan/photo using Claude vision'
+                          : undefined
+                      }
                     >
-                      {d.method}
+                      {d.method === 'vision' ? 'vision (scan)' : d.method}
                     </span>
                   </td>
                 </tr>

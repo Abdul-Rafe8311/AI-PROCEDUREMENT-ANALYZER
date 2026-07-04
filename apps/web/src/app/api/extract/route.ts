@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { assembleAnalysis } from '@/lib/analysis-engine';
-import { extractQuotation } from '@/lib/extraction-server';
+import { extractQuotations } from '@/lib/extraction-server';
 import type { ExtractedQuotation } from '@/lib/workspace-types';
 
 export const runtime = 'nodejs';
@@ -66,28 +66,31 @@ export async function POST(req: Request) {
       const file = files[i];
       const name = (file as File).name || `upload-${i + 1}`;
       const buffer = Buffer.from(await file.arrayBuffer());
-      const { quotation, textLength, method, error } = await extractQuotation(
+      // One file can yield MULTIPLE suppliers (a side-by-side comparison sheet).
+      const { quotations: fileQuotations, textLength, method, error } = await extractQuotations(
         buffer,
         name,
         file.type,
         i,
       );
       if (error) reasons.push(`${name}: ${error}`);
-      quotations.push(quotation);
-      debug.push({
-        fileName: name,
-        method,
-        textLength,
-        supplier: quotation.supplierName,
-        currency: quotation.currency,
-        currencyConfidence: quotation.currencyConfidence,
-        total: quotation.totalCost,
-        delivery: quotation.deliveryRaw,
-        payment: quotation.paymentTerms,
-        warranty: quotation.warranty,
-        lineItems: quotation.lineItems.length,
-        ...(isDev && error ? { error } : {}),
-      });
+      for (const quotation of fileQuotations) {
+        quotations.push(quotation);
+        debug.push({
+          fileName: fileQuotations.length > 1 ? `${name} (${quotation.supplierName})` : name,
+          method,
+          textLength,
+          supplier: quotation.supplierName,
+          currency: quotation.currency,
+          currencyConfidence: quotation.currencyConfidence,
+          total: quotation.totalCost,
+          delivery: [quotation.deliveryRaw, quotation.deliveryTerms].filter(Boolean).join(' · ') || null,
+          payment: quotation.paymentTerms,
+          warranty: quotation.warranty,
+          lineItems: quotation.lineItems.length,
+          ...(isDev && error ? { error } : {}),
+        });
+      }
     }
 
     const anyReadable = quotations.some((q) => q.totalCost != null || q.lineItems.length > 0);

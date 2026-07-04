@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
 import { answerFromData } from '@/lib/analysis-engine';
+import { answerWithClaude, CHAT_MODEL, isAnthropicConfigured } from '@/lib/anthropic';
 import type { AnalysisResult, ChatMessage } from '@/lib/workspace-types';
 
 export const runtime = 'nodejs';
+export const maxDuration = 30;
+
+const log = (...args: unknown[]) => console.error('[api/chat]', ...args);
 
 interface ChatBody {
   question: string;
@@ -10,9 +14,10 @@ interface ChatBody {
   history?: Pick<ChatMessage, 'role' | 'content'>[];
 }
 
-// POST /api/chat — answers questions about the analyzed quotations.
-// Uses OpenAI when OPENAI_API_KEY is set; otherwise a rule-based responder
-// that computes real answers from the comparison data.
+// POST /api/chat — answers comparison questions about the analyzed quotations.
+// Primary: Anthropic Claude (claude-sonnet-4-6). If ANTHROPIC_API_KEY is missing
+// or the call fails, it degrades to a deterministic answer computed from the
+// SAME analysis data (never sample/fabricated data) and says so via `notice`.
 export async function POST(req: Request) {
   let body: ChatBody;
   try {
@@ -31,81 +36,53 @@ export async function POST(req: Request) {
     });
   }
 
-  // Prefer Groq (OpenAI-compatible), then OpenAI, else rule-based answers.
-  const provider = resolveProvider();
-  if (!provider) {
-    return NextResponse.json({ answer: answerFromData(question, analysis), source: 'rules' });
+  // Clear degraded state when the AI provider is not configured — no silent
+  // failure, no sample data: a real computed answer plus a visible notice.
+  if (!isAnthropicConfigured()) {
+    return NextResponse.json({
+      answer: answerFromData(question, analysis),
+      source: 'rules',
+      notice: 'AI chat is not configured (ANTHROPIC_API_KEY missing) — showing a computed answer from your data.',
+    });
   }
+
+  const system = [
+    'You are a procurement analyst assistant for construction/manufacturing buyers.',
+    'Answer concisely and ONLY from the supplier quotation data provided as JSON.',
+    'The data includes per-supplier totals, delivery days, payment terms, warranty,',
+    'risk flags (with severity), and itemized lineItems (name, quantity, unitPrice,',
+    'totalPrice, currency). For item questions (e.g. "lowest steel price") compare the',
+    'matching lineItems across suppliers. Always state the currency. Use totalCostUsd',
+    'for cross-currency comparisons and say so.',
+    'If asked to list items/goods and lineItems is EMPTY for every supplier, do NOT',
+    'just say "cannot answer" — explain that no itemized goods/pricing table was',
+    'extracted from the document, and suggest asking about cost, delivery, payment',
+    'terms, or warranty, or using deep document search for the contract wording.',
+    'For other unanswerable questions, say so briefly.',
+    '',
+    `QUOTATION DATA:\n${JSON.stringify(analysis, null, 2)}`,
+  ].join('\n');
 
   try {
-    const system = [
-      'You are a procurement analyst assistant for construction/manufacturing buyers.',
-      'Answer concisely and ONLY from the supplier quotation data provided as JSON.',
-      'The data includes per-supplier totals, delivery days, payment terms, warranty,',
-      'risk flags (with severity), and itemized lineItems (name, quantity, unitPrice,',
-      'totalPrice, currency). For item questions (e.g. "lowest steel price") compare the',
-      'matching lineItems across suppliers. Always state the currency. Use totalCostUsd',
-      'for cross-currency comparisons and say so.',
-      'If asked to list items/goods and lineItems is EMPTY for every supplier, do NOT',
-      'just say "cannot answer" — explain that no itemized goods/pricing table was',
-      'extracted from the document, and suggest asking about cost, delivery, payment',
-      'terms, or warranty, or using deep document search for the contract wording.',
-      'For other unanswerable questions, say so briefly.',
-      '',
-      `QUOTATION DATA:\n${JSON.stringify(analysis, null, 2)}`,
-    ].join('\n');
-
-    const res = await fetch(provider.url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${provider.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: provider.model,
-        temperature: 0.2,
-        messages: [
-          { role: 'system', content: system },
-          ...history.slice(-6).map((m) => ({ role: m.role, content: m.content })),
-          { role: 'user', content: question },
-        ],
-      }),
+    const answer = await answerWithClaude({
+      system,
+      messages: [
+        ...history.slice(-6).map((m) => ({ role: m.role, content: m.content })),
+        { role: 'user' as const, content: question },
+      ],
+      maxTokens: 1024,
     });
-
-    if (!res.ok) {
-      // Fall back to deterministic answer on any API error.
+    if (!answer) {
       return NextResponse.json({ answer: answerFromData(question, analysis), source: 'rules' });
     }
-
-    const data = await res.json();
-    const answer: string =
-      data?.choices?.[0]?.message?.content?.trim() || answerFromData(question, analysis);
-    return NextResponse.json({ answer, source: provider.name });
-  } catch {
-    return NextResponse.json({ answer: answerFromData(question, analysis), source: 'rules' });
+    return NextResponse.json({ answer, source: 'claude', model: CHAT_MODEL });
+  } catch (err) {
+    // Claude failed (rate limit, outage, bad key) — degrade to real computed data.
+    log(`Claude chat failed: ${(err as Error).message}`);
+    return NextResponse.json({
+      answer: answerFromData(question, analysis),
+      source: 'rules',
+      notice: 'AI chat is temporarily unavailable — showing a computed answer from your data.',
+    });
   }
-}
-
-function resolveProvider():
-  | { name: 'groq' | 'openai'; apiKey: string; url: string; model: string }
-  | null {
-  const groqKey = process.env.GROQ_API_KEY;
-  if (groqKey) {
-    return {
-      name: 'groq',
-      apiKey: groqKey,
-      url: 'https://api.groq.com/openai/v1/chat/completions',
-      model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
-    };
-  }
-  const openaiKey = process.env.OPENAI_API_KEY;
-  if (openaiKey) {
-    return {
-      name: 'openai',
-      apiKey: openaiKey,
-      url: 'https://api.openai.com/v1/chat/completions',
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    };
-  }
-  return null;
 }

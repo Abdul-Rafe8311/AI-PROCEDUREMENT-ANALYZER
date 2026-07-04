@@ -267,7 +267,7 @@ export default function WorkspacePage() {
           push(result.message ?? 'I could not find anything relevant in the document.');
           return;
         }
-        // Retrieval on Render -> synthesize a real answer on Vercel (Groq).
+        // Retrieval on Render -> synthesize a real answer on Vercel (Claude).
         const synth = await answerFromChunks(text, result.fileName ?? target.fileName, result.chunks);
         const answer = synth?.answer ?? result.chunks[0].content;
         const pages = synth?.citations?.length
@@ -275,7 +275,8 @@ export default function WorkspacePage() {
           : [...new Set(result.chunks.map((c) => c.page))].sort((a, b) => a - b);
         const cites = pages.length ? `\n\nSources: ${pages.map((p) => `p.${p}`).join(', ')}` : '';
         const label = ready.length > 1 ? `From ${target.fileName}:\n\n` : '';
-        push(`${label}${answer}${cites}`);
+        const notice = synth?.notice ? `\n\n⚠️ ${synth.notice}` : '';
+        push(`${label}${answer}${cites}${notice}`);
       } finally {
         setSending(false);
       }
@@ -295,10 +296,11 @@ export default function WorkspacePage() {
       });
       const data = await res.json();
       const answer: string = data?.answer ?? 'Sorry, I could not answer that.';
+      const notice: string = data?.notice ? `\n\n⚠️ ${data.notice}` : '';
       const aiMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: answer,
+        content: `${answer}${notice}`,
         createdAt: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, aiMsg]);
