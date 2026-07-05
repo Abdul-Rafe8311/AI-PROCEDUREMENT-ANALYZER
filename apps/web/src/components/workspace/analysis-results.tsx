@@ -151,20 +151,41 @@ function InfoTip({
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const cancelHide = () => {
+    if (hideTimer.current) {
+      clearTimeout(hideTimer.current);
+      hideTimer.current = null;
+    }
+  };
   const place = () => {
     const el = ref.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
     const left = Math.min(Math.max(r.left + r.width / 2, 168), window.innerWidth - 168);
-    setPos({ top: r.bottom + 8, left });
+    // Prefer below the trigger; flip above if there isn't room (keeps it on-screen).
+    const below = r.bottom + 8;
+    const top = below + 140 > window.innerHeight && r.top > 150 ? Math.max(r.top - 8, 8) : below;
+    setPos({ top, left });
   };
   const show = () => {
+    cancelHide();
     place();
     setOpen(true);
   };
-  const hide = () => setOpen(false);
+  // Small delay so moving the cursor from the trigger onto the tooltip content
+  // (which sits a few px away) doesn't dismiss it before it can be read.
+  const scheduleHide = () => {
+    cancelHide();
+    hideTimer.current = setTimeout(() => setOpen(false), 140);
+  };
+  const hideNow = () => {
+    cancelHide();
+    setOpen(false);
+  };
 
+  useEffect(() => () => cancelHide(), []);
   useEffect(() => {
     if (!open) return;
     // Tap/click anywhere outside closes it (mobile); Escape closes it (keyboard).
@@ -186,14 +207,16 @@ function InfoTip({
         ref={ref}
         type="button"
         aria-label={ariaLabel}
+        aria-expanded={open}
         className={cn('inline-flex items-center', className)}
         onMouseEnter={show}
-        onMouseLeave={hide}
+        onMouseLeave={scheduleHide}
         onFocus={show}
-        onBlur={hide}
+        onBlur={scheduleHide}
         onClick={(e) => {
           e.stopPropagation();
-          show();
+          if (open) hideNow();
+          else show();
         }}
       >
         {trigger}
@@ -206,9 +229,11 @@ function InfoTip({
             role="tooltip"
             style={{ position: 'fixed', top: pos.top, left: pos.left, transform: 'translateX(-50%)' }}
             className={cn(
-              'z-[60] w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-card p-3 text-left text-xs leading-relaxed text-foreground shadow-xl',
+              'z-[100] w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-card p-3 text-left text-xs leading-relaxed text-foreground shadow-xl',
               contentClassName,
             )}
+            onMouseEnter={cancelHide}
+            onMouseLeave={scheduleHide}
           >
             {children}
           </div>,
@@ -258,7 +283,7 @@ function RiskBadge({
           {flags.map((f, i) => (
             <li key={i} className="flex gap-1.5">
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" />
-              <span>{f.explanation}</span>
+              <span>{f.explanation || f.message}</span>
             </li>
           ))}
         </ul>
@@ -1099,7 +1124,7 @@ function RiskPanel({ risks }: { risks: RiskFlag[] }) {
                     }
                   >
                     <p className="font-semibold text-foreground">Why this was flagged</p>
-                    <p className="mt-1 text-muted-foreground">{r.explanation}</p>
+                    <p className="mt-1 text-muted-foreground">{r.explanation || r.message}</p>
                   </InfoTip>
                   <span className={cn('mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold', m.badge)}>
                     {m.label}
