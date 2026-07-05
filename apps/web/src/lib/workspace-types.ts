@@ -148,14 +148,17 @@ export const DEFAULT_WEIGHTS: ScoreWeights = {
 
 /**
  * How a single criterion was scored for one supplier:
- *  - `ranked`        — normalized against the other suppliers (the normal case)
+ *  - `ranked`        — normalized against the other suppliers (min-max)
+ *  - `proportional`  — scored as a ratio to the BEST value in the field (Price &
+ *                      Delivery): best = full marks, others scale by best÷theirs,
+ *                      so a finite gap never scores a flat 0
  *  - `benchmark`     — no peer comparison possible (single supplier or all tied),
  *                      so scored against an absolute benchmark instead
  *  - `missing`       — the value was not found in the document → scores 0
  *  - `no-comparison` — cannot be judged in isolation (e.g. price with a single
  *                      supplier); excluded from the weighted total, never full marks
  */
-export type MetricStatus = 'ranked' | 'benchmark' | 'missing' | 'no-comparison';
+export type MetricStatus = 'ranked' | 'proportional' | 'benchmark' | 'missing' | 'no-comparison';
 
 export interface MetricScore {
   /** 0..1, higher = better; always 0 for a missing value */

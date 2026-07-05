@@ -505,16 +505,37 @@ function scoreMetric(
   higherIsBetter: boolean,
   benchmark: ((v: number) => number) | null,
   label: string,
+  proportional = false,
 ): MetricScore[] {
   const present = entries.filter((e) => e.present).map((e) => e.value);
   const min = present.length ? Math.min(...present) : 0;
   const max = present.length ? Math.max(...present) : 0;
-  const canRank = present.length >= 2 && max > min;
+  const hasPeers = present.length >= 2;
+  const canRank = hasPeers && max > min;
   const single = present.length < 2;
 
   return entries.map((e) => {
     if (!e.present) {
       return { score: 0, status: 'missing', note: `${label}: missing — 0` };
+    }
+    // Proportional scoring (Price & Delivery): score = ratio to the BEST value in
+    // the field, so the best supplier gets full marks and worse ones scale
+    // linearly by how much worse they are — a finite gap never scores a flat 0.
+    // Needs peers to define "best"; a lone supplier falls through to benchmark.
+    if (proportional && hasPeers) {
+      const best = higherIsBetter ? max : min;
+      const frac = higherIsBetter
+        ? best > 0
+          ? e.value / best
+          : 1
+        : e.value > 0
+          ? best / e.value
+          : 1;
+      return {
+        score: clamp(frac, 0, 1),
+        status: 'proportional',
+        note: `${label}: proportional to the best value (best = full marks)`,
+      };
     }
     if (canRank) {
       const t = (e.value - min) / (max - min);
@@ -590,10 +611,12 @@ export function scoreSuppliers(
     value: riskScoreFor(q.supplierName, risks),
   }));
 
-  // Price has no meaningful absolute benchmark → "no comparison" for a lone
-  // supplier rather than a fabricated full score.
-  const price = scoreMetric(priceIn, false, null, 'Price');
-  const delivery = scoreMetric(deliveryIn, false, BENCH.delivery, 'Delivery');
+  // Price & Delivery are scored PROPORTIONALLY to the best value (ratio-to-best),
+  // so a 2× more expensive/slower quote scores ~half, not 0. Price has no
+  // absolute benchmark → "no comparison" for a lone supplier; Delivery falls back
+  // to its benchmark when there's only one supplier.
+  const price = scoreMetric(priceIn, false, null, 'Price', true);
+  const delivery = scoreMetric(deliveryIn, false, BENCH.delivery, 'Delivery', true);
   const payment = scoreMetric(paymentIn, true, BENCH.payment, 'Payment terms');
   const warranty = scoreMetric(warrantyIn, true, BENCH.warranty, 'Warranty');
   const risk = scoreMetric(riskIn, false, BENCH.risk, 'Risk');

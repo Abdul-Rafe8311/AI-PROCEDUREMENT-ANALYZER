@@ -201,9 +201,14 @@ function ReportDocument({ analysis }: { analysis: AnalysisResult }) {
       ? { amount: maxCost - bestCostUsd, pct: Math.round(((maxCost - bestCostUsd) / maxCost) * 100) }
       : null;
 
-  const pts = (sc: SupplierScore, key: keyof ScoreWeights) =>
-    Math.round(DEFAULT_WEIGHTS[key] * sc.metrics[key].score * 100);
+  const rawPts = (sc: SupplierScore, key: keyof ScoreWeights) =>
+    DEFAULT_WEIGHTS[key] * sc.metrics[key].score * 100;
+  const pts = (sc: SupplierScore, key: keyof ScoreWeights) => Math.round(rawPts(sc, key));
   const hasExcluded = scored.some((sc) => CRITERIA.some((c) => sc.metrics[c.key].status === 'no-comparison'));
+  const hasProp = scored.some((sc) => CRITERIA.some((c) => sc.metrics[c.key].status === 'proportional'));
+  const propCriteria = new Set(
+    CRITERIA.filter((c) => scored.some((sc) => sc.metrics[c.key].status === 'proportional')).map((c) => c.key),
+  );
 
   const sortedRisks = [...risks].sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]);
 
@@ -408,11 +413,13 @@ function ReportDocument({ analysis }: { analysis: AnalysisResult }) {
         <View>
           <Text style={s.sectionTitle}>Procurement Scoring Breakdown</Text>
           <Text style={s.para}>
-            Each supplier is scored 0–100. Every criterion is normalized across suppliers (higher is better), then
-            multiplied by its fixed weight. A value missing from the document scores 0 for that criterion (shown as
-            &quot;missing (0)&quot;), never full marks. With a single supplier — or when all suppliers tie — a criterion is
-            graded against an absolute benchmark (marked ~), and price (only meaningful versus peers) is marked n/a and
-            excluded. Weights: Price {Math.round(DEFAULT_WEIGHTS.price * 100)}%, Delivery{' '}
+            Each supplier is scored 0–100. Price and Delivery are scored PROPORTIONALLY to the best value in the field:
+            the best supplier earns the full weight and others earn weight x (best / theirs), so a quote 2x the cheapest
+            scores about half — never a flat 0 for a finite gap. Payment and Warranty are normalized across suppliers
+            (higher is better); Risk is scored from flagged severity. A value missing from the document scores 0 for that
+            criterion (shown as &quot;missing (0)&quot;), never full marks. With a single supplier — or when all suppliers
+            tie — a criterion is graded against an absolute benchmark (marked ~), and price (only meaningful versus peers)
+            is marked n/a and excluded. Weights: Price {Math.round(DEFAULT_WEIGHTS.price * 100)}%, Delivery{' '}
             {Math.round(DEFAULT_WEIGHTS.delivery * 100)}%, Payment {Math.round(DEFAULT_WEIGHTS.payment * 100)}%, Warranty{' '}
             {Math.round(DEFAULT_WEIGHTS.warranty * 100)}%, Risk {Math.round(DEFAULT_WEIGHTS.risk * 100)}%.
           </Text>
@@ -436,7 +443,10 @@ function ReportDocument({ analysis }: { analysis: AnalysisResult }) {
             </View>
             {CRITERIA.map((c, ri) => (
               <View key={c.key} style={ri % 2 ? [s.row, s.rowAlt] : s.row} wrap={false}>
-                <Text style={[s.td, { flex: 2, fontFamily: 'Helvetica-Bold' }]}>{c.label}</Text>
+                <Text style={[s.td, { flex: 2, fontFamily: 'Helvetica-Bold' }]}>
+                  {c.label}
+                  {propCriteria.has(c.key) ? <Text style={{ fontFamily: 'Helvetica', color: C.muted, fontSize: 7 }}>{'\n'}proportional to best</Text> : ''}
+                </Text>
                 <Text style={[s.td, { flex: 1, textAlign: 'right', color: C.muted }]}>
                   {Math.round(DEFAULT_WEIGHTS[c.key] * 100)}%
                 </Text>
@@ -450,6 +460,8 @@ function ReportDocument({ analysis }: { analysis: AnalysisResult }) {
                   } else if (m.status === 'no-comparison') {
                     label = 'n/a';
                     color = C.muted;
+                  } else if (m.status === 'proportional') {
+                    label = rawPts(sc, c.key).toFixed(1);
                   } else {
                     label = `${pts(sc, c.key)}${m.status === 'benchmark' ? ' ~' : ''}`;
                   }
@@ -472,6 +484,12 @@ function ReportDocument({ analysis }: { analysis: AnalysisResult }) {
             </View>
           </View>
 
+          {hasProp && (
+            <Text style={s.note}>
+              Price &amp; Delivery use proportional scoring: the best supplier earns the full weight and others earn weight
+              x (best / theirs). Example: a quote 2.25x the cheapest scores ~44% of the price weight (17.8 of 40), not 0.
+            </Text>
+          )}
           {hasExcluded && (
             <Text style={s.note}>
               ~ graded against an absolute benchmark (no peer comparison). &quot;n/a&quot; criteria are excluded from the

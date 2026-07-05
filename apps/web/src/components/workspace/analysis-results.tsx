@@ -794,11 +794,15 @@ function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
   if (!scored.length) return null;
   const singleSupplier = scored[0].singleSupplier;
   // Points = weight% applied to the 0..1 criterion score (so Price caps at 40).
-  const pts = (s: SupplierScore, key: keyof typeof DEFAULT_WEIGHTS) =>
-    Math.round(DEFAULT_WEIGHTS[key] * s.metrics[key].score * 100);
+  const rawPts = (s: SupplierScore, key: keyof typeof DEFAULT_WEIGHTS) =>
+    DEFAULT_WEIGHTS[key] * s.metrics[key].score * 100;
+  const pts = (s: SupplierScore, key: keyof typeof DEFAULT_WEIGHTS) => Math.round(rawPts(s, key));
   // A criterion excluded from the total (price with a lone supplier) → footnote.
   const hasExcluded = scored.some((s) =>
     CRITERIA.some((c) => s.metrics[c.key].status === 'no-comparison'),
+  );
+  const hasProp = scored.some((s) =>
+    CRITERIA.some((c) => s.metrics[c.key].status === 'proportional'),
   );
 
   return (
@@ -810,7 +814,7 @@ function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
         </span>
         <span
           className="cursor-help text-xs text-muted-foreground underline decoration-dotted underline-offset-2"
-          title="Each supplier is scored 0-100. Every criterion is normalized across suppliers (0-1, higher is better) then multiplied by its fixed weight. A value missing from the document scores 0 for that criterion (shown as 'missing — 0'), never full marks. With a single supplier — or when every supplier ties — a criterion is graded against an absolute benchmark instead (shown with ≈), and price (only meaningful versus peers) is marked 'n/a' and excluded. Weights are system-defined and cannot be edited, so rankings are data-driven and auditable."
+          title="Each supplier is scored 0-100. Price and Delivery are scored PROPORTIONALLY to the best value in the field: the best supplier gets the full weight, and others get weight × (best ÷ theirs) — so a quote 2x the cheapest scores about half the price weight, never a flat 0. Payment Terms and Warranty are normalized across suppliers (0-1, higher is better); Risk is scored from flagged severity. A value missing from the document scores 0 for that criterion (shown as 'missing — 0'), never full marks. With a single supplier — or when every supplier ties — a criterion is graded against an absolute benchmark (shown with ≈), and price (only meaningful versus peers) is marked 'n/a' and excluded. Weights are system-defined and cannot be edited, so rankings are data-driven and auditable."
         >
           How is this calculated?
         </span>
@@ -850,18 +854,26 @@ function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
           </thead>
           <tbody className="divide-y divide-border">
             {CRITERIA.map((c) => {
-              // Highlight the best cell only among comparable (ranked/benchmark) values —
-              // a "missing — 0" or "n/a" is never marked best.
+              // Highlight the best cell only among comparable (ranked/benchmark/proportional)
+              // values — a "missing — 0" or "n/a" is never marked best.
               const numeric = scored
                 .filter((s) => {
                   const st = s.metrics[c.key].status;
-                  return st === 'ranked' || st === 'benchmark';
+                  return st === 'ranked' || st === 'benchmark' || st === 'proportional';
                 })
                 .map((s) => pts(s, c.key));
               const max = numeric.length ? Math.max(...numeric) : null;
+              const isProp = scored.some((s) => s.metrics[c.key].status === 'proportional');
               return (
                 <tr key={c.key} className="transition hover:bg-muted/40">
-                  <td className="px-5 py-3 font-medium">{c.label}</td>
+                  <td className="px-5 py-3 font-medium">
+                    {c.label}
+                    {isProp && (
+                      <span className="mt-0.5 block text-[10px] font-normal normal-case tracking-normal text-muted-foreground">
+                        proportional to best
+                      </span>
+                    )}
+                  </td>
                   <td className="nums px-5 py-3 text-right text-muted-foreground">
                     {Math.round(DEFAULT_WEIGHTS[c.key] * 100)}%
                   </td>
@@ -883,13 +895,14 @@ function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
                     }
                     const v = pts(s, c.key);
                     const isMax = max != null && v === max;
+                    const prop = m.status === 'proportional';
                     return (
                       <td
                         key={s.quotation.id}
                         className={cn('nums px-5 py-3 text-right', isMax ? 'font-semibold text-success' : 'text-muted-foreground')}
-                        title={m.status === 'benchmark' ? m.note : undefined}
+                        title={m.status === 'benchmark' || prop ? m.note : undefined}
                       >
-                        {v}
+                        {prop ? rawPts(s, c.key).toFixed(1) : v}
                         {m.status === 'benchmark' && <span className="text-muted-foreground/70"> ≈</span>}
                       </td>
                     );
@@ -913,10 +926,22 @@ function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
         </table>
       </div>
 
-      {hasExcluded && (
-        <div className="border-t border-border px-5 py-3 text-[11px] leading-relaxed text-muted-foreground">
-          ≈ graded against an absolute benchmark (no peer comparison). &ldquo;n/a&rdquo; criteria are
-          excluded from the total and the remaining weights are renormalized so the score still totals out of 100.
+      {(hasProp || hasExcluded) && (
+        <div className="space-y-1.5 border-t border-border px-5 py-3 text-[11px] leading-relaxed text-muted-foreground">
+          {hasProp && (
+            <p>
+              Price &amp; Delivery are scored{' '}
+              <span className="font-medium text-foreground">proportionally to the best value</span> — the best supplier
+              earns the full weight and others earn weight × (best ÷ theirs). Example: a quote 2.25× the cheapest scores
+              ≈44% of the price weight (17.8 of 40), not 0.
+            </p>
+          )}
+          {hasExcluded && (
+            <p>
+              ≈ graded against an absolute benchmark (no peer comparison). &ldquo;n/a&rdquo; criteria are excluded from the
+              total and the remaining weights are renormalized so the score still totals out of 100.
+            </p>
+          )}
         </div>
       )}
     </div>
