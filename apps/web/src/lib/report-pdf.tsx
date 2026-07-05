@@ -18,15 +18,18 @@ import {
 import {
   buildExecutiveSummary,
   RISK_RULE_CATALOG,
-  riskLevelFor,
   scoreSuppliers,
+  toUsd,
   warrantyMonths,
 } from './analysis-engine';
 import {
   type AnalysisResult,
   DEFAULT_WEIGHTS,
+  type ExtractedQuotation,
   formatCurrency,
   formatDelivery,
+  type LineItemCategory,
+  type RiskFlag,
   type RiskSeverity,
   type ScoreWeights,
   type SupplierScore,
@@ -68,6 +71,9 @@ const s = StyleSheet.create({
   row: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.border, fontSize: 8.5 },
   rowAlt: { backgroundColor: C.panel },
   td: { paddingVertical: 5, paddingHorizontal: 4, color: C.body },
+  // Best value in a comparison column — green background + bold.
+  win: { backgroundColor: '#dcfce7', color: C.success, fontFamily: 'Helvetica-Bold' },
+  chargeTag: { fontSize: 6.5, fontFamily: 'Helvetica-Bold', color: C.warning },
 
   totalRow: { flexDirection: 'row', backgroundColor: '#f1f5f9', fontFamily: 'Helvetica-Bold', fontSize: 8.5, borderTopWidth: 1.5, borderTopColor: C.ink },
 
@@ -89,6 +95,71 @@ const s = StyleSheet.create({
 
 const SEV_COLOR: Record<RiskSeverity, string> = { high: C.danger, medium: C.warning, low: C.muted };
 const SEV_ORDER: Record<RiskSeverity, number> = { high: 0, medium: 1, low: 2 };
+
+// Best-value test — only marks a winner when the values actually differ.
+function isBest(v: number | null, vals: (number | null)[], lowerIsBetter: boolean): boolean {
+  const present = vals.filter((x): x is number => x != null);
+  if (v == null || present.length < 2) return false;
+  const min = Math.min(...present);
+  const max = Math.max(...present);
+  if (min === max) return false;
+  return v === (lowerIsBetter ? min : max);
+}
+
+// Highest ACTUAL flag severity for a supplier — consistent with the Risk
+// Findings list (not a summed-weight "level"). 'None' when no flags.
+type WorstSev = 'High' | 'Medium' | 'Low' | 'None';
+const SEV_RANK: Record<WorstSev, number> = { None: 0, Low: 1, Medium: 2, High: 3 };
+function worstFlagSeverity(supplier: string, risks: RiskFlag[]): WorstSev {
+  const flags = risks.filter((r) => r.supplier === supplier);
+  if (flags.some((f) => f.severity === 'high')) return 'High';
+  if (flags.some((f) => f.severity === 'medium')) return 'Medium';
+  if (flags.some((f) => f.severity === 'low')) return 'Low';
+  return 'None';
+}
+
+// Item matching (same normalization as the on-screen Line-Item Matrix).
+const norm = (s: string) =>
+  s.toLowerCase().replace(/\(.*?\)/g, '').replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+const CHARGE_RANK: Record<LineItemCategory, number> = {
+  product: 0, freight: 1, shipping: 1, insurance: 2, handling: 2, other: 3,
+};
+
+interface ItemRow {
+  label: string;
+  category: LineItemCategory;
+  qty: number | null;
+  units: (number | null)[]; // original unit price per supplier
+  usd: (number | null)[]; // USD unit price per supplier (drives "lowest")
+  currencies: string[];
+}
+function buildItemRows(qs: ExtractedQuotation[]): ItemRow[] {
+  const meta = new Map<string, { label: string; cat: LineItemCategory; seq: number }>();
+  let seq = 0;
+  for (const q of qs) {
+    for (const li of q.lineItems) {
+      const k = norm(li.name);
+      if (!k || meta.has(k)) continue;
+      meta.set(k, { label: li.name, cat: li.category ?? 'product', seq: seq++ });
+    }
+  }
+  const keys = [...meta.keys()].sort((a, b) => {
+    const A = meta.get(a)!;
+    const B = meta.get(b)!;
+    return CHARGE_RANK[A.cat] - CHARGE_RANK[B.cat] || A.seq - B.seq;
+  });
+  return keys.map((k) => {
+    const lis = qs.map((q) => q.lineItems.find((l) => norm(l.name) === k) ?? null);
+    return {
+      label: meta.get(k)!.label,
+      category: meta.get(k)!.cat,
+      qty: lis.map((li) => li?.quantity).find((v) => v != null) ?? null,
+      units: lis.map((li) => (li ? li.unitPrice : null)),
+      usd: lis.map((li) => (li && li.unitPrice != null ? toUsd(li.unitPrice, li.currency) : null)),
+      currencies: lis.map((li) => li?.currency ?? 'USD'),
+    };
+  });
+}
 
 const CRITERIA: { key: keyof ScoreWeights; label: string }[] = [
   { key: 'price', label: 'Price' },
@@ -138,6 +209,21 @@ function ReportDocument({ analysis }: { analysis: AnalysisResult }) {
 
   // Comparison table column flex weights.
   const col = { sup: 2.1, orig: 1.7, usd: 1.4, del: 1.25, pay: 2, war: 1.2, score: 0.85, risk: 1 };
+
+  // Per-column values for best-value highlighting (mirrors the on-screen UI).
+  const costUsdVals = quotations.map((q) => q.totalCostUsd);
+  const delVals = quotations.map((q) => q.deliveryDays);
+  const warrVals = quotations.map((q) => {
+    const m = warrantyMonths(q.warranty);
+    return m > 0 ? m : null;
+  });
+  const scoreVals = quotations.map((q) => {
+    const sc = scored.find((x) => x.quotation.id === q.id);
+    return sc ? Math.round(sc.overall * 100) : null;
+  });
+  const riskRankVals = quotations.map((q) => SEV_RANK[worstFlagSeverity(q.supplierName, risks)]);
+  const itemRows = buildItemRows(quotations);
+  const itemUsdTotals = quotations.map((q) => q.totalCostUsd);
 
   return (
     <Document title="Procurement Analysis Report" author="AI Procurement Copilot">
@@ -221,33 +307,97 @@ function ReportDocument({ analysis }: { analysis: AnalysisResult }) {
           {quotations.map((q, i) => {
             const sc = scored.find((x) => x.quotation.id === q.id);
             const scorePct = sc ? Math.round(sc.overall * 100) : 0;
+            const warrM = warrantyMonths(q.warranty);
+            const winCost = isBest(q.totalCostUsd, costUsdVals, true);
+            const winDel = isBest(q.deliveryDays, delVals, true);
+            const winWarr = isBest(warrM > 0 ? warrM : null, warrVals, false);
+            const winScore = isBest(scorePct, scoreVals, false);
+            const worst = worstFlagSeverity(q.supplierName, risks);
+            const winRisk = isBest(SEV_RANK[worst], riskRankVals, true);
             return (
               <View key={q.id} style={i % 2 ? [s.row, s.rowAlt] : s.row} wrap={false}>
                 <Text style={[s.td, { flex: col.sup, fontFamily: 'Helvetica-Bold', color: C.ink }]}>
                   {q.supplierName}
                   {q.reference ? `\nRef: ${q.reference}` : ''}
                 </Text>
-                <Text style={[s.td, { flex: col.orig, textAlign: 'right' }]}>
+                <Text style={[s.td, { flex: col.orig, textAlign: 'right' }, ...(winCost ? [s.win] : [])]}>
                   {q.totalCost == null ? '—' : formatCurrency(q.totalCost, q.currency)}
                 </Text>
-                <Text style={[s.td, { flex: col.usd, textAlign: 'right' }]}>
+                <Text style={[s.td, { flex: col.usd, textAlign: 'right' }, ...(winCost ? [s.win] : [])]}>
                   {q.totalCostUsd == null ? '—' : formatCurrency(q.totalCostUsd, 'USD')}
                 </Text>
-                <Text style={[s.td, { flex: col.del, textAlign: 'right' }]}>
+                <Text style={[s.td, { flex: col.del, textAlign: 'right' }, ...(winDel ? [s.win] : [])]}>
                   {formatDelivery(q.deliveryDays)}
                   {q.deliveryTerms ? `\n${q.deliveryTerms}` : ''}
                 </Text>
                 <Text style={[s.td, { flex: col.pay, color: C.muted }]}>{q.paymentTerms ?? '—'}</Text>
-                <Text style={[s.td, { flex: col.war, color: C.muted }]}>{q.warranty ?? 'Not stated'}</Text>
-                <Text style={[s.td, { flex: col.score, textAlign: 'right', fontFamily: 'Helvetica-Bold' }]}>{scorePct}</Text>
-                <Text style={[s.td, { flex: col.risk, textAlign: 'right' }]}>{riskLevelFor(q.supplierName, risks)}</Text>
+                <Text style={[s.td, { flex: col.war, color: C.muted }, ...(winWarr ? [s.win] : [])]}>
+                  {q.warranty ?? 'Not stated'}
+                </Text>
+                <Text style={[s.td, { flex: col.score, textAlign: 'right', fontFamily: 'Helvetica-Bold' }, ...(winScore ? [s.win] : [])]}>
+                  {scorePct}
+                </Text>
+                <Text style={[s.td, { flex: col.risk, textAlign: 'right' }, ...(winRisk ? [s.win] : [])]}>{worst}</Text>
               </View>
             );
           })}
           <Text style={s.note}>
             Totals are the full payable amount including freight and all charge lines. &quot;Total (USD)&quot; is normalized
-            for comparison; original currency is shown alongside.
+            for comparison; original currency is shown alongside. Green = best value in that column; Risk shows each
+            supplier&apos;s highest actual flag severity (see Risk Findings).
           </Text>
+
+          {/* Item-level comparison (unit price, original currency; lowest highlighted) */}
+          {itemRows.length > 0 && (
+            <View style={{ marginTop: 14 }}>
+              <Text style={{ fontSize: 10.5, fontFamily: 'Helvetica-Bold', color: C.ink, marginBottom: 5 }}>
+                Item-Level Comparison
+              </Text>
+              <View style={s.thead}>
+                <Text style={[s.th, { flex: 2.6 }]}>Item</Text>
+                {quotations.map((q) => (
+                  <Text key={q.id} style={[s.th, { flex: 1.4, textAlign: 'right' }]}>
+                    {q.supplierName}
+                  </Text>
+                ))}
+              </View>
+              {itemRows.map((r, ri) => {
+                const min = r.usd.filter((v): v is number => v != null);
+                const minUsd = min.length ? Math.min(...min) : null;
+                const showsWinner = min.length >= 2 && Math.min(...min) !== Math.max(...min);
+                return (
+                  <View key={ri} style={ri % 2 ? [s.row, s.rowAlt] : s.row} wrap={false}>
+                    <Text style={[s.td, { flex: 2.6 }]}>
+                      {r.label}
+                      {r.category !== 'product' ? '  ' : ''}
+                      {r.category !== 'product' ? <Text style={s.chargeTag}>[{r.category.toUpperCase()}]</Text> : ''}
+                      {r.qty != null && r.category === 'product' ? `\nQty ${r.qty.toLocaleString('en-US')}` : ''}
+                    </Text>
+                    {r.units.map((u, ci) => {
+                      const win = showsWinner && r.usd[ci] != null && r.usd[ci] === minUsd;
+                      return (
+                        <Text key={ci} style={[s.td, { flex: 1.4, textAlign: 'right' }, ...(win ? [s.win] : [])]}>
+                          {u == null ? '—' : formatCurrency(u, r.currencies[ci])}
+                        </Text>
+                      );
+                    })}
+                  </View>
+                );
+              })}
+              <View style={s.totalRow}>
+                <Text style={[s.th, { flex: 2.6 }]}>Total quotation value</Text>
+                {quotations.map((q, i) => (
+                  <Text key={q.id} style={[s.th, { flex: 1.4, textAlign: 'right' }, ...(isBest(itemUsdTotals[i], itemUsdTotals, true) ? [{ color: C.success }] : [])]}>
+                    {q.totalCost == null ? '—' : formatCurrency(q.totalCost, q.currency)}
+                  </Text>
+                ))}
+              </View>
+              <Text style={s.note}>
+                Unit price in each supplier&apos;s original currency; green = lowest (compared in USD). &quot;—&quot; means the
+                supplier did not quote that item.
+              </Text>
+            </View>
+          )}
         </View>
 
         <Footer dateStr={dateStr} />

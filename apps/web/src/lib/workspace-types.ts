@@ -47,6 +47,8 @@ export interface LineItem {
   currency: string;
   /** product (default) or a charge line — see LineItemCategory */
   category?: LineItemCategory;
+  /** unit of measure as stated (e.g. "SET", "PCS", "KG") — null when not stated */
+  uom?: string | null;
 }
 
 /** A grand total exactly as stated in the document, with its own currency. */
@@ -74,6 +76,8 @@ export interface ExtractedQuotation {
   validUntil: string | null;
   /** supplier's own quotation / reference number, when the document states one */
   reference?: string | null;
+  /** purchase-requisition / PR number if the document states one (form-level, shared across suppliers) */
+  prNumber?: string | null;
   /** incoterms / delivery terms as written, e.g. "CFR Jeddah", "CIF Jeddah", "EXW" */
   deliveryTerms?: string | null;
   /** every grand total as stated, each with its own currency (multi-currency docs) */

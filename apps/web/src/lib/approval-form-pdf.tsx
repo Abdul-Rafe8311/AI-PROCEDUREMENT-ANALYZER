@@ -55,6 +55,7 @@ interface Row {
   index: number;
   label: string;
   leftQty: number | null;
+  uom: string | null;
   cells: (Cell | null)[]; // one per supplier, null = not quoted
 }
 
@@ -80,7 +81,8 @@ function buildRows(qs: ExtractedQuotation[]): Row[] {
     });
     const presentQtys = cells.filter((c): c is Cell => !!c).map((c) => c.qty).filter((v): v is number => v != null);
     const leftQty = presentQtys.length && presentQtys.every((v) => v === presentQtys[0]) ? presentQtys[0] : null;
-    return { index: i + 1, label: meta.get(k)!.label, leftQty, cells };
+    const uom = qs.map((q) => q.lineItems.find((l) => norm(l.name) === k)?.uom).find((u) => !!u) ?? null;
+    return { index: i + 1, label: meta.get(k)!.label, leftQty, uom, cells };
   });
 }
 
@@ -132,6 +134,8 @@ function ApprovalDocument({ analysis }: { analysis: AnalysisResult }) {
   // Derive a short PR description from the product line items (editable/blank ok).
   const firstProduct = qs.flatMap((q) => q.lineItems).find((li) => (li.category ?? 'product') === 'product');
   const prDesc = firstProduct ? firstProduct.name : '';
+  // PR number is a shared form-level field — use the first supplier that carries it.
+  const prNumber = qs.find((q) => q.prNumber)?.prNumber ?? '';
 
   // Fixed column widths (points) so header + body align. Landscape A4 usable ≈ 797.
   const USABLE = 797;
@@ -197,7 +201,7 @@ function ApprovalDocument({ analysis }: { analysis: AnalysisResult }) {
           </Text>
           <Text style={[s.metaCell, { width: 120 }]}>
             <Text style={s.metaLabel}>PR#: </Text>
-            {'            '}
+            {prNumber || '            '}
           </Text>
           <Text style={[s.metaCell, { flex: 1, borderRightWidth: 0 }]}>
             <Text style={s.metaLabel}>PR Description: </Text>
@@ -220,7 +224,7 @@ function ApprovalDocument({ analysis }: { analysis: AnalysisResult }) {
             <Text style={[s.cellBox, { width: idxW, borderLeftWidth: 1, borderLeftColor: C.border, textAlign: 'center' }]}>{r.index}</Text>
             <Text style={[s.cellBox, { width: descW }]}>{r.label}</Text>
             <Text style={[s.cellBox, { width: qtyLW, textAlign: 'center' }]}>{plain(r.leftQty)}</Text>
-            <Text style={[s.cellBox, { width: uomW }]}> </Text>
+            <Text style={[s.cellBox, { width: uomW, textAlign: 'center' }]}>{r.uom ?? ''}</Text>
             {r.cells.map((c, i) => (
               <View key={i} style={[s.rowFlex, { width: supW, borderRightWidth: 1, borderRightColor: C.line }]}>
                 <Text style={[s.cellBox, { width: subQtyW, textAlign: 'center', borderRightWidth: 1, borderRightColor: C.border }]}>{c ? plain(c.qty) : ''}</Text>

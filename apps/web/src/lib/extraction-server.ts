@@ -100,12 +100,16 @@ interface LlmLineItem {
   totalPrice: number | null;
   /** product | freight | shipping | insurance | handling | other */
   category?: string | null;
+  /** unit of measure, e.g. SET, PCS, KG, EA */
+  uom?: string | null;
 }
 
 export interface LlmSupplier {
   supplierName: string | null;
   /** this supplier's quotation / reference number, if stated */
   reference: string | null;
+  /** form-level purchase-requisition (PR) number, if stated on the document */
+  prNumber?: string | null;
   currency: string | null;
   /** FULL payable grand total (incl. freight & all charges) in `currency` */
   totalAmount: number | null;
@@ -185,14 +189,14 @@ const EXTRACTION_SYSTEM_PROMPT = [
   '(e.g. columns "Supplier 1", "Supplier 2", or separate sections). Return ONLY',
   'valid JSON matching this TypeScript type, no prose:',
   '{ suppliers: {',
-  '    supplierName: string|null, reference: string|null,',
+  '    supplierName: string|null, reference: string|null, prNumber: string|null,',
   '    currency: string|null (ISO code e.g. SAR, USD, AED, EUR, GBP),',
   '    totalAmount: number|null,   // FULL payable grand total INCLUDING freight & all charges',
   '    totalsByCurrency: { amount: number, currency: string }[]|null,',
   '    deliveryTime: string|null, deliveryTerms: string|null,',
   '    paymentTerms: string|null, warranty: string|null, validUntil: string|null (ISO date),',
   '    lineItems: { name: string, quantity: number|null, unitPrice: number|null,',
-  '                 totalPrice: number|null, category: string|null }[]',
+  '                 totalPrice: number|null, category: string|null, uom: string|null }[]',
   '  }[] }',
   '',
   'MULTIPLE SUPPLIERS: return ONE object per supplier that has ANY data (a name,',
@@ -219,6 +223,12 @@ const EXTRACTION_SYSTEM_PROMPT = [
   '',
   'DELIVERY: deliveryTime = the lead time / duration (e.g. "60 days"). deliveryTerms',
   '= the incoterms exactly as written (e.g. "CFR Jeddah", "CIF Jeddah", "EXW").',
+  '',
+  'PR NUMBER: prNumber = the purchase-requisition / PR number if the document shows',
+  'one (a form-level header field like "PR#", "PR No", "Requisition No", "PR Description"',
+  'section). It is shared by all suppliers on the same form — copy it to each. Null if absent.',
+  'UOM: for each line item, uom = the unit of measure exactly as written (e.g. "SET",',
+  '"PCS", "KG", "EA", "M", "NO") if a units column is present; otherwise null.',
   '',
   'LINE ITEMS — scan the ENTIRE document, not just the top. The goods/pricing',
   'list may appear ANYWHERE and under ANY heading: "Schedule A", "Schedule B",',
@@ -394,7 +404,8 @@ function mapSupplier(
       unitPrice = unitPrice ?? amount;
       quantity = quantity ?? 1;
     }
-    return { name: String(li.name ?? 'Item').trim(), quantity, unitPrice, totalPrice, currency, category };
+    const uom = li.uom?.trim() || null;
+    return { name: String(li.name ?? 'Item').trim(), quantity, unitPrice, totalPrice, currency, category, uom };
   });
 
   // Stated grand totals with their own currencies (multi-currency docs).
@@ -433,6 +444,7 @@ function mapSupplier(
   const deliveryRaw = s.deliveryTime ?? null;
   const deliveryTerms = s.deliveryTerms?.trim() || null;
   const reference = s.reference?.trim() || null;
+  const prNumber = s.prNumber?.trim() || null;
   // Never fall back to the uploaded filename as a supplier name — use the
   // extracted company name, else a neutral placeholder. (A screenshot named
   // "Screenshot 2026-…png" must never appear as the supplier.)
@@ -478,6 +490,7 @@ function mapSupplier(
     warranty: s.warranty ?? null,
     validUntil: s.validUntil ?? null,
     reference,
+    prNumber,
     deliveryTerms,
     statedTotals,
     currencyConfidence,
