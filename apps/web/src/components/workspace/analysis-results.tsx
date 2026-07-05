@@ -1027,30 +1027,38 @@ function RiskPanel({ risks }: { risks: RiskFlag[] }) {
       </div>
 
       {sorted.length ? (
-        <ul className="mt-4 space-y-2.5">
-          {sorted.map((r, i) => {
-            const m = SEVERITY_META[r.severity];
-            return (
-              <li key={i} className={cn('flex items-start gap-3 rounded-xl border p-3', m.card)}>
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <span className="text-sm text-foreground">{r.message}</span>
-                </div>
-                <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold', m.badge)}>
-                  {m.label}
-                </span>
-                <InfoTip
-                  ariaLabel="Why was this flagged?"
-                  className="mt-0.5 shrink-0 text-muted-foreground transition hover:text-foreground"
-                  trigger={<Info className="h-4 w-4" />}
-                >
-                  <p className="font-semibold text-foreground">Why this was flagged</p>
-                  <p className="mt-1 text-muted-foreground">{r.explanation}</p>
-                </InfoTip>
-              </li>
-            );
-          })}
-        </ul>
+        <>
+          <ul className="mt-4 space-y-2.5">
+            {sorted.map((r, i) => {
+              const m = SEVERITY_META[r.severity];
+              return (
+                <li key={i} className={cn('flex items-start gap-3 rounded-xl border p-3', m.card)}>
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                  {/* The whole item is the tooltip trigger (hover on desktop, tap on mobile). */}
+                  <InfoTip
+                    ariaLabel={`Why ${r.supplier} was flagged`}
+                    className="min-w-0 flex-1 cursor-help text-left"
+                    trigger={
+                      <span className="flex items-start gap-1.5 text-sm text-foreground">
+                        <span className="min-w-0">{r.message}</span>
+                        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      </span>
+                    }
+                  >
+                    <p className="font-semibold text-foreground">Why this was flagged</p>
+                    <p className="mt-1 text-muted-foreground">{r.explanation}</p>
+                  </InfoTip>
+                  <span className={cn('mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold', m.badge)}>
+                    {m.label}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Hover or tap any risk to see the exact reason and the value that triggered it.
+          </p>
+        </>
       ) : (
         <div className="mt-4 flex items-center gap-2 rounded-xl border border-success/30 bg-success/5 p-4 text-sm text-success">
           <ShieldAlert className="h-4 w-4 shrink-0" />

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Sparkles } from 'lucide-react';
+import { ArrowLeft, Loader2, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { UploadZone } from '@/components/workspace/upload-zone';
 import { AnalysisResults } from '@/components/workspace/analysis-results';
@@ -20,6 +20,9 @@ import {
 } from '@/lib/rag-client';
 import { type AnalysisResult, CHART_METRICS, type ChartDirective, type ChatMessage } from '@/lib/workspace-types';
 
+// Points the next page load at the session to restore (analysis + chat + charts).
+const LAST_ANALYSIS_KEY = 'workspace:lastAnalysisId';
+
 export default function WorkspacePage() {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -28,6 +31,7 @@ export default function WorkspacePage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
   const [analysisId, setAnalysisId] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Per-document deep-search index status (RAG).
@@ -77,6 +81,95 @@ export default function WorkspacePage() {
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [docs]);
+
+  // Restore a previous session on load/refresh: the saved analysis (comparison
+  // results), chat history, and any charts. Scoped to restoring existing state —
+  // it never re-runs extraction, scoring, or the LLM.
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return;
+    const lastId =
+      typeof window !== 'undefined' ? window.localStorage.getItem(LAST_ANALYSIS_KEY) : null;
+    if (!lastId) return;
+    let cancelled = false;
+
+    (async () => {
+      setRestoring(true);
+      try {
+        const { data: row, error: aErr } = await supabase!
+          .from('analyses')
+          .select('result')
+          .eq('id', lastId)
+          .maybeSingle();
+        if (aErr) return; // transient — keep the pointer and retry next load
+        const result = (row?.result ?? null) as AnalysisResult | null;
+        if (!result || !result.quotations?.length) {
+          window.localStorage.removeItem(LAST_ANALYSIS_KEY); // genuinely gone
+          return;
+        }
+        if (cancelled) return;
+        setAnalysis(result);
+        setAnalysisId(lastId);
+
+        // Chat history incl. any charts. select('*') tolerates DBs without the
+        // chart column (the chart just won't restore there).
+        const { data: msgs } = await supabase!
+          .from('messages')
+          .select('*')
+          .eq('analysis_id', lastId)
+          .order('created_at', { ascending: true });
+        if (!cancelled && Array.isArray(msgs) && msgs.length) {
+          setMessages(
+            msgs.map((m: Record<string, unknown>) => {
+              const chart = m.chart as ChartDirective | null | undefined;
+              const valid =
+                !!chart && CHART_METRICS.includes(chart.metric as (typeof CHART_METRICS)[number]);
+              return {
+                id: String(m.id),
+                role: m.role === 'assistant' ? 'assistant' : 'user',
+                content: String(m.content ?? ''),
+                createdAt: String(m.created_at ?? new Date().toISOString()),
+                ...(valid
+                  ? { chart: { metric: chart!.metric, ...(chart!.title ? { title: chart!.title } : {}) } }
+                  : {}),
+              } as ChatMessage;
+            }),
+          );
+        }
+
+        // Restore uploaded PDFs so deep-search chat keeps working after reload;
+        // the existing status poll picks up their (already-indexed) state.
+        const { data: docRows } = await supabase!
+          .from('documents')
+          .select('id, file_name')
+          .eq('analysis_id', lastId);
+        if (!cancelled && Array.isArray(docRows)) {
+          const pdfs = docRows.filter((d) => /\.pdf$/i.test(String(d.file_name)));
+          if (pdfs.length) {
+            setDocs(
+              pdfs.map((d) => ({
+                documentId: String(d.id),
+                fileName: String(d.file_name),
+                status: 'pending' as IndexStatus,
+                error: null,
+                chunkCount: 0,
+                indexedChunks: 0,
+                startedAt: Date.now(),
+              })),
+            );
+          }
+        }
+      } catch {
+        /* ignore — just start on the upload screen */
+      } finally {
+        if (!cancelled) setRestoring(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const addFiles = useCallback((incoming: File[]) => {
     setFiles((prev) => {
@@ -168,6 +261,8 @@ export default function WorkspacePage() {
       setMessages([]);
       if (persisted) {
         void persistResult(persisted.id, data as AnalysisResult);
+        // Remember this session so a reload restores it (see the restore effect).
+        if (typeof window !== 'undefined') window.localStorage.setItem(LAST_ANALYSIS_KEY, persisted.id);
         // Kick off background deep-search indexing for PDF documents.
         const pdfs = persisted.docs.filter((d) => d.isPdf);
         if (pdfs.length) {
@@ -384,6 +479,12 @@ export default function WorkspacePage() {
               </button>
             </div>
           </div>
+
+          {restoring && !analysis && (
+            <div className="mx-auto flex max-w-2xl items-center justify-center gap-2 rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Restoring your previous session…
+            </div>
+          )}
 
           {error && (
             <div className="mx-auto max-w-2xl whitespace-pre-wrap rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
