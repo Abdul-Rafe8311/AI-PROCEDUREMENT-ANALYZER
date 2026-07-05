@@ -8,6 +8,7 @@ import {
   ArrowDown,
   ArrowUp,
   BarChart3,
+  ClipboardCheck,
   Clock,
   Download,
   HelpCircle,
@@ -413,7 +414,24 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
             {risks.length ? ` · ${risks.length} risk${risks.length === 1 ? '' : 's'} flagged` : ''}
           </p>
         </div>
-        <DownloadReportButton analysis={analysis} />
+        <div className="flex flex-wrap items-start justify-end gap-2">
+          <PdfDownloadButton
+            analysis={analysis}
+            label="Download Report (PDF)"
+            filePrefix="procurement-report"
+            variant="primary"
+            icon={Download}
+            load={() => import('@/lib/report-pdf').then((m) => m.generateReportPdf)}
+          />
+          <PdfDownloadButton
+            analysis={analysis}
+            label="Download Approval Form (PDF)"
+            filePrefix="technical-approval-form"
+            variant="outline"
+            icon={ClipboardCheck}
+            load={() => import('@/lib/approval-form-pdf').then((m) => m.generateApprovalFormPdf)}
+          />
+        </div>
       </div>
 
       <KpiCards data={kpi} />
@@ -634,9 +652,23 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
   );
 }
 
-// Generates the printable PDF report on demand. @react-pdf/renderer is loaded
-// only on click (dynamic import) so it never ships in the main bundle.
-function DownloadReportButton({ analysis }: { analysis: AnalysisResult }) {
+// Generates a PDF on demand. @react-pdf/renderer + the specific document module
+// are loaded only on click (dynamic import) so they never ship in the main bundle.
+function PdfDownloadButton({
+  analysis,
+  label,
+  filePrefix,
+  variant,
+  icon: Icon,
+  load,
+}: {
+  analysis: AnalysisResult;
+  label: string;
+  filePrefix: string;
+  variant: 'primary' | 'outline';
+  icon: typeof Download;
+  load: () => Promise<(a: AnalysisResult) => Promise<Blob>>;
+}) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -645,18 +677,18 @@ function DownloadReportButton({ analysis }: { analysis: AnalysisResult }) {
     setError(null);
     setLoading(true);
     try {
-      const { generateReportPdf } = await import('@/lib/report-pdf');
-      const blob = await generateReportPdf(analysis);
+      const generate = await load();
+      const blob = await generate(analysis);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `procurement-report-${new Date().toISOString().slice(0, 10)}.pdf`;
+      a.download = `${filePrefix}-${new Date().toISOString().slice(0, 10)}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     } catch (err) {
-      console.error('[report-pdf] generation failed', err);
+      console.error('[pdf] generation failed', err);
       setError('Could not generate the PDF. Please try again.');
     } finally {
       setLoading(false);
@@ -669,19 +701,15 @@ function DownloadReportButton({ analysis }: { analysis: AnalysisResult }) {
         type="button"
         onClick={handleDownload}
         disabled={loading}
-        className="inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        {loading ? (
-          <>
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Generating…
-          </>
-        ) : (
-          <>
-            <Download className="h-4 w-4" />
-            Download Report (PDF)
-          </>
+        className={cn(
+          'inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60',
+          variant === 'primary'
+            ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+            : 'border border-border bg-card text-foreground hover:bg-muted/60',
         )}
+      >
+        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
+        {loading ? 'Generating…' : label}
       </button>
       {error && <span className="text-xs text-danger">{error}</span>}
     </div>
