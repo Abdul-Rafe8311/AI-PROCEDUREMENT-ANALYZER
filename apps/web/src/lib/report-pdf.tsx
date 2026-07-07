@@ -27,7 +27,8 @@ import {
   DEFAULT_WEIGHTS,
   type ExtractedQuotation,
   formatCurrency,
-  formatDelivery,
+  deliveryDisplay,
+  deliveryNormalizedHint,
   type LineItemCategory,
   type PrMatchResult,
   type PurchaseRequisition,
@@ -469,7 +470,10 @@ function ReportDocument({ analysis }: { analysis: AnalysisResult }) {
                   {q.totalCostUsd == null ? '—' : formatCurrency(q.totalCostUsd, 'USD')}
                 </Text>
                 <Text style={[s.td, { flex: col.del, textAlign: 'right' }, ...(winDel ? [s.win] : [])]}>
-                  {formatDelivery(q.deliveryDays)}
+                  {deliveryDisplay(q.deliveryRaw, q.deliveryDays)}
+                  {deliveryNormalizedHint(q.deliveryRaw, q.deliveryDays)
+                    ? `\n${deliveryNormalizedHint(q.deliveryRaw, q.deliveryDays)}`
+                    : ''}
                   {q.deliveryTerms ? `\n${q.deliveryTerms}` : ''}
                 </Text>
                 <Text style={[s.td, { flex: col.pay, color: C.muted }]}>{q.paymentTerms ?? '—'}</Text>

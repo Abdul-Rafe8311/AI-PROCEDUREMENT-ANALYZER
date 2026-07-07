@@ -361,6 +361,36 @@ export const formatCurrency = (value: number | null, currency = 'USD') => {
 export const formatDelivery = (days: number | null) =>
   days == null ? '—' : `${days} day${days === 1 ? '' : 's'}`;
 
+// Delivery for DISPLAY. The supplier's ORIGINAL quotation wording is
+// authoritative and is shown VERBATIM (e.g. "4 to 5 weeks", "08 - Weeks",
+// "30-45 days") — it is never replaced by the internal normalized day-count used
+// for deterministic scoring. Only when the raw wording is absent do we fall back
+// to the normalized value so the field is not left empty.
+export const deliveryDisplay = (
+  raw: string | null | undefined,
+  days: number | null,
+): string => {
+  const original = raw?.trim();
+  if (original) return original;
+  return days == null ? '—' : `${days} day${days === 1 ? '' : 's'}`;
+};
+
+// Optional faint helper shown NEXT TO the raw wording: the normalized day-count,
+// but only when it actually adds information (i.e. the raw wording isn't already
+// expressed in days and a normalized value exists). Returns null when redundant
+// or unavailable — it must never replace the original quotation text.
+export const deliveryNormalizedHint = (
+  raw: string | null | undefined,
+  days: number | null,
+): string | null => {
+  if (days == null) return null;
+  const r = (raw ?? '').trim().toLowerCase();
+  if (!r) return null; // raw absent → the primary display already shows the day-count
+  if (/\bday/.test(r)) return null; // raw already stated in days → hint would be redundant
+  // ASCII "~" (not "≈") — the standard PDF Helvetica font has no ≈ glyph.
+  return `~${days} days`;
+};
+
 /**
  * Default Technical-Approval signature blocks — the current 5-role layout, used
  * when the user hasn't customized them. Real documents vary in BOTH count and

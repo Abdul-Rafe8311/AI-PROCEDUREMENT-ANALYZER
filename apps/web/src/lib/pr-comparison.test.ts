@@ -61,15 +61,23 @@ test('PHASE 3: PR rows use the COMPANY description/qty/uom, in PR order', () => 
   assert.equal(prRows[0].uom, 'SET');
 });
 
-test('PHASE 3: approved cell fills; a mismatched supplier item does NOT fill a PR row', () => {
+test('PHASE 3: each supplier\'s OWN quoted item is shown even on a mismatch; blank only when truly not quoted', () => {
   const model = buildComparisonModel(qs, pr, matchQuotationsToPr(qs, pr));
   const anchor = model.rows[0];
   // Gulf (col 0) approved → filled with its quoted qty & price.
   assert.ok(anchor.cells[0]);
   assert.equal(anchor.cells[0]!.unitPrice, 160);
   assert.equal(anchor.cells[0]!.currency, 'SAR');
-  // Delta (col 1) quoted a WRONG-grade anchor → mismatch → cell stays null.
-  assert.equal(anchor.cells[1], null);
+  // Delta (col 1) quoted a WRONG-grade anchor (304 vs PR 253) — the buyer's form
+  // STILL shows it with Delta's own wording/qty/price; the mismatch surfaces in
+  // the AI match signal + Technical Comments, it is never hidden (Bug #2 fix).
+  assert.ok(anchor.cells[1], 'a mismatched supplier item is still displayed');
+  assert.equal(anchor.cells[1]!.unitPrice, 40);
+  assert.equal(anchor.cells[1]!.currency, 'USD');
+  assert.match(anchor.cells[1]!.description ?? '', /304/);
+  assert.equal(anchor.cells[1]!.qty, 200);
+  // Delta did NOT quote the castable (row 1) at all → genuinely "Not Quoted" (null).
+  assert.equal(model.rows[1].cells[1], null);
 });
 
 test('PHASE 3: freight collapses into one Freight / Transport charge row', () => {

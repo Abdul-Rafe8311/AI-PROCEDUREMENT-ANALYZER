@@ -44,7 +44,8 @@ import {
   type FieldKey,
   type FieldProvenance,
   formatCurrency,
-  formatDelivery,
+  deliveryDisplay,
+  deliveryNormalizedHint,
   type RiskFlag,
   type RiskSeverity,
   type SupplierScore,
@@ -536,8 +537,17 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                           <ColumnFlag tone={delTone} lowerIsBetter />
                           <FieldButton q={q} field="deliveryDays" onToggle={toggleSource}
                             active={isOpen('deliveryDays')}
-                            display={q.deliveryDays == null ? null : formatDelivery(q.deliveryDays)} />
+                            display={
+                              q.deliveryRaw?.trim() || q.deliveryDays != null
+                                ? deliveryDisplay(q.deliveryRaw, q.deliveryDays)
+                                : null
+                            } />
                         </span>
+                        {deliveryNormalizedHint(q.deliveryRaw, q.deliveryDays) && (
+                          <div className="text-xs font-normal text-muted-foreground/80">
+                            {deliveryNormalizedHint(q.deliveryRaw, q.deliveryDays)}
+                          </div>
+                        )}
                         {q.deliveryTerms && (
                           <div className="text-xs font-normal text-muted-foreground">{q.deliveryTerms}</div>
                         )}

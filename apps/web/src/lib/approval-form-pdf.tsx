@@ -27,6 +27,7 @@ import {
   type AnalysisResult,
   DEFAULT_SIGNATURE_ROLES,
   DEFAULT_WEIGHTS,
+  deliveryNormalizedHint,
   type ExtractedQuotation,
   type PrMatchResult,
   type TechnicalComment,
@@ -81,7 +82,10 @@ function aiRecommendation(analysis: AnalysisResult): string {
     bits.push(`lowest total cost (${best.quotation.currency} ${numFmt(best.quotation.totalCost)})`);
   }
   if (rec.fastestDelivery?.supplier === name && best.quotation.deliveryDays != null) {
-    bits.push(`faster delivery (${best.quotation.deliveryDays} days)`);
+    // Show the supplier's ORIGINAL delivery wording (e.g. "4 to 5 weeks"), never
+    // the internal normalized day-count.
+    const del = best.quotation.deliveryRaw?.trim() || `${best.quotation.deliveryDays} days`;
+    bits.push(`faster delivery (${del})`);
   }
   const reason =
     bits.length > 0
@@ -125,7 +129,8 @@ function ApprovalDocument({
   const prSubject =
     pr?.description?.trim() ||
     derivePrSubject(model.rows.filter((r) => r.kind === 'product').map((r) => r.label));
-  // PDF creation date — distinct from TA Date (which stays blank for the approver).
+  // Generation date — stamped into the TA Date field (the date this technical
+  // approval document was produced) and repeated in the footer.
   const generatedOn = new Date().toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
@@ -137,38 +142,40 @@ function ApprovalDocument({
   const fs = 6.5;
 
   const s = StyleSheet.create({
-    page: { paddingVertical: 20, paddingHorizontal: 20, fontSize: fs, color: C.body, fontFamily: 'Helvetica' },
-    title: { textAlign: 'center', fontSize: 14, fontFamily: 'Helvetica-Bold', color: C.ink, marginBottom: 6 },
-    subNote: { textAlign: 'center', fontSize: fs - 0.5, color: C.muted, marginBottom: 8 },
+    page: { paddingVertical: 14, paddingHorizontal: 16, fontSize: fs, color: C.body, fontFamily: 'Helvetica' },
+    title: { textAlign: 'center', fontSize: 11.5, fontFamily: 'Helvetica-Bold', color: C.ink, letterSpacing: 0.5, marginBottom: 3 },
+    subNote: { textAlign: 'center', fontSize: fs - 0.5, color: C.muted, marginBottom: 4 },
     metaRow: { flexDirection: 'row', borderWidth: 1, borderColor: C.line },
-    metaCell: { paddingVertical: 4, paddingHorizontal: 5, borderRightWidth: 1, borderRightColor: C.line },
-    descRow: { flexDirection: 'row', borderWidth: 1, borderTopWidth: 0, borderColor: C.line, marginBottom: 8 },
-    descCell: { flex: 1, paddingVertical: 4, paddingHorizontal: 5 },
+    metaRowMid: { flexDirection: 'row', borderWidth: 1, borderTopWidth: 0, borderColor: C.line },
+    metaCell: { paddingVertical: 2.5, paddingHorizontal: 5, borderRightWidth: 1, borderRightColor: C.line },
+    descRow: { flexDirection: 'row', borderWidth: 1, borderTopWidth: 0, borderColor: C.line, marginBottom: 6 },
+    descCell: { flex: 1, paddingVertical: 2.5, paddingHorizontal: 5 },
     metaLabel: { fontFamily: 'Helvetica-Bold', color: C.ink },
-    blockLabel: { fontSize: fs, fontFamily: 'Helvetica-Bold', color: C.muted, marginTop: 8, marginBottom: 3 },
+    blockLabel: { fontSize: fs, fontFamily: 'Helvetica-Bold', color: C.muted, marginTop: 6, marginBottom: 2 },
     rowFlex: { flexDirection: 'row' },
-    cellBox: { borderRightWidth: 1, borderRightColor: C.border, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3, justifyContent: 'center' },
+    cellBox: { borderRightWidth: 1, borderRightColor: C.border, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 2, paddingHorizontal: 3, justifyContent: 'center' },
     headCell: { backgroundColor: C.head, fontFamily: 'Helvetica-Bold', color: C.ink },
-    supHead: { backgroundColor: C.head, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3 },
+    supHead: { backgroundColor: C.head, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 2.5, paddingHorizontal: 3 },
     supName: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs + 0.5 },
     ref: { color: C.muted, fontSize: fs - 0.5 },
     subLabel: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs - 0.5 },
     labelRow: { fontFamily: 'Helvetica-Bold', color: C.ink },
     winCell: { backgroundColor: C.win, color: C.winInk, fontFamily: 'Helvetica-Bold' },
+    notQuoted: { color: C.faint, fontFamily: 'Helvetica-Oblique' },
     aiRowLabel: { fontFamily: 'Helvetica-Bold', color: C.aiBorder },
     aiTag: { fontSize: fs - 1.5, fontFamily: 'Helvetica-Bold', color: C.aiBorder, marginBottom: 1 },
     aiText: { color: C.aiBorder, fontFamily: 'Helvetica-Oblique' },
-    aiBox: { marginTop: 10, borderWidth: 1.2, borderColor: C.aiBorder, backgroundColor: C.aiBg, borderRadius: 4, padding: 7 },
+    aiBox: { marginTop: 6, borderWidth: 1, borderColor: C.aiBorder, backgroundColor: C.aiBg, borderRadius: 3, paddingVertical: 5, paddingHorizontal: 7 },
     aiLabel: { fontSize: fs - 0.5, fontFamily: 'Helvetica-Bold', color: C.aiBorder, marginBottom: 2 },
-    finalRow: { marginTop: 10, flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
-    signWrap: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-    signBox: { borderWidth: 1, borderColor: C.line, borderRadius: 3, padding: 5, minHeight: 66 },
-    signTitle: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs, marginBottom: 4 },
+    finalRow: { marginTop: 7, flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
+    signWrap: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
+    signBox: { borderWidth: 1, borderColor: C.line, borderRadius: 3, paddingVertical: 4, paddingHorizontal: 5, minHeight: 48 },
+    signTitle: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs, marginBottom: 3 },
     checkRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 3, gap: 3 },
     box: { width: 7, height: 7, borderWidth: 1, borderColor: C.line },
-    sigLine: { marginTop: 6, borderTopWidth: 1, borderTopColor: C.border, paddingTop: 2, color: C.muted },
-    footer: { position: 'absolute', bottom: 12, left: 20, right: 20, alignItems: 'center' },
-    footerLine: { fontSize: 6.5, color: C.faint, textAlign: 'center' },
+    sigLine: { marginTop: 5, borderTopWidth: 1, borderTopColor: C.border, paddingTop: 2, color: C.muted },
+    footer: { position: 'absolute', bottom: 10, left: 16, right: 16, alignItems: 'center' },
+    footerLine: { fontSize: 6, color: C.faint, textAlign: 'center' },
   });
 
   const perRow = Math.min(signatureRoles.length || 1, 4);
@@ -190,27 +197,31 @@ function ApprovalDocument({
           </Text>
         )}
 
-        {/* Meta row */}
+        {/* Compact form-style header block: TA Date (auto-stamped with the
+            generation date) and PR# on the top row; PR Description then Reviewed
+            By / Signature as rows below. Blank fields are for manual completion. */}
         <View style={s.metaRow}>
-          <Text style={[s.metaCell, { width: 130 }]}>
+          <Text style={[s.metaCell, { width: 260 }]}>
             <Text style={s.metaLabel}>TA Date: </Text>
-            {'                '}
-          </Text>
-          <Text style={[s.metaCell, { width: 150 }]}>
-            <Text style={s.metaLabel}>PR#: </Text>
-            {prNumber || '            '}
+            {generatedOn}
           </Text>
           <Text style={[s.metaCell, { flex: 1, borderRightWidth: 0 }]}>
-            <Text style={s.metaLabel}>Reviewed by: </Text>
-            {'                                        '}
+            <Text style={s.metaLabel}>PR#: </Text>
+            {prNumber}
           </Text>
         </View>
-
-        {/* PR Description — what's being procured (header subject, else derived). */}
-        <View style={s.descRow}>
+        <View style={s.metaRowMid}>
           <Text style={s.descCell}>
             <Text style={s.metaLabel}>PR Description: </Text>
-            {prSubject || '                                                                '}
+            {prSubject}
+          </Text>
+        </View>
+        <View style={s.descRow}>
+          <Text style={[s.descCell, { flex: 2, borderRightWidth: 1, borderRightColor: C.line }]}>
+            <Text style={s.metaLabel}>Reviewed By: </Text>
+          </Text>
+          <Text style={[s.descCell, { flex: 1 }]}>
+            <Text style={s.metaLabel}>Signature / Date: </Text>
           </Text>
         </View>
 
@@ -268,10 +279,14 @@ function ApprovalDocument({
                   {group.map((sup) => {
                     const cell = r.cells[sup.colIndex] ?? null;
                     const isLow = cell?.unitPriceUsd != null && r.lowestUsd != null && cell.unitPriceUsd === r.lowestUsd;
+                    // A requisition/product row with no cell means the supplier truly
+                    // did not quote it → "Not Quoted" (never a silent blank). Charge
+                    // rows simply omit the charge, so they stay blank.
+                    const notQuoted = !cell && r.kind !== 'charge';
                     return (
                       <View key={sup.quotationId} style={[s.rowFlex, { width: supW, borderRightWidth: 1, borderRightColor: C.line }]}>
-                        <Text style={[s.cellBox, { width: subDescW, borderRightWidth: 1, borderRightColor: C.border }]}>
-                          {cell?.description ?? ''}
+                        <Text style={[s.cellBox, { width: subDescW, borderRightWidth: 1, borderRightColor: C.border }, ...(notQuoted ? [s.notQuoted] : [])]}>
+                          {cell?.description ?? (notQuoted ? 'Not Quoted' : '')}
                         </Text>
                         <Text style={[s.cellBox, { width: subQtyW, textAlign: 'center', borderRightWidth: 1, borderRightColor: C.border }]}>
                           {cell ? plain(cell.qty) : ''}
@@ -302,7 +317,22 @@ function ApprovalDocument({
 
               {/* Terms */}
               <TermRow label="Payment Terms" s={s} leftW={leftW} supW={supW} values={group.map((sup) => qById.get(sup.quotationId)!.paymentTerms ?? '')} />
-              <TermRow label="Delivery Time" s={s} leftW={leftW} supW={supW} values={group.map((sup) => qById.get(sup.quotationId)!.deliveryRaw ?? '')} />
+              {/* Delivery Time — the supplier's ORIGINAL wording verbatim (e.g.
+                  "4 to 5 weeks"), with the normalized day-count only as a faint
+                  parenthetical hint, never as a replacement. */}
+              <TermRow
+                label="Delivery Time"
+                s={s}
+                leftW={leftW}
+                supW={supW}
+                values={group.map((sup) => {
+                  const q = qById.get(sup.quotationId)!;
+                  const raw = q.deliveryRaw?.trim() ?? '';
+                  if (!raw) return '';
+                  const hint = deliveryNormalizedHint(q.deliveryRaw, q.deliveryDays);
+                  return hint ? `${raw}  (${hint})` : raw;
+                })}
+              />
               <TermRow label="Delivery Terms" s={s} leftW={leftW} supW={supW} values={group.map((sup) => qById.get(sup.quotationId)!.deliveryTerms ?? '')} />
 
               {/* AI item-match signal — SEPARATE from Technical Comments, only with a PR. */}
