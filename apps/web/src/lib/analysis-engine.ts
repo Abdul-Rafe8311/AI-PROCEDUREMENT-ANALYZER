@@ -216,18 +216,26 @@ export function toUsd(amount: number | null, currency: string): number | null {
   return Math.round(amount * getUsdRate(currency));
 }
 
-/** Normalize free-text delivery ("2 weeks", "ASAP", a date) to integer days. */
+/** Normalize free-text delivery ("2 weeks", "08 - Weeks", "ASAP", a date) to integer days. */
 export function normalizeDelivery(raw: string | null): number | null {
   if (!raw) return null;
   const s = raw.trim().toLowerCase();
   if (/asap|immediate|same.?day|next.?day|in stock|ready now/.test(s)) return 1;
 
-  const unit = s.match(/(\d+(?:\.\d+)?)\s*(day|week|month|year)/);
-  if (unit) {
-    const n = parseFloat(unit[1]);
-    const mult =
-      unit[2] === 'week' ? 7 : unit[2] === 'month' ? 30 : unit[2] === 'year' ? 365 : 1;
-    return Math.round(n * mult);
+  // Detect the time UNIT independently of the number: real documents separate
+  // them with dashes, ranges or words ("08 - Weeks", "6-8 weeks", "2 to 3
+  // months", "8wks"). Never assume "days" when the source states weeks/months —
+  // that was silently turning "08 - Weeks" (56 days) into "8 days" and even
+  // flagging the supplier "fastest".
+  const unitMatch = s.match(/(days?|weeks?|wks?|months?|mos?|years?|yrs?)\b/);
+  if (unitMatch) {
+    const u = unitMatch[1];
+    const mult = u.startsWith('w') ? 7 : u.startsWith('mo') ? 30 : u.startsWith('y') ? 365 : 1;
+    // Use the number NEAREST before the unit (handles ranges like "6-8 weeks" → 8).
+    const before = s.slice(0, unitMatch.index);
+    const nums = before.match(/\d+(?:\.\d+)?/g);
+    if (nums?.length) return Math.round(parseFloat(nums[nums.length - 1]) * mult);
+    // Unit stated but no leading number (e.g. "a few weeks") — fall through.
   }
 
   const asDate = Date.parse(raw);

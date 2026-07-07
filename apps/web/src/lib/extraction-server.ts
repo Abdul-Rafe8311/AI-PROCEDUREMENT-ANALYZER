@@ -210,6 +210,23 @@ const EXTRACTION_SYSTEM_PROMPT = [
   'invent numbers. Numbers must be plain (no thousands separators or symbols). If a',
   'field is absent, use null.',
   '',
+  'VERBATIM ONLY — never elaborate. Copy text fields (deliveryTerms, paymentTerms,',
+  'warranty, item names) EXACTLY and terse as written. Do NOT expand abbreviations,',
+  "add an Incoterm's standard meaning, a port, packing, duty or any detail that is",
+  'not literally printed. If deliveryTerms is just "FOB", return "FOB" — never',
+  '"FOB <port>, duty unpaid, seaworthy packing". Terse in the source → terse output.',
+  '',
+  'EXTRACT EACH FIELD INDEPENDENTLY. Cells may be garbled, overlapping or truncated',
+  'in the source. If ONE cell for a supplier is unreadable, still capture every',
+  'OTHER field for that SAME supplier (total, delivery, payment, terms) — set only',
+  'the genuinely unreadable field to null. Never drop a supplier\'s delivery/payment/',
+  'total just because a nearby cell (e.g. its item description) is hard to read.',
+  '',
+  "EACH SUPPLIER'S OWN COLUMN: in a side-by-side sheet, read every value for a",
+  "supplier from THAT supplier's own column/row only. Do NOT borrow a total, price",
+  "or term from an adjacent supplier's column, a neighbouring row, or a different",
+  "line. Take the grand total from that supplier's OWN total row, not a nearby number.",
+  '',
   'CURRENCY PER AMOUNT: detect EACH supplier\'s currency from the text ("SAR",',
   '"Saudi Riyal", "﷼", "USD", "$"). If a total is stated in MORE THAN ONE currency',
   '(e.g. a USD row AND a SAR row), set `currency` + `totalAmount` to the primary /',
@@ -223,8 +240,11 @@ const EXTRACTION_SYSTEM_PROMPT = [
   'put the amount in totalPrice. `totalAmount` MUST include these charges — it is',
   'the final amount the buyer actually pays.',
   '',
-  'DELIVERY: deliveryTime = the lead time / duration (e.g. "60 days"). deliveryTerms',
-  '= the incoterms exactly as written (e.g. "CFR Jeddah", "CIF Jeddah", "EXW").',
+  'DELIVERY: deliveryTime = the lead time / duration with its UNIT exactly as',
+  'written — copy the number AND the unit ("88 Days", "08 - Weeks", "3 Months"). Do',
+  'NOT convert units or drop the unit (never turn "8 weeks" into "8"). deliveryTerms',
+  '= the incoterms exactly as written (e.g. "CFR Jeddah", "CIF Jeddah", "EXW", "FOB"),',
+  'with NO added explanation.',
   '',
   'PR NUMBER: prNumber = the purchase-requisition / PR number if the document shows',
   'one (a form-level header field like "PR#", "PR No", "Requisition No", "PR Description"',
@@ -249,6 +269,10 @@ const SCAN_NOTE = [
   'tables, stamps and handwriting where legible, and transcribe numbers EXACTLY.',
   'If a value is genuinely illegible, use null rather than guessing. A single',
   'scanned form may still compare MULTIPLE suppliers side by side — capture each one.',
+  'Keep every value in its OWN column: overlapping or truncated text in one cell',
+  'must not make you skip other cells or pull a number from the wrong column. Read',
+  'the grand total from each supplier\'s own total row. Transcribe ONLY what is',
+  'printed — do not add detail, expand Incoterms, or infer values that are not shown.',
   'ALWAYS capture each supplier\'s real COMPANY / SUPPLIER NAME (from the column',
   'header, letterhead, stamp, signature block, or an "M/s <name>" line) into',
   'supplierName. Do NOT use the file name. Only leave supplierName null if no',
@@ -436,21 +460,26 @@ function mapSupplier(
     statedTotals.push({ amount: primaryStated, currency });
   }
 
-  // BUG A: the compared total must be the FULL payable amount incl. freight & all
-  // charges. Take the larger of (a) the stated grand total in this supplier's
-  // currency and (b) the sum of every captured line (products + charges) — so a
-  // stated total that omitted freight can't drop it from the comparison.
+  // The compared total must be the FULL payable amount incl. freight & all
+  // charges. Start from the document's own stated grand total (the bottom line
+  // the buyer signs off). If that total OMITTED charge lines (freight etc.), let
+  // the line-sum lift it — but cap that lift at stated + charges, so a MISREAD or
+  // duplicated PRODUCT line can't inflate the payable above the stated total
+  // (BUG 1: one supplier read ~15% high from an over-summed product column).
   const statedInCurrency =
     statedTotals.find((t) => t.currency === currency)?.amount ?? primaryStated ?? null;
-  const lineSum = lineItems.reduce((sum, li) => {
-    const line = li.totalPrice ?? (li.unitPrice != null && li.quantity != null ? li.unitPrice * li.quantity : 0);
-    return sum + (line ?? 0);
-  }, 0);
+  const lineAmount = (li: LineItem): number =>
+    li.totalPrice ?? (li.unitPrice != null && li.quantity != null ? li.unitPrice * li.quantity : 0);
+  const lineSum = lineItems.reduce((sum, li) => sum + lineAmount(li), 0);
+  const chargeSum = lineItems.reduce(
+    (sum, li) => ((li.category ?? 'product') !== 'product' ? sum + lineAmount(li) : sum),
+    0,
+  );
   const hasLines = lineItems.length > 0;
   const totalCost =
     statedInCurrency != null
       ? hasLines
-        ? Math.max(statedInCurrency, Math.round(lineSum))
+        ? Math.max(statedInCurrency, Math.min(Math.round(lineSum), statedInCurrency + Math.round(chargeSum)))
         : statedInCurrency
       : hasLines && lineSum > 0
         ? Math.round(lineSum)

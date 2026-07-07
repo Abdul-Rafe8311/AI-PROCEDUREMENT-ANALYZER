@@ -96,6 +96,38 @@ test('PHASE 4B: scanned/vision extraction caps confidence at medium but keeps va
   assert.ok(a.fields.totalCost.confidence > 0, 'a present field keeps a non-zero confidence');
 });
 
+test('BUG 1: a stated grand total is not inflated by an over-summed product column', () => {
+  // Models Supply Wave: the document states SAR 137,980, but the product lines
+  // (a misread column) sum to 158,677. The stated total must win.
+  const supplyWave: LlmSupplier = {
+    supplierName: 'Supply Wave', reference: 'SW-1', currency: 'SAR',
+    totalAmount: 137980, totalsByCurrency: null,
+    deliveryTime: '88 Days', deliveryTerms: 'CIF Jeddah', paymentTerms: '30 days credit',
+    warranty: null, validUntil: null,
+    lineItems: [
+      { name: 'Item A', quantity: 1, unitPrice: 100000, totalPrice: 100000, category: 'product' },
+      { name: 'Item B', quantity: 1, unitPrice: 58677, totalPrice: 58677, category: 'product' },
+    ],
+  };
+  const [q] = quotationsFromLlmSuppliers([supplyWave], 'sw.pdf', { currency: 'SAR', confidence: 0.99 });
+  assert.equal(q.totalCost, 137980); // not 158,677
+  assert.equal(q.deliveryDays, 88); // "88 Days" parsed correctly
+});
+
+test('BUG 1: an omitted freight charge still lifts the total (freight fix preserved)', () => {
+  const supplier: LlmSupplier = {
+    supplierName: 'Freight Co', reference: null, currency: 'SAR',
+    totalAmount: 137980, totalsByCurrency: null, // stated total EXCLUDES freight
+    deliveryTime: '60 days', deliveryTerms: null, paymentTerms: null, warranty: null, validUntil: null,
+    lineItems: [
+      { name: 'Goods', quantity: 1, unitPrice: 137980, totalPrice: 137980, category: 'product' },
+      { name: 'Sea freight', quantity: null, unitPrice: null, totalPrice: 2000, category: 'freight' },
+    ],
+  };
+  const [q] = quotationsFromLlmSuppliers([supplier], 'f.pdf', { currency: 'SAR', confidence: 0.99 });
+  assert.equal(q.totalCost, 139980); // 137,980 stated + 2,000 uncounted freight
+});
+
 test('mixed currencies, delivery terms and reference are captured per supplier', () => {
   const [a, n] = run();
   assert.equal(a.deliveryTerms, 'CFR Jeddah');
