@@ -18,6 +18,7 @@ import type {
   PurchaseRequisition,
   SupplierItemMatch,
   SupplierMatch,
+  TechnicalComment,
 } from './workspace-types';
 
 /** score at/above which a supplier item is Technically Approved against a PR item */
@@ -170,6 +171,45 @@ export function matchSupplierItems(
     mismatchCount,
     allMatched,
   };
+}
+
+const short = (s: string, n = 44) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
+
+/**
+ * Build AI-SUGGESTED Technical Comments per supplier from the PR matching. These
+ * are STARTING POINTS a human reviews/overwrites — item-description match is
+ * never sufficient grounds for approval on its own (capability, track record,
+ * trust and pricing are human judgment calls). Only emitted when a PR was
+ * matched; every entry is marked `aiSuggested: true`.
+ *  - all quoted items match  → "Technically accepted (AI-suggested: items match PR description)"
+ *  - any item mismatches     → "AI note: items do not match PR description — review required (e.g. …)"
+ */
+export function suggestTechnicalComments(
+  prMatch: PrMatchResult | null | undefined,
+  pr: PurchaseRequisition | null | undefined,
+): Record<string, TechnicalComment> {
+  const out: Record<string, TechnicalComment> = {};
+  if (!prMatch || !pr) return out;
+  for (const sm of prMatch.bySupplier) {
+    if (sm.mismatchCount === 0) {
+      let text = 'Technically accepted (AI-suggested: items match PR description)';
+      if (sm.missingPrIndexes.length) {
+        text += ` · Note: ${sm.missingPrIndexes.length} requisition item(s) not quoted — review scope.`;
+      }
+      out[sm.quotationId] = { text, aiSuggested: true };
+    } else {
+      const m = sm.items.find((i) => i.status === 'mismatch');
+      const closest = m && m.closestPrIndex != null ? pr.items[m.closestPrIndex] : null;
+      const eg = m
+        ? ` (e.g. "${short(m.supplierItem.name)}"${closest ? ` vs PR "${short(closest.description)}"` : ''})`
+        : '';
+      out[sm.quotationId] = {
+        text: `AI note: items do not match PR description — review required${eg}`,
+        aiSuggested: true,
+      };
+    }
+  }
+  return out;
 }
 
 /** Match every supplier's line items against the company PR. */

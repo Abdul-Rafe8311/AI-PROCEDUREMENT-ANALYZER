@@ -25,6 +25,8 @@ export interface SupplierCol {
 }
 
 export interface SupplierCell {
+  /** the supplier's OWN description for this row (their wording), null when not quoted */
+  description: string | null;
   qty: number | null;
   /** unit price (charge rows: the lump-sum amount) in `currency` */
   unitPrice: number | null;
@@ -98,6 +100,7 @@ function prRows(
       if (!match) return null;
       const li = match.supplierItem;
       return {
+        description: li.name,
         qty: li.quantity,
         unitPrice: li.unitPrice,
         currency: li.currency,
@@ -133,8 +136,10 @@ function unionProductRows(quotations: ExtractedQuotation[]): ComparisonRow[] {
   const keys = [...meta.keys()].sort((a, b) => meta.get(a)!.seq - meta.get(b)!.seq);
   return keys.map((k, i) => {
     const lines = quotations.map((q) => q.lineItems.find((l) => norm(l.name) === k && (l.category ?? 'product') === 'product') ?? null);
-    const cells = lines.map<SupplierCell | null>((li, ci) =>
-      li ? { qty: li.quantity, unitPrice: li.unitPrice, currency: li.currency, unitPriceUsd: cellUsd(li.unitPrice, li.currency) } : null,
+    const cells = lines.map<SupplierCell | null>((li) =>
+      li
+        ? { description: li.name, qty: li.quantity, unitPrice: li.unitPrice, currency: li.currency, unitPriceUsd: cellUsd(li.unitPrice, li.currency) }
+        : null,
     );
     const qtys = lines.filter((l) => l).map((l) => l!.quantity).filter((v): v is number => v != null);
     const qty = qtys.length && qtys.every((v) => v === qtys[0]) ? qtys[0] : null;
@@ -173,7 +178,8 @@ function chargeRows(quotations: ExtractedQuotation[], startIndex: number): Compa
       });
       if (!lines.length) return null;
       const amount = lines.reduce((sum, li) => sum + (li.totalPrice ?? li.unitPrice ?? 0), 0);
-      return { qty: null, unitPrice: amount, currency: q.currency, unitPriceUsd: cellUsd(amount, q.currency) };
+      // Keep the supplier's OWN charge wording (e.g. "Sea freight", "Transport CIF").
+      return { description: lines[0]?.name ?? null, qty: null, unitPrice: amount, currency: q.currency, unitPriceUsd: cellUsd(amount, q.currency) };
     });
     return {
       kind: 'charge',

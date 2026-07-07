@@ -433,7 +433,8 @@ export const RISK_RULE_CATALOG: RiskRuleDoc[] = [
   {
     title: 'Missing warranty',
     severity: 'medium',
-    detail: 'No warranty is stated, so there’s no cover if the goods fail after delivery.',
+    detail:
+      'No warranty is stated while at least one other supplier does provide one, so this quote has no after-sales cover where a peer offers it. Not flagged when NO supplier states a warranty (e.g. a form that doesn’t capture warranty), so it can’t bury real risks.',
   },
   {
     title: 'Risky payment terms',
@@ -789,6 +790,12 @@ export function detectRisks(
   const costs = qs.filter((q) => q.totalCostUsd != null).map((q) => q.totalCostUsd!);
   const med = costs.length ? median(costs) : 0;
   const catalogSize = Math.max(...qs.map((q) => q.lineItems.length), 0);
+  // "Missing warranty" is only a meaningful, comparative signal when warranty is
+  // actually a dimension of THIS comparison — i.e. at least one supplier states
+  // one. If NO supplier mentions warranty (e.g. a Technical Approval Form that has
+  // no warranty column), all-missing flags are pure noise that bury real risks, so
+  // they are suppressed. See RISK_RULE_CATALOG "Missing warranty".
+  const anyWarranty = qs.some((q) => !!(q.warranty && String(q.warranty).trim()));
   const today = new Date().toISOString().slice(0, 10);
   const T = RISK_THRESHOLDS;
 
@@ -815,13 +822,14 @@ export function detectRisks(
       );
     }
 
-    // Warranty
-    if (!q.warranty) {
+    // Warranty — only flagged when it is a live dimension of this comparison
+    // (at least one OTHER supplier states one). Suppressed when nobody does.
+    if (!q.warranty && anyWarranty) {
       add(
         q.supplierName,
         'missing_warranty',
         `${q.supplierName}: no warranty information found.`,
-        'Flagged: no warranty is stated, so there would be no cover if the goods fail after delivery — you carry that risk.',
+        'Flagged: no warranty is stated, while at least one other supplier does provide one — so this quote is at a relative disadvantage and would leave no cover if the goods fail after delivery.',
       );
     }
 

@@ -178,6 +178,17 @@ export interface PrMatchResult {
   threshold: number;
 }
 
+/**
+ * A Technical Comments value for the Approval Form. `aiSuggested` = the text is
+ * an UNREVIEWED AI suggestion (rendered visually distinct, with an
+ * "AI suggested — review" marker) and flips to false once a human edits it, so a
+ * machine hint is never mistaken for a human technical verdict.
+ */
+export interface TechnicalComment {
+  text: string;
+  aiSuggested: boolean;
+}
+
 export type RiskType =
   | 'missing_delivery'
   | 'missing_warranty'

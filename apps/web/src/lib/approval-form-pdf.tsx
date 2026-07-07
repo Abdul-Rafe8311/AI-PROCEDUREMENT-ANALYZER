@@ -2,22 +2,26 @@
 
 // Second, separate PDF: a pre-filled copy of the buyer's own "Technical Approval
 // Form", generated on demand (dynamically imported on click). Every fillable
-// field comes from the REAL extracted data — anything not present is left BLANK,
-// never invented.
+// field comes from the REAL extracted data — anything not present is left BLANK.
 //
-// Phase 4: the "PR Item Description" column shows the COMPANY'S own description
-// and quantity (from the uploaded Purchase Requisition); each supplier's own
-// REF#, qty and unit price sit beside it. With no PR, it falls back to the
-// supplier-extracted descriptions and says so.
-// Phase 3-5 updates honored: 5+ suppliers wrap into stacked column-groups; each
-// supplier keeps its OWN currency; "Technical Comments" is always BLANK for the
-// human, and the AI item-match result is shown as a SEPARATE, clearly-labeled
-// signal row (never written into Technical Comments).
-// Phase 5: the signature blocks are provided by the caller (user-configured),
-// so their count, names and order vary per document — nothing is hardcoded.
+// Layout (matches the buyer's reference): the PR item's OWN description + qty are
+// the leftmost reference columns; then EACH supplier has their own column-group
+// showing THEIR own quoted description, qty and unit price side by side for that
+// same PR item row. 5+ suppliers wrap into stacked blocks; each keeps its own
+// currency; lowest unit price per row is highlighted.
+//
+// Technical Comments are AI-SUGGESTED, never silently asserted: a suggestion is
+// rendered visually distinct (indigo, italic, "AI SUGGESTED — REVIEW" tag) until
+// a human edits it in the UI (which flips it to a plain, human-entered comment).
+// Item-description match alone is never grounds for approval — the human still
+// decides accept/reject and the reason.
+//
+// Signature blocks are provided by the caller (user-configured): count, names
+// and order vary per document — nothing is hardcoded.
 
 import { Document, Page, Text, View, StyleSheet, pdf } from '@react-pdf/renderer';
 import { scoreSuppliers } from './analysis-engine';
+import { suggestTechnicalComments } from './item-matching';
 import { buildComparisonModel, supplierGroups } from './pr-comparison';
 import {
   type AnalysisResult,
@@ -25,6 +29,7 @@ import {
   DEFAULT_WEIGHTS,
   type ExtractedQuotation,
   type PrMatchResult,
+  type TechnicalComment,
 } from './workspace-types';
 
 const C = {
@@ -44,9 +49,11 @@ const C = {
 export interface ApprovalFormOptions {
   /** ordered, enabled signature-block role names (defaults to DEFAULT_SIGNATURE_ROLES) */
   signatureRoles?: string[];
+  /** per-supplier Technical Comments keyed by quotation id (AI-suggested unless edited) */
+  technicalComments?: Record<string, TechnicalComment>;
 }
 
-const SUP_PER_GROUP = 4; // suppliers per stacked block (landscape A4 fits ~4)
+const SUP_PER_GROUP = 3; // suppliers per stacked block — each is now wider (own description col)
 const USABLE = 797; // landscape A4 usable width (pt)
 
 const numFmt = (n: number | null | undefined) =>
@@ -54,8 +61,8 @@ const numFmt = (n: number | null | undefined) =>
 const plain = (n: number | null | undefined) =>
   n == null || !Number.isFinite(n) ? '' : n.toLocaleString('en-US');
 
-// Document-stated currency totals only (no app-side conversion), so each
-// supplier's own currency (EUR/SAR/USD/…) is preserved.
+// Document-stated currency totals only (no app-side conversion) → each supplier's
+// own currency (EUR/SAR/USD/QAR/…) is preserved.
 function totalLines(q: ExtractedQuotation): string[] {
   const stated = (q.statedTotals ?? []).filter((t) => t.amount != null);
   if (stated.length) return stated.map((t) => `${t.currency} ${numFmt(t.amount)}`);
@@ -85,8 +92,7 @@ function aiRecommendation(analysis: AnalysisResult): string {
   return `${name} — ${reason}.`;
 }
 
-// Per-supplier AI item-match signal (only meaningful with a PR). Kept SEPARATE
-// from Technical Comments — a hint, never a verdict.
+// Per-supplier AI item-match signal (only meaningful with a PR).
 function matchSignal(prMatch: PrMatchResult | null, quotationId: string): string {
   const sm = prMatch?.bySupplier.find((s) => s.quotationId === quotationId);
   if (!sm) return '';
@@ -100,9 +106,11 @@ function matchSignal(prMatch: PrMatchResult | null, quotationId: string): string
 function ApprovalDocument({
   analysis,
   signatureRoles,
+  comments,
 }: {
   analysis: AnalysisResult;
   signatureRoles: string[];
+  comments: Record<string, TechnicalComment>;
 }) {
   const qs = analysis.quotations;
   const qById = new Map(qs.map((q) => [q.id, q]));
@@ -112,16 +120,13 @@ function ApprovalDocument({
 
   const pr = analysis.purchaseRequisition;
   const prNumber = pr?.requestNo ?? qs.find((q) => q.prNumber)?.prNumber ?? '';
-  // With a PR, descriptions live in the table rows; without one, note the fallback.
-  const firstProduct = qs.flatMap((q) => q.lineItems).find((li) => (li.category ?? 'product') === 'product');
-  const prDesc = model.hasPr ? '' : firstProduct?.name ?? '';
 
   const indexed = model.suppliers.map((s, i) => ({ ...s, colIndex: i }));
   const groups = supplierGroups(indexed, SUP_PER_GROUP);
-  const fs = 7;
+  const fs = 6.5;
 
   const s = StyleSheet.create({
-    page: { paddingVertical: 20, paddingHorizontal: 22, fontSize: fs, color: C.body, fontFamily: 'Helvetica' },
+    page: { paddingVertical: 20, paddingHorizontal: 20, fontSize: fs, color: C.body, fontFamily: 'Helvetica' },
     title: { textAlign: 'center', fontSize: 14, fontFamily: 'Helvetica-Bold', color: C.ink, marginBottom: 6 },
     subNote: { textAlign: 'center', fontSize: fs - 0.5, color: C.muted, marginBottom: 8 },
     metaRow: { flexDirection: 'row', borderWidth: 1, borderColor: C.line, marginBottom: 8 },
@@ -134,9 +139,12 @@ function ApprovalDocument({
     supHead: { backgroundColor: C.head, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3 },
     supName: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs + 0.5 },
     ref: { color: C.muted, fontSize: fs - 0.5 },
+    subLabel: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs - 0.5 },
     labelRow: { fontFamily: 'Helvetica-Bold', color: C.ink },
     winCell: { backgroundColor: C.win, color: C.winInk, fontFamily: 'Helvetica-Bold' },
     aiRowLabel: { fontFamily: 'Helvetica-Bold', color: C.aiBorder },
+    aiTag: { fontSize: fs - 1.5, fontFamily: 'Helvetica-Bold', color: C.aiBorder, marginBottom: 1 },
+    aiText: { color: C.aiBorder, fontFamily: 'Helvetica-Oblique' },
     aiBox: { marginTop: 10, borderWidth: 1.2, borderColor: C.aiBorder, backgroundColor: C.aiBg, borderRadius: 4, padding: 7 },
     aiLabel: { fontSize: fs - 0.5, fontFamily: 'Helvetica-Bold', color: C.aiBorder, marginBottom: 2 },
     finalRow: { marginTop: 10, flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
@@ -146,12 +154,17 @@ function ApprovalDocument({
     checkRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 3, gap: 3 },
     box: { width: 7, height: 7, borderWidth: 1, borderColor: C.line },
     sigLine: { marginTop: 6, borderTopWidth: 1, borderTopColor: C.border, paddingTop: 2, color: C.muted },
-    footer: { position: 'absolute', bottom: 12, left: 22, right: 22, textAlign: 'center', fontSize: 6.5, color: C.faint },
+    footer: { position: 'absolute', bottom: 12, left: 20, right: 20, textAlign: 'center', fontSize: 6.5, color: C.faint },
   });
 
-  // Signature blocks wrap ≤4 per row so 6+ roles never overflow the page.
   const perRow = Math.min(signatureRoles.length || 1, 4);
   const signW = (USABLE - (perRow - 1) * 6) / perRow;
+
+  const idxW = 14;
+  const prDescW = 118;
+  const qtyLW = 22;
+  const uomW = 24;
+  const leftW = idxW + prDescW + qtyLW + uomW;
 
   return (
     <Document title="Technical Approval Form" author="AI Procurement Copilot">
@@ -159,7 +172,7 @@ function ApprovalDocument({
         <Text style={s.title}>TECHNICAL APPROVAL FORM</Text>
         {!model.hasPr && (
           <Text style={s.subNote}>
-            No internal Purchase Requisition was matched — item descriptions are taken from the supplier quotations.
+            No internal Purchase Requisition was matched — the left column shows the supplier-quoted description.
           </Text>
         )}
 
@@ -169,26 +182,22 @@ function ApprovalDocument({
             <Text style={s.metaLabel}>TA Date: </Text>
             {'                '}
           </Text>
-          <Text style={[s.metaCell, { width: 140 }]}>
+          <Text style={[s.metaCell, { width: 150 }]}>
             <Text style={s.metaLabel}>PR#: </Text>
             {prNumber || '            '}
           </Text>
           <Text style={[s.metaCell, { flex: 1, borderRightWidth: 0 }]}>
-            <Text style={s.metaLabel}>PR Description: </Text>
-            {prDesc}
+            <Text style={s.metaLabel}>Reviewed by: </Text>
+            {'                                        '}
           </Text>
         </View>
 
-        {/* One stacked block per group of suppliers (wraps 5+). */}
         {groups.map((group, gi) => {
-          const leftW = 16 + descWidth(group.length) + 26 + 30;
-          const supW = Math.max(88, (USABLE - leftW) / group.length);
-          const idxW = 16;
-          const descW = descWidth(group.length);
-          const qtyLW = 26;
-          const uomW = 30;
-          const subQtyW = Math.min(28, supW * 0.3);
-          const subUnitW = supW - subQtyW;
+          const n = group.length;
+          const supW = Math.max(150, (USABLE - leftW) / n);
+          const subQtyW = 24;
+          const subDescW = Math.max(70, Math.round(supW * 0.5));
+          const subPriceW = supW - subDescW - subQtyW;
 
           return (
             <View key={gi} wrap={false}>
@@ -201,7 +210,7 @@ function ApprovalDocument({
               {/* Header band */}
               <View style={s.rowFlex}>
                 <Text style={[s.cellBox, s.headCell, { width: idxW, borderLeftWidth: 1, borderLeftColor: C.line, borderTopWidth: 1, borderTopColor: C.line }]}>#</Text>
-                <Text style={[s.cellBox, s.headCell, { width: descW, borderTopWidth: 1, borderTopColor: C.line }]}>
+                <Text style={[s.cellBox, s.headCell, { width: prDescW, borderTopWidth: 1, borderTopColor: C.line }]}>
                   {model.hasPr ? 'PR Item Description' : 'Item Description'}
                 </Text>
                 <Text style={[s.cellBox, s.headCell, { width: qtyLW, borderTopWidth: 1, borderTopColor: C.line }]}>Qty</Text>
@@ -213,8 +222,9 @@ function ApprovalDocument({
                       <Text style={s.supName}>{sup.supplier}</Text>
                       <Text style={s.ref}>{sup.reference ? `REF# ${sup.reference}` : 'REF# —'}</Text>
                       <View style={[s.rowFlex, { marginTop: 2 }]}>
-                        <Text style={{ width: subQtyW, fontFamily: 'Helvetica-Bold' }}>Qty</Text>
-                        <Text style={{ width: subUnitW, fontFamily: 'Helvetica-Bold' }}>Unit Price ({q.currency})</Text>
+                        <Text style={[s.subLabel, { width: subDescW }]}>Description</Text>
+                        <Text style={[s.subLabel, { width: subQtyW, textAlign: 'center' }]}>Qty</Text>
+                        <Text style={[s.subLabel, { width: subPriceW, textAlign: 'right' }]}>Unit Price ({q.currency})</Text>
                       </View>
                     </View>
                   );
@@ -227,7 +237,7 @@ function ApprovalDocument({
                   <Text style={[s.cellBox, { width: idxW, borderLeftWidth: 1, borderLeftColor: C.border, textAlign: 'center' }]}>
                     {r.kind === 'charge' ? '' : r.index}
                   </Text>
-                  <Text style={[s.cellBox, { width: descW }]}>
+                  <Text style={[s.cellBox, { width: prDescW }]}>
                     {r.label}
                     {r.kind === 'charge' ? `  [${r.category.toUpperCase()}]` : ''}
                   </Text>
@@ -238,10 +248,13 @@ function ApprovalDocument({
                     const isLow = cell?.unitPriceUsd != null && r.lowestUsd != null && cell.unitPriceUsd === r.lowestUsd;
                     return (
                       <View key={sup.quotationId} style={[s.rowFlex, { width: supW, borderRightWidth: 1, borderRightColor: C.line }]}>
+                        <Text style={[s.cellBox, { width: subDescW, borderRightWidth: 1, borderRightColor: C.border }]}>
+                          {cell?.description ?? ''}
+                        </Text>
                         <Text style={[s.cellBox, { width: subQtyW, textAlign: 'center', borderRightWidth: 1, borderRightColor: C.border }]}>
                           {cell ? plain(cell.qty) : ''}
                         </Text>
-                        <Text style={[s.cellBox, { width: subUnitW, textAlign: 'right' }, ...(isLow ? [s.winCell] : [])]}>
+                        <Text style={[s.cellBox, { width: subPriceW, textAlign: 'right' }, ...(isLow ? [s.winCell] : [])]}>
                           {cell ? numFmt(cell.unitPrice) : ''}
                         </Text>
                       </View>
@@ -284,8 +297,13 @@ function ApprovalDocument({
                 </View>
               )}
 
-              {/* Technical Comments — always BLANK for the human. */}
-              <TermRow label="Technical Comments" s={s} leftW={leftW} supW={supW} values={group.map(() => '')} />
+              {/* Technical Comments — AI-suggested (visually distinct) OR human-entered. */}
+              <View style={s.rowFlex} wrap={false}>
+                <Text style={[s.cellBox, s.labelRow, { width: leftW, borderLeftWidth: 1, borderLeftColor: C.border }]}>Technical Comments</Text>
+                {group.map((sup) => (
+                  <CommentCell key={sup.quotationId} comment={comments[sup.quotationId]} width={supW} s={s} />
+                ))}
+              </View>
             </View>
           );
         })}
@@ -304,7 +322,8 @@ function ApprovalDocument({
           <View style={{ flex: 1, borderBottomWidth: 1, borderBottomColor: C.line, height: 12 }} />
         </View>
         <Text style={{ fontSize: fs - 0.5, color: C.muted, marginTop: 2 }}>
-          (Technical Comments and Final Recommendation are completed and signed by the reviewing team.)
+          Technical Comments shown in indigo/italic with an &quot;AI SUGGESTED&quot; tag are unreviewed machine
+          suggestions — the reviewing team confirms or overwrites them and signs below.
         </Text>
 
         {/* Signature blocks — user-configured count / names / order. */}
@@ -334,9 +353,32 @@ function ApprovalDocument({
   );
 }
 
-// Description column width shrinks a little as a group holds more suppliers.
-function descWidth(groupSize: number): number {
-  return groupSize <= 2 ? 240 : groupSize === 3 ? 210 : 190;
+function CommentCell({
+  comment,
+  width,
+  s,
+}: {
+  comment: TechnicalComment | undefined;
+  width: number;
+  s: ReturnType<typeof StyleSheet.create>;
+}) {
+  const text = comment?.text?.trim() ?? '';
+  return (
+    <View style={{ width, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3, minHeight: 22, justifyContent: 'center' }}>
+      {text ? (
+        comment!.aiSuggested ? (
+          <>
+            <Text style={s.aiTag}>AI SUGGESTED — REVIEW</Text>
+            <Text style={s.aiText}>{text}</Text>
+          </>
+        ) : (
+          <Text style={{ color: C.ink }}>{text}</Text>
+        )
+      ) : (
+        <Text> </Text>
+      )}
+    </View>
+  );
 }
 
 function TermRow({
@@ -368,5 +410,9 @@ export async function generateApprovalFormPdf(
   options?: ApprovalFormOptions,
 ): Promise<Blob> {
   const roles = options?.signatureRoles?.length ? options.signatureRoles : DEFAULT_SIGNATURE_ROLES;
-  return pdf(<ApprovalDocument analysis={analysis} signatureRoles={roles} />).toBlob();
+  const comments =
+    options?.technicalComments ?? suggestTechnicalComments(analysis.prMatch, analysis.purchaseRequisition);
+  return pdf(
+    <ApprovalDocument analysis={analysis} signatureRoles={roles} comments={comments} />,
+  ).toBlob();
 }
