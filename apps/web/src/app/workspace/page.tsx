@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { ArrowLeft, Loader2, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { UploadZone } from '@/components/workspace/upload-zone';
+import { PrUpload } from '@/components/workspace/pr-upload';
+import { PrSummary } from '@/components/workspace/pr-summary';
 import { AnalysisResults } from '@/components/workspace/analysis-results';
 import { ExtractionDebug } from '@/components/workspace/extraction-debug';
 import { ChatPanel } from '@/components/workspace/chat-panel';
@@ -25,6 +27,8 @@ const LAST_ANALYSIS_KEY = 'workspace:lastAnalysisId';
 
 export default function WorkspacePage() {
   const [files, setFiles] = useState<File[]>([]);
+  // The company's own Purchase Requisition (optional second document type).
+  const [prFile, setPrFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
@@ -102,7 +106,8 @@ export default function WorkspacePage() {
           .maybeSingle();
         if (aErr) return; // transient — keep the pointer and retry next load
         const result = (row?.result ?? null) as AnalysisResult | null;
-        if (!result || !result.quotations?.length) {
+        // Restore if there are quotations OR a company PR (a PR-only session).
+        if (!result || (!result.quotations?.length && !result.purchaseRequisition)) {
           window.localStorage.removeItem(LAST_ANALYSIS_KEY); // genuinely gone
           return;
         }
@@ -196,9 +201,11 @@ export default function WorkspacePage() {
     try {
       setUploading(true);
       const id = crypto.randomUUID();
-      const { error: aErr } = await supabase
-        .from('analyses')
-        .insert({ id, title: files.map((f) => f.name).join(', ').slice(0, 120) });
+      const title = [...files.map((f) => f.name), prFile?.name]
+        .filter(Boolean)
+        .join(', ')
+        .slice(0, 120);
+      const { error: aErr } = await supabase.from('analyses').insert({ id, title });
       if (aErr) throw aErr;
 
       const docs: { documentId: string; fileName: string; fileUrl: string; isPdf: boolean }[] = [];
@@ -233,16 +240,18 @@ export default function WorkspacePage() {
   }
 
   async function handleAnalyze() {
-    if (!files.length) return;
+    if (!files.length && !prFile) return;
     setError(null);
     setDocs([]);
     const persisted = await persistUpload();
 
     try {
       setAnalyzing(true);
-      // Send the actual file bytes for real extraction.
+      // Send the actual file bytes for real extraction. Supplier quotations go
+      // under "files"; the optional company Purchase Requisition goes under "pr".
       const form = new FormData();
       files.forEach((f) => form.append('files', f, f.name));
+      if (prFile) form.append('pr', prFile, prFile.name);
       const res = await fetch('/api/extract', { method: 'POST', body: form });
       const data = await res.json();
 
@@ -459,7 +468,7 @@ export default function WorkspacePage() {
         </div>
 
         <div className="space-y-8">
-          <div className="mx-auto max-w-2xl">
+          <div className="mx-auto max-w-2xl space-y-4">
             <UploadZone
               files={files}
               onAdd={addFiles}
@@ -468,7 +477,31 @@ export default function WorkspacePage() {
               busy={uploading}
               analyzing={analyzing}
             />
-            <div className="mt-3 text-center">
+            <PrUpload
+              file={prFile}
+              onSelect={setPrFile}
+              onClear={() => setPrFile(null)}
+              busy={uploading}
+            />
+            {/* Analyze from here when ONLY a PR was uploaded (no quotations yet);
+                with quotations present, the button lives in the upload zone. */}
+            {files.length === 0 && prFile && (
+              <button
+                type="button"
+                onClick={handleAnalyze}
+                disabled={uploading || analyzing}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {analyzing ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" /> Reading requisition…
+                  </>
+                ) : (
+                  'Extract Purchase Requisition'
+                )}
+              </button>
+            )}
+            <div className="text-center">
               <button
                 type="button"
                 onClick={loadSample}
@@ -494,7 +527,9 @@ export default function WorkspacePage() {
 
           {analysis?.debug && <ExtractionDebug debug={analysis.debug} />}
 
-          {analysis && <AnalysisResults analysis={analysis} />}
+          {analysis?.purchaseRequisition && <PrSummary pr={analysis.purchaseRequisition} />}
+
+          {analysis && analysis.quotations.length > 0 && <AnalysisResults analysis={analysis} />}
 
           {docs.length > 0 && <DeepSearchStatus docs={docs} />}
 
@@ -502,7 +537,7 @@ export default function WorkspacePage() {
             messages={messages}
             onSend={handleSend}
             sending={sending}
-            disabled={!analysis}
+            disabled={!analysis || analysis.quotations.length === 0}
             analysis={analysis}
           />
         </div>

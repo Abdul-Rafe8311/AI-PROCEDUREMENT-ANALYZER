@@ -1,7 +1,14 @@
 import { NextResponse } from 'next/server';
 import { assembleAnalysis } from '@/lib/analysis-engine';
-import { extractQuotations } from '@/lib/extraction-server';
-import type { ExtractedQuotation } from '@/lib/workspace-types';
+import { extractPurchaseRequisition, extractQuotations } from '@/lib/extraction-server';
+import type { ExtractedQuotation, PurchaseRequisition } from '@/lib/workspace-types';
+
+// A Blob-like upload entry (works whether the runtime exposes File or not).
+function asFile(entry: FormDataEntryValue | null): File | null {
+  return entry && typeof entry === 'object' && typeof (entry as Blob).arrayBuffer === 'function'
+    ? (entry as File)
+    : null;
+}
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -36,20 +43,18 @@ export async function POST(req: Request) {
   }
 
   const entries = form.getAll('files');
-  if (entries.length === 0) {
+  // Optional second document type: the company's own Purchase Requisition (PR).
+  const prFile = asFile(form.get('pr'));
+  if (entries.length === 0 && !prFile) {
     return fail(
       400,
       'No file received.',
-      `form fields present: [${[...form.keys()].join(', ') || 'none'}] — expected field "files"`,
+      `form fields present: [${[...form.keys()].join(', ') || 'none'}] — expected field "files" (and/or "pr")`,
     );
   }
 
-  // Accept anything Blob-like (works whether the runtime exposes File or not).
-  const files = entries.filter(
-    (e): e is File =>
-      typeof e === 'object' && e !== null && typeof (e as Blob).arrayBuffer === 'function',
-  );
-  if (files.length === 0) {
+  const files = entries.map(asFile).filter((f): f is File => f !== null);
+  if (files.length === 0 && !prFile) {
     return fail(
       400,
       'No valid file in the upload.',
@@ -93,8 +98,39 @@ export async function POST(req: Request) {
       }
     }
 
+    // Extract the company's Purchase Requisition (PR), when one was uploaded.
+    let purchaseRequisition: PurchaseRequisition | null = null;
+    if (prFile) {
+      const name = prFile.name || 'purchase-requisition';
+      const buffer = Buffer.from(await prFile.arrayBuffer());
+      const { pr, method, textLength, error } = await extractPurchaseRequisition(
+        buffer,
+        name,
+        prFile.type,
+      );
+      if (pr) {
+        purchaseRequisition = pr;
+        debug.push({
+          fileName: `${name} · Purchase Requisition${pr.requestNo ? ` (${pr.requestNo})` : ''}`,
+          method,
+          textLength,
+          supplier: 'Company PR',
+          currency: '—',
+          currencyConfidence: 0,
+          total: null,
+          delivery: null,
+          payment: null,
+          warranty: null,
+          lineItems: pr.items.length,
+          ...(isDev && error ? { error } : {}),
+        });
+      } else if (error) {
+        reasons.push(`${name} (PR): ${error}`);
+      }
+    }
+
     const anyReadable = quotations.some((q) => q.totalCost != null || q.lineItems.length > 0);
-    if (!anyReadable) {
+    if (!anyReadable && !purchaseRequisition) {
       // Surface the most specific reason we collected.
       const detail = reasons.join(' | ') || 'extraction produced no usable fields';
       log(`422: extraction yielded no data — ${detail}`);
@@ -111,7 +147,8 @@ export async function POST(req: Request) {
     }
 
     if (reasons.length) log(`partial extraction warnings: ${reasons.join(' | ')}`);
-    const analysis = assembleAnalysis(quotations, false);
+    // Passing the PR in runs line-item matching + technical-approval risks.
+    const analysis = assembleAnalysis(quotations, false, purchaseRequisition);
     return NextResponse.json({ ...analysis, debug });
   } catch (err) {
     return fail(500, 'Extraction failed unexpectedly.', (err as Error).stack ?? (err as Error).message);

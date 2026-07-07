@@ -5,6 +5,7 @@
 // produces the same AnalysisResult shape.
 
 import { DEFAULT_WEIGHTS, formatCurrency } from './workspace-types';
+import { matchQuotationsToPr } from './item-matching';
 import type {
   AnalysisResult,
   ExtractedQuotation,
@@ -12,6 +13,8 @@ import type {
   FieldProvenance,
   LineItem,
   MetricScore,
+  PrMatchResult,
+  PurchaseRequisition,
   Recommendation,
   RiskFlag,
   RiskSeverity,
@@ -293,17 +296,29 @@ export function buildAnalysis(fileNames: string[]): AnalysisResult {
   return assembleAnalysis(quotations, true);
 }
 
-/** Assemble a full AnalysisResult (risks + recommendation) from quotations. */
+/**
+ * Assemble a full AnalysisResult (matching + risks + recommendation) from
+ * quotations. When a company Purchase Requisition is supplied, each supplier's
+ * line items are matched against it and the mismatches / not-quoted items feed
+ * into risk detection (an unmatched item is a real technical risk).
+ */
 export function assembleAnalysis(
   quotations: ExtractedQuotation[],
   simulated: boolean,
+  purchaseRequisition: PurchaseRequisition | null = null,
 ): AnalysisResult {
-  const risks = detectRisks(quotations);
+  const prMatch: PrMatchResult | null =
+    purchaseRequisition && purchaseRequisition.items.length && quotations.length
+      ? matchQuotationsToPr(quotations, purchaseRequisition)
+      : null;
+  const risks = detectRisks(quotations, prMatch, purchaseRequisition);
   return {
     quotations,
     recommendation: buildRecommendation(quotations, risks),
     risks,
     simulated,
+    purchaseRequisition: purchaseRequisition ?? undefined,
+    prMatch,
   };
 }
 
@@ -354,8 +369,10 @@ const RISK_SEVERITY: Record<RiskType, number> = {
   risky_payment_terms: 3,
   expired_validity: 3,
   incomplete_quotation: 3,
+  technical_mismatch: 3,
   unusually_low_price: 2,
   missing_warranty: 2,
+  missing_pr_item: 2,
   long_lead_time: 1,
   short_validity: 1,
   unusual_pricing: 1,
@@ -366,8 +383,10 @@ const SEVERITY_LABEL: Record<RiskType, RiskSeverity> = {
   risky_payment_terms: 'high',
   expired_validity: 'high',
   incomplete_quotation: 'high',
+  technical_mismatch: 'high',
   unusually_low_price: 'medium',
   missing_warranty: 'medium',
+  missing_pr_item: 'medium',
   long_lead_time: 'low',
   short_validity: 'low',
   unusual_pricing: 'low',
@@ -440,6 +459,18 @@ export const RISK_RULE_CATALOG: RiskRuleDoc[] = [
     severity: 'high',
     detail:
       'One or more line items are missing, or are missing a price, so the compared total may not reflect the full payable cost.',
+  },
+  {
+    title: 'Technical mismatch vs PR',
+    severity: 'high',
+    detail:
+      'A quoted item could not be matched to any item on the company’s Purchase Requisition (wrong spec, wrong grade, or an item that was never requested), so it is not Technically Approved and needs a human review of what was requested versus quoted.',
+  },
+  {
+    title: 'Requisition item not quoted',
+    severity: 'medium',
+    detail:
+      'The supplier did not quote one or more items that appear on the company’s Purchase Requisition, so its offer does not cover the full scope of the request.',
   },
 ];
 
@@ -741,7 +772,11 @@ function daysUntil(isoDate: string, today: string): number {
   return Math.round((Date.parse(isoDate) - Date.parse(today)) / 86_400_000);
 }
 
-export function detectRisks(qs: ExtractedQuotation[]): RiskFlag[] {
+export function detectRisks(
+  qs: ExtractedQuotation[],
+  prMatch: PrMatchResult | null = null,
+  pr: PurchaseRequisition | null = null,
+): RiskFlag[] {
   const risks: RiskFlag[] = [];
   const costs = qs.filter((q) => q.totalCostUsd != null).map((q) => q.totalCostUsd!);
   const med = costs.length ? median(costs) : 0;
@@ -849,6 +884,40 @@ export function detectRisks(qs: ExtractedQuotation[]): RiskFlag[] {
         `${q.supplierName}: incomplete quotation${detail}.`,
         `Flagged: the quotation looks incomplete${detail}. The compared total may not reflect the full cost, so treat this supplier’s comparison with caution.`,
       );
+    }
+  }
+
+  // Technical Approval vs the company's Purchase Requisition (only when both a
+  // PR and quotations were provided). An unmatched quoted item — or a
+  // requisitioned item a supplier never quoted — is a real technical risk.
+  if (prMatch && pr) {
+    const preview = (names: string[], n = 2) => {
+      const shown = names.filter(Boolean).slice(0, n);
+      const extra = names.filter(Boolean).length - shown.length;
+      return shown.join('; ') + (extra > 0 ? `; +${extra} more` : '');
+    };
+    for (const sm of prMatch.bySupplier) {
+      if (sm.mismatchCount > 0) {
+        const names = sm.items.filter((i) => i.status === 'mismatch').map((i) => i.supplierItem.name);
+        const plural = sm.mismatchCount === 1 ? '' : 's';
+        add(
+          sm.supplier,
+          'technical_mismatch',
+          `${sm.supplier}: ${sm.mismatchCount} quoted item${plural} did not match the purchase requisition.`,
+          `Flagged: ${sm.mismatchCount} item${plural} on this quote could not be matched to any requisitioned item (${preview(names)}). This can mean a wrong spec/grade or an item that was never requested — it is not Technically Approved until a buyer confirms requested vs quoted.`,
+        );
+      }
+      if (sm.missingPrIndexes.length > 0) {
+        const missNames = sm.missingPrIndexes.map((i) => pr.items[i]?.description ?? '').filter(Boolean);
+        const n = sm.missingPrIndexes.length;
+        const plural = n === 1 ? '' : 's';
+        add(
+          sm.supplier,
+          'missing_pr_item',
+          `${sm.supplier}: did not quote ${n} requisitioned item${plural}.`,
+          `Flagged: ${n} item${plural} from the purchase requisition (${preview(missNames)}) ${n === 1 ? 'was' : 'were'} not quoted by ${sm.supplier}, so its offer does not cover the full requested scope.`,
+        );
+      }
     }
   }
 

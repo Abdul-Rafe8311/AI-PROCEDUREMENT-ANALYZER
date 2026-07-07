@@ -92,6 +92,92 @@ export interface ExtractedQuotation {
   fields: Record<FieldKey, FieldProvenance>;
 }
 
+/**
+ * A single requisitioned line on the company's internal Purchase Requisition
+ * (PR). Only the fields needed for line-item matching against supplier
+ * quotations are captured — the PR's cost / consumption-history columns are
+ * intentionally ignored.
+ */
+export interface PrItem {
+  /** the company's own item / material code (e.g. "1000123") — null when absent */
+  itemCode: string | null;
+  /** item description in English, exactly as written on the PR */
+  description: string;
+  /** Arabic description when the PR row is bilingual — null otherwise */
+  descriptionArabic?: string | null;
+  /** requested quantity — null when not stated */
+  quantity: number | null;
+  /** unit of measure as written (e.g. "SET", "PCS", "NO") — null when absent */
+  unit: string | null;
+}
+
+/**
+ * The company's internal Purchase Requisition / Approved Requisition Report,
+ * uploaded alongside supplier quotations. Its line items are matched against
+ * each supplier's quoted items (Phase 2) to drive Technical Approval.
+ */
+export interface PurchaseRequisition {
+  /** the file it was extracted from */
+  fileName: string;
+  /** Request No. / PR# from the document header — null when not stated */
+  requestNo: string | null;
+  /** requisition date as written — null when absent */
+  date?: string | null;
+  /** department code from the header — null when absent */
+  departmentCode?: string | null;
+  /** requester name from the header — null when absent */
+  requesterName?: string | null;
+  /** approver name from the header — null when absent */
+  approvedBy?: string | null;
+  /** how it was read ('vision' = from a scan/photo) — surfaced as a UI note */
+  method?: 'llm' | 'vision';
+  /** every requisitioned line item */
+  items: PrItem[];
+}
+
+/** Result of matching one supplier's quoted item against the company's PR. */
+export type ItemMatchStatus = 'approved' | 'mismatch';
+
+/**
+ * How a single supplier-quoted (product) line item relates to the company's
+ * Purchase Requisition. `approved` = it matched a PR item on spec ("Technically
+ * Approved" against that item); `mismatch` = it matched nothing confidently
+ * (wrong spec/grade, or an item the PR never requested).
+ */
+export interface SupplierItemMatch {
+  /** the supplier's own line item, as quoted */
+  supplierItem: LineItem;
+  /** PR item index this was Technically Approved against — null on a mismatch */
+  prIndex: number | null;
+  /** closest PR item by similarity even below the match threshold — powers the
+   * "what was requested vs what was quoted" view for a mismatch */
+  closestPrIndex: number | null;
+  status: ItemMatchStatus;
+  /** 0..1 similarity that drove the decision */
+  score: number;
+}
+
+/** One supplier's full technical-approval picture against the PR. */
+export interface SupplierMatch {
+  supplier: string;
+  quotationId: string;
+  /** one entry per PRODUCT line the supplier quoted (freight/charge lines excluded) */
+  items: SupplierItemMatch[];
+  /** PR item indices this supplier did NOT quote at all (missing from its offer) */
+  missingPrIndexes: number[];
+  approvedCount: number;
+  mismatchCount: number;
+  /** true only when every PR item is matched AND no quoted item is a mismatch */
+  allMatched: boolean;
+}
+
+/** Matching of every supplier's line items against the company PR. */
+export interface PrMatchResult {
+  bySupplier: SupplierMatch[];
+  /** similarity threshold used (0..1) — surfaced for transparency */
+  threshold: number;
+}
+
 export type RiskType =
   | 'missing_delivery'
   | 'missing_warranty'
@@ -101,7 +187,9 @@ export type RiskType =
   | 'risky_payment_terms'
   | 'expired_validity'
   | 'short_validity'
-  | 'incomplete_quotation';
+  | 'incomplete_quotation'
+  | 'technical_mismatch'
+  | 'missing_pr_item';
 
 export type RiskSeverity = 'high' | 'medium' | 'low';
 
@@ -203,6 +291,16 @@ export interface AnalysisResult {
   risks: RiskFlag[];
   /** true when results are the built-in sample (explicit "Load sample" only) */
   simulated: boolean;
+  /**
+   * The company's internal Purchase Requisition, when one was uploaded with the
+   * quotations. Its items feed line-item matching / Technical Approval (Phase 2).
+   */
+  purchaseRequisition?: PurchaseRequisition | null;
+  /**
+   * Per-supplier matching of quoted line items against the PR items. Present
+   * only when both a PR and quotations were provided.
+   */
+  prMatch?: PrMatchResult | null;
   /** per-file extraction diagnostics (real uploads only) */
   debug?: ExtractionDebug[];
 }
@@ -247,3 +345,18 @@ export const formatCurrency = (value: number | null, currency = 'USD') => {
 
 export const formatDelivery = (days: number | null) =>
   days == null ? '—' : `${days} day${days === 1 ? '' : 's'}`;
+
+/**
+ * Default Technical-Approval signature blocks — the current 5-role layout, used
+ * when the user hasn't customized them. Real documents vary in BOTH count and
+ * role names, so this is only a starting point; the UI lets the user
+ * add / rename / reorder / toggle blocks freely. Defined here (dependency-free)
+ * so the config UI can import it without pulling in the PDF renderer.
+ */
+export const DEFAULT_SIGNATURE_ROLES = [
+  'Planning Engineer',
+  'Planning Team Leader',
+  'PM Section Head Response',
+  'Mech. Manager Response',
+  'VP Operations Response',
+];

@@ -8,7 +8,6 @@ import {
   ArrowDown,
   ArrowUp,
   BarChart3,
-  ClipboardCheck,
   Clock,
   Download,
   HelpCircle,
@@ -48,10 +47,11 @@ import {
   formatDelivery,
   type RiskFlag,
   type RiskSeverity,
-  type ScoreWeights,
   type SupplierScore,
 } from '@/lib/workspace-types';
-import { ComparisonMatrix } from './comparison-matrix';
+import { PrComparisonTable } from './pr-comparison-table';
+import { TechnicalApproval } from './technical-approval';
+import { ApprovalFormDownload } from './approval-form-download';
 import { KpiCards } from './kpi-cards';
 import { CurrencyToggle, MoneyDual, useCurrencyMode } from './currency-mode';
 
@@ -448,14 +448,7 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
             icon={Download}
             load={() => import('@/lib/report-pdf').then((m) => m.generateReportPdf)}
           />
-          <PdfDownloadButton
-            analysis={analysis}
-            label="Download Approval Form (PDF)"
-            filePrefix="technical-approval-form"
-            variant="outline"
-            icon={ClipboardCheck}
-            load={() => import('@/lib/approval-form-pdf').then((m) => m.generateApprovalFormPdf)}
-          />
+          <ApprovalFormDownload analysis={analysis} />
         </div>
       </div>
 
@@ -604,7 +597,15 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
         </div>
       </div>
 
-      <ComparisonMatrix quotations={quotations} mode={currencyMode} />
+      {analysis.purchaseRequisition && analysis.prMatch && (
+        <TechnicalApproval
+          pr={analysis.purchaseRequisition}
+          match={analysis.prMatch}
+          quotations={quotations}
+        />
+      )}
+
+      <PrComparisonTable analysis={analysis} mode={currencyMode} />
 
       <AnalysisCharts quotations={quotations} scored={scored} />
 

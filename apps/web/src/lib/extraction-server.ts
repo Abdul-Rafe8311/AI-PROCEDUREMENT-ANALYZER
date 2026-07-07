@@ -19,6 +19,8 @@ import type {
   FieldProvenance,
   LineItem,
   LineItemCategory,
+  PrItem,
+  PurchaseRequisition,
   StatedTotal,
 } from './workspace-types';
 
@@ -253,19 +255,20 @@ const SCAN_NOTE = [
   'company name appears anywhere for that supplier.',
 ].join('\n');
 
-// ── LLM structured extraction (Groq preferred, OpenAI fallback) ──
-async function llmExtract(
-  text: string,
-): Promise<{ data: LlmResult | null; error: string | null }> {
+// ── Raw structured-extraction call (Groq preferred, OpenAI fallback) ──
+// Sends a system prompt + user content and returns the model's raw JSON text.
+// Shared by supplier-quotation and purchase-requisition extraction so both use
+// the same provider, JSON-mode, and error handling.
+async function callExtractionLlm(
+  system: string,
+  userContent: string,
+): Promise<{ content: string | null; error: string | null }> {
   const provider = resolveProvider();
   if (!provider) {
     const error = 'No LLM provider configured — set GROQ_API_KEY (or OPENAI_API_KEY).';
     log(error);
-    return { data: null, error };
+    return { content: null, error };
   }
-
-  const system = EXTRACTION_SYSTEM_PROMPT;
-
   try {
     const res = await fetch(provider.url, {
       method: 'POST',
@@ -276,7 +279,7 @@ async function llmExtract(
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: system },
-          { role: 'user', content: `DOCUMENT TEXT:\n${buildExtractionInput(text)}` },
+          { role: 'user', content: userContent },
         ],
       }),
     });
@@ -284,32 +287,44 @@ async function llmExtract(
       const body = await res.text().catch(() => '');
       const error = `LLM HTTP ${res.status} (model "${provider.model}"): ${body.slice(0, 300)}`;
       log(error);
-      return { data: null, error };
+      return { content: null, error };
     }
     const data = await res.json();
     const content = data?.choices?.[0]?.message?.content;
     if (!content) {
       const error = 'LLM returned an empty response.';
       log(error);
-      return { data: null, error };
+      return { content: null, error };
     }
-    try {
-      const suppliers = normalizeSuppliers(JSON.parse(content));
-      if (!suppliers.length) {
-        const error = 'LLM returned no supplier data.';
-        log(error);
-        return { data: null, error };
-      }
-      return { data: { suppliers }, error: null };
-    } catch {
-      const error = `LLM returned non-JSON content: ${String(content).slice(0, 200)}`;
-      log(error);
-      return { data: null, error };
-    }
+    return { content, error: null };
   } catch (err) {
     const error = `LLM request failed: ${(err as Error).message}`;
     log(error);
-    return { data: null, error };
+    return { content: null, error };
+  }
+}
+
+// ── LLM structured extraction (supplier quotations) ──
+async function llmExtract(
+  text: string,
+): Promise<{ data: LlmResult | null; error: string | null }> {
+  const { content, error } = await callExtractionLlm(
+    EXTRACTION_SYSTEM_PROMPT,
+    `DOCUMENT TEXT:\n${buildExtractionInput(text)}`,
+  );
+  if (!content) return { data: null, error };
+  try {
+    const suppliers = normalizeSuppliers(JSON.parse(content));
+    if (!suppliers.length) {
+      const e = 'LLM returned no supplier data.';
+      log(e);
+      return { data: null, error: e };
+    }
+    return { data: { suppliers }, error: null };
+  } catch {
+    const e = `LLM returned non-JSON content: ${String(content).slice(0, 200)}`;
+    log(e);
+    return { data: null, error: e };
   }
 }
 
@@ -718,6 +733,281 @@ function emptyQuotation(id: string, fileName: string): ExtractedQuotation {
       warranty: empty(),
     },
   };
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Purchase Requisition (PR) extraction
+// ────────────────────────────────────────────────────────────────────────
+// The company's OWN internal requisition (an "Approved Requisition Report"),
+// uploaded alongside supplier quotations. It carries a Request No. and a list
+// of requisitioned items (item code, description in English + Arabic, qty,
+// unit). Its cost / consumption-history columns are NOT quotation prices and
+// are intentionally ignored — only what's needed to match against supplier
+// line items (Phase 2) is captured.
+// ════════════════════════════════════════════════════════════════════════
+
+interface LlmPrItem {
+  itemCode: string | null;
+  description: string | null;
+  descriptionArabic?: string | null;
+  quantity: number | null;
+  unit: string | null;
+}
+
+interface LlmPr {
+  requestNo: string | null;
+  date: string | null;
+  departmentCode: string | null;
+  requesterName: string | null;
+  approvedBy: string | null;
+  items: LlmPrItem[];
+}
+
+// Shared schema + rules for reading a PR, used by BOTH the text path (Groq) and
+// the scanned/image vision path (Claude) so the output shape is identical.
+const PR_EXTRACTION_SYSTEM_PROMPT = [
+  'You extract structured data from a COMPANY-INTERNAL PURCHASE REQUISITION (PR),',
+  'also called an "Approved Requisition Report". This is NOT a supplier quotation —',
+  'it is the buyer\'s own internal request listing the materials they need. It has',
+  'NO prices to compare. Return ONLY valid JSON matching this TypeScript type, no prose:',
+  '{',
+  '  requestNo: string|null,       // "Request No.", "PR No", "Requisition No", "PR#"',
+  '  date: string|null,            // requisition date exactly as written',
+  '  departmentCode: string|null,  // department / cost-centre code',
+  '  requesterName: string|null,   // person who raised the request',
+  '  approvedBy: string|null,      // person who approved it',
+  '  items: {',
+  '    itemCode: string|null,          // the company item / material / stock code',
+  '    description: string,            // item description in ENGLISH, exactly as written',
+  '    descriptionArabic: string|null, // Arabic description if the same row has one',
+  '    quantity: number|null,          // requested quantity',
+  '    unit: string|null               // unit of measure (SET, PCS, NO, EA, KG, M ...)',
+  '  }[]',
+  '}',
+  '',
+  'Rules: use ONLY values present in the document — never invent. Numbers must be',
+  'plain (no thousands separators or symbols). If a field is absent, use null.',
+  '',
+  'ITEMS: capture EVERY requisition line, scanning the ENTIRE document. Keep each',
+  'item\'s FULL description text (it may be long and include grade/spec, e.g.',
+  '"Anchor, Corrugated, Type Tws.10(60)-200(140)-40-253, Material Grade 253 Ma,',
+  'with Plastic Caps"). If a row shows the description in both English and Arabic,',
+  'put the English in `description` and the Arabic in `descriptionArabic`. IGNORE',
+  'the cost, price, consumption-history, average-consumption and stock columns —',
+  'they are not needed. Do NOT treat any number in those columns as an item price.',
+].join('\n');
+
+const PR_SCAN_NOTE = [
+  'This purchase requisition is a SCANNED or PHOTOGRAPHED page (or several pages) —',
+  'there is no digital text layer, so read the values directly from the page',
+  'image(s). Read tables, stamps and handwriting where legible, and transcribe',
+  'item codes and quantities EXACTLY. Arabic text may appear right-to-left — keep',
+  'it as `descriptionArabic`. If a value is genuinely illegible, use null rather',
+  'than guessing.',
+].join('\n');
+
+// Accept the PR object directly, or wrapped as { purchaseRequisition: {...} } /
+// { pr: {...} }, and coerce to LlmPr (null when there's nothing usable).
+function normalizePr(parsed: unknown): LlmPr | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+  const outer = parsed as Record<string, unknown>;
+  const inner =
+    (outer.purchaseRequisition as Record<string, unknown> | undefined) ??
+    (outer.pr as Record<string, unknown> | undefined) ??
+    outer;
+  const itemsRaw = Array.isArray(inner.items)
+    ? inner.items
+    : Array.isArray(outer.items)
+      ? outer.items
+      : [];
+  const str = (v: unknown): string | null =>
+    v == null ? null : String(v).trim() || null;
+  return {
+    requestNo: str(inner.requestNo ?? inner.requestNumber ?? inner.prNumber),
+    date: str(inner.date),
+    departmentCode: str(inner.departmentCode ?? inner.department),
+    requesterName: str(inner.requesterName ?? inner.requester),
+    approvedBy: str(inner.approvedBy ?? inner.approver),
+    items: (itemsRaw as unknown[])
+      .filter((it): it is Record<string, unknown> => !!it && typeof it === 'object')
+      .map((it) => ({
+        itemCode: str(it.itemCode ?? it.code ?? it.materialCode),
+        description: str(it.description ?? it.itemDescription) ?? '',
+        descriptionArabic: str(it.descriptionArabic ?? it.arabicDescription),
+        quantity: num(it.quantity ?? it.qty),
+        unit: str(it.unit ?? it.uom),
+      })),
+  };
+}
+
+function mapPr(
+  data: LlmPr,
+  fileName: string,
+  method: 'llm' | 'vision',
+): PurchaseRequisition {
+  const items: PrItem[] = (data.items ?? [])
+    .map((it) => ({
+      itemCode: it.itemCode?.trim() || null,
+      description: (it.description ?? '').trim(),
+      descriptionArabic: it.descriptionArabic?.trim() || null,
+      quantity: num(it.quantity),
+      unit: it.unit?.trim() || null,
+    }))
+    // Keep any row that identifies an item (a description or a code).
+    .filter((it) => it.description || it.itemCode);
+  return {
+    fileName,
+    requestNo: data.requestNo?.trim() || null,
+    date: data.date?.trim() || null,
+    departmentCode: data.departmentCode?.trim() || null,
+    requesterName: data.requesterName?.trim() || null,
+    approvedBy: data.approvedBy?.trim() || null,
+    method,
+    items,
+  };
+}
+
+async function llmExtractPr(
+  text: string,
+): Promise<{ data: LlmPr | null; error: string | null }> {
+  const { content, error } = await callExtractionLlm(
+    PR_EXTRACTION_SYSTEM_PROMPT,
+    `PURCHASE REQUISITION TEXT:\n${buildExtractionInput(text)}`,
+  );
+  if (!content) return { data: null, error };
+  const data = normalizePr(looseJsonParse(content));
+  if (!data) {
+    const e = `PR extraction returned non-JSON content: ${String(content).slice(0, 200)}`;
+    log(e);
+    return { data: null, error: e };
+  }
+  return { data, error: null };
+}
+
+// Pure parse seam (no IO): accept whatever JSON the model returned and build a
+// PurchaseRequisition. Exposed so PR normalization (bilingual rows, ignored cost
+// columns, key aliases) is unit-testable without calling an LLM. Returns null
+// when nothing usable was found.
+export function purchaseRequisitionFromLlm(
+  raw: unknown,
+  fileName: string,
+  method: 'llm' | 'vision' = 'llm',
+): PurchaseRequisition | null {
+  const data = normalizePr(raw);
+  if (!data) return null;
+  const pr = mapPr(data, fileName, method);
+  return pr.items.length ? pr : null;
+}
+
+export interface PrExtraction {
+  /** the extracted requisition, or null when nothing usable was read */
+  pr: PurchaseRequisition | null;
+  /** raw text length parsed — 0 for a scan/image read via vision */
+  textLength: number;
+  /** how it was read */
+  method: 'llm' | 'vision' | 'unreadable';
+  /** technical failure reason (null on success) */
+  error: string | null;
+}
+
+// Read the company's Purchase Requisition from an uploaded file. Digital text
+// (PDF/DOCX) goes through Groq; a scanned PDF or image is read with Claude
+// vision — mirroring supplier-quotation extraction. Never invents data.
+export async function extractPurchaseRequisition(
+  buffer: Buffer,
+  fileName: string,
+  mime: string,
+): Promise<PrExtraction> {
+  const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+  const isPdf = ext === 'pdf' || mime === 'application/pdf';
+  const isImage = ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext) || mime.startsWith('image/');
+  const { text, error: textError } = await extractText(buffer, fileName, mime);
+
+  if (!text.trim()) {
+    // Scanned PDF or image upload → read it with Claude vision.
+    if (isPdf || isImage) {
+      if (!isAnthropicConfigured()) {
+        return {
+          pr: null,
+          textLength: 0,
+          method: 'unreadable',
+          error: `${isPdf ? 'Scanned/image PDF' : 'Image'} PR needs AI vision to read, but it is not configured (set ANTHROPIC_API_KEY).`,
+        };
+      }
+      let media: VisionMedia;
+      if (isPdf) {
+        if (buffer.length > MAX_PDF_BYTES) {
+          return {
+            pr: null,
+            textLength: 0,
+            method: 'unreadable',
+            error: `Scanned PR PDF is too large (${(buffer.length / 1048576).toFixed(1)} MB); the vision limit is 30 MB.`,
+          };
+        }
+        const pages = await pdfPageCount(buffer);
+        if (pages != null && pages > MAX_SCAN_PAGES) {
+          return {
+            pr: null,
+            textLength: 0,
+            method: 'unreadable',
+            error: `Scanned PR PDF has ${pages} pages; automatic scan reading is capped at ${MAX_SCAN_PAGES} pages.`,
+          };
+        }
+        media = { kind: 'pdf', base64: buffer.toString('base64') };
+      } else {
+        if (buffer.length > MAX_IMAGE_BYTES) {
+          return {
+            pr: null,
+            textLength: 0,
+            method: 'unreadable',
+            error: `PR image is too large (${(buffer.length / 1048576).toFixed(1)} MB); the vision limit is 5 MB.`,
+          };
+        }
+        media = { kind: 'image', base64: buffer.toString('base64'), mediaType: imageMediaType(ext, mime) };
+      }
+      try {
+        const content = await extractJsonFromMedia({
+          system: `${PR_EXTRACTION_SYSTEM_PROMPT}\n\n${PR_SCAN_NOTE}`,
+          instruction:
+            `Extract the structured purchase-requisition data from the attached ${isPdf ? 'scanned PDF' : 'image'}. ` +
+            'Return ONLY the JSON object described above — no prose, no markdown fences.',
+          media,
+        });
+        const data = normalizePr(looseJsonParse(content));
+        if (!data || !data.items.length) {
+          log(`vision PR extraction returned no items for "${fileName}"`);
+          return {
+            pr: null,
+            textLength: 0,
+            method: 'unreadable',
+            error: 'The purchase requisition could not be read — no requisition items were found. Please upload a clearer scan or a text-based file.',
+          };
+        }
+        return { pr: mapPr(data, fileName, 'vision'), textLength: 0, method: 'vision', error: null };
+      } catch (err) {
+        const error = `PR vision extraction failed for "${fileName}": ${(err as Error).message}`;
+        log(error);
+        return { pr: null, textLength: 0, method: 'unreadable', error };
+      }
+    }
+    return {
+      pr: null,
+      textLength: 0,
+      method: 'unreadable',
+      error: textError ?? 'No text could be extracted from the purchase-requisition file.',
+    };
+  }
+
+  const { data, error } = await llmExtractPr(text);
+  if (!data || !data.items.length) {
+    return {
+      pr: null,
+      textLength: text.length,
+      method: 'unreadable',
+      error: error ?? 'No requisition items could be extracted from the purchase-requisition file.',
+    };
+  }
+  return { pr: mapPr(data, fileName, 'llm'), textLength: text.length, method: 'llm', error: null };
 }
 
 export { SUPPORTED_CURRENCIES };
