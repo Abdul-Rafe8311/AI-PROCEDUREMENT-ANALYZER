@@ -78,3 +78,36 @@ test('PHASE 1: empty / itemless input yields null (never a fake requisition)', (
   assert.equal(purchaseRequisitionFromLlm(null, 'x.pdf'), null);
   assert.equal(purchaseRequisitionFromLlm({ requestNo: 'PR-1', items: [] }, 'x.pdf'), null);
 });
+
+// Buyer's real PR: Request No. 12601612, header subject "Anchors for production
+// department". The header subject must be captured on the PR (not a line item).
+test('PR DESCRIPTION: header subject is captured (buyer PR 12601612)', () => {
+  const pr = purchaseRequisitionFromLlm(
+    {
+      requestNo: '12601612',
+      description: 'Anchors for production department',
+      items: [{ itemCode: '1000123', description: 'Anchor, Corrugated, 253 Ma', quantity: 200, unit: 'SET' }],
+    },
+    'requisition-12601612.pdf',
+  );
+  assert.equal(pr!.requestNo, '12601612');
+  assert.equal(pr!.description, 'Anchors for production department');
+});
+
+test('PR DESCRIPTION: accepts subject/purpose/prDescription aliases', () => {
+  for (const key of ['subject', 'purpose', 'prDescription', 'title'] as const) {
+    const pr = purchaseRequisitionFromLlm(
+      { requestNo: 'R', [key]: 'Anchors for production department', items: [{ description: 'Anchor', quantity: 1 }] },
+      'x.pdf',
+    );
+    assert.equal(pr!.description, 'Anchors for production department', `alias ${key}`);
+  }
+});
+
+test('PR DESCRIPTION: absent header subject stays null (never invented)', () => {
+  const pr = purchaseRequisitionFromLlm(
+    { requestNo: 'R', items: [{ description: 'Anchor', quantity: 1 }] },
+    'x.pdf',
+  );
+  assert.equal(pr!.description, null);
+});

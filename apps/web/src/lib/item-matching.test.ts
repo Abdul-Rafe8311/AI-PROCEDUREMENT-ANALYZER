@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  derivePrSubject,
   MATCH_THRESHOLD,
   matchQuotationsToPr,
   matchSupplierItems,
@@ -131,4 +132,29 @@ test('PHASE 2: matchQuotationsToPr covers every supplier', () => {
     result.bySupplier.map((s) => s.supplier),
     ['Gulf Refractory', 'Delta Traders'],
   );
+});
+
+// Fallback PR subject when the requisition has no header description of its own:
+// the dominant item NOUN across the line items (ignoring adjectives/spec codes).
+test('SUBJECT: derives dominant noun across items (anchors → "Anchors")', () => {
+  assert.equal(
+    derivePrSubject([
+      'Anchor, Corrugated, Type Tws.10(60)-200(140)-40-253, Grade 253 Ma',
+      'Corrugated Anchor 253 c/w plastic caps',
+      'Anchor Corrugated, 304 SS',
+    ]),
+    'Anchors',
+  );
+});
+
+test('SUBJECT: leads on the noun, not a leading adjective ("Refractory" → "Castables")', () => {
+  assert.equal(
+    derivePrSubject(['Refractory Castable, 60% Alumina', 'Refractory Castable 1600C']),
+    'Castables',
+  );
+});
+
+test('SUBJECT: heterogeneous items with no majority noun → blank (never a wrong guess)', () => {
+  assert.equal(derivePrSubject(['Anchor 253', 'Refractory Castable', 'Gate Valve DN50']), '');
+  assert.equal(derivePrSubject([]), '');
 });

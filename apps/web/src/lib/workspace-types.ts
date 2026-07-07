@@ -119,6 +119,10 @@ export interface PrItem {
 export interface PurchaseRequisition {
   /** the file it was extracted from */
   fileName: string;
+  /** short header-level subject of the whole requisition (e.g. "Anchors for
+   * production department"), from a "Description"/"Subject"/"Purpose" field —
+   * NOT a line item. null when the header has no such summary. */
+  description?: string | null;
   /** Request No. / PR# from the document header — null when not stated */
   requestNo: string | null;
   /** requisition date as written — null when absent */

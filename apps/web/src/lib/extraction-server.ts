@@ -784,6 +784,7 @@ interface LlmPrItem {
 }
 
 interface LlmPr {
+  description: string | null;
   requestNo: string | null;
   date: string | null;
   departmentCode: string | null;
@@ -800,6 +801,10 @@ const PR_EXTRACTION_SYSTEM_PROMPT = [
   'it is the buyer\'s own internal request listing the materials they need. It has',
   'NO prices to compare. Return ONLY valid JSON matching this TypeScript type, no prose:',
   '{',
+  '  description: string|null,     // SHORT overall subject of the whole requisition',
+  '                                //   (e.g. "Anchors for production department") taken',
+  '                                //   from a header "Description"/"Subject"/"Purpose"/',
+  '                                //   "PR Description" field — NOT a line item. null if absent.',
   '  requestNo: string|null,       // "Request No.", "PR No", "Requisition No", "PR#"',
   '  date: string|null,            // requisition date exactly as written',
   '  departmentCode: string|null,  // department / cost-centre code',
@@ -852,6 +857,13 @@ function normalizePr(parsed: unknown): LlmPr | null {
   const str = (v: unknown): string | null =>
     v == null ? null : String(v).trim() || null;
   return {
+    description: str(
+      inner.description ??
+        inner.subject ??
+        inner.purpose ??
+        inner.prDescription ??
+        inner.title,
+    ),
     requestNo: str(inner.requestNo ?? inner.requestNumber ?? inner.prNumber),
     date: str(inner.date),
     departmentCode: str(inner.departmentCode ?? inner.department),
@@ -886,6 +898,7 @@ function mapPr(
     .filter((it) => it.description || it.itemCode);
   return {
     fileName,
+    description: data.description?.trim() || null,
     requestNo: data.requestNo?.trim() || null,
     date: data.date?.trim() || null,
     departmentCode: data.departmentCode?.trim() || null,

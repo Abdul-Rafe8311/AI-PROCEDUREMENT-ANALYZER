@@ -175,6 +175,54 @@ export function matchSupplierItems(
 
 const short = (s: string, n = 44) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
 
+// Common material / quality adjectives — excluded so a derived subject lands on
+// the item NOUN ("anchor", "castable") rather than a describing word.
+const SUBJECT_ADJECTIVES = new Set([
+  'corrugated', 'stainless', 'galvanized', 'galvanised', 'refractory', 'carbon',
+  'alloy', 'mild', 'heavy', 'duty', 'high', 'low', 'plastic', 'rubber', 'flexible',
+  'rigid', 'industrial', 'standard', 'general', 'spare', 'spares', 'complete',
+  'assorted', 'various', 'misc', 'miscellaneous', 'black', 'white', 'round',
+  'square', 'new', 'used', 'left', 'right',
+]);
+
+/**
+ * Best-effort short subject for a set of product line-item descriptions, used as
+ * a FALLBACK PR description when the requisition has no header subject of its own.
+ * Returns the dominant item noun (e.g. "Anchors") only when one word appears
+ * across a STRICT MAJORITY of the items; otherwise '' — better blank than a wrong
+ * guess. Spec codes, numbers and describing words are ignored.
+ */
+export function derivePrSubject(names: string[]): string {
+  const clean = names.map((n) => n?.trim()).filter((n): n is string => !!n);
+  if (!clean.length) return '';
+
+  const docFreq = new Map<string, number>();
+  const firstSeen = new Map<string, number>();
+  let order = 0;
+  for (const name of clean) {
+    const seen = new Set<string>();
+    for (const t of normalizeText(name).split(' ')) {
+      if (t.length < 4 || /\d/.test(t) || STOPWORDS.has(t) || SUBJECT_ADJECTIVES.has(t)) continue;
+      seen.add(t);
+      if (!firstSeen.has(t)) firstSeen.set(t, order++);
+    }
+    for (const t of seen) docFreq.set(t, (docFreq.get(t) ?? 0) + 1);
+  }
+
+  let best = '';
+  let bestN = 0;
+  for (const [t, n] of docFreq) {
+    if (n > bestN || (n === bestN && (firstSeen.get(t) ?? 0) < (firstSeen.get(best) ?? Infinity))) {
+      best = t;
+      bestN = n;
+    }
+  }
+  // Require a strict majority (covers "all items share this noun").
+  if (!best || bestN * 2 <= clean.length) return '';
+  const label = best.charAt(0).toUpperCase() + best.slice(1);
+  return label.endsWith('s') ? label : `${label}s`;
+}
+
 /**
  * Build AI-SUGGESTED Technical Comments per supplier from the PR matching. These
  * are STARTING POINTS a human reviews/overwrites — item-description match is
