@@ -4,6 +4,7 @@ import {
   ArrowRight,
   BarChart3,
   CheckCircle2,
+  ClipboardCheck,
   Clock,
   CreditCard,
   FileText,
@@ -13,7 +14,6 @@ import {
   ShieldAlert,
   Sparkles,
   Table2,
-  TrendingUp,
   Trophy,
   Truck,
   Upload,
@@ -82,14 +82,14 @@ const features = [
     desc: 'One-click, decision-ready reports to share with stakeholders and attach to your audit trail.',
   },
   {
-    icon: MessageSquare,
-    title: 'Chat With Quotations',
-    desc: 'Ask in plain language — "Which supplier has the best warranty?" — and get sourced, instant answers.',
+    icon: ClipboardCheck,
+    title: 'Technical Approval & PR Matching',
+    desc: 'Match supplier line items against your purchase requisition, flag spec mismatches, and export a pre-filled Technical Approval Form.',
   },
   {
-    icon: TrendingUp,
-    title: 'Executive Procurement Insights',
-    desc: 'Spend trends, supplier performance, and savings opportunities surfaced for leadership at a glance.',
+    icon: MessageSquare,
+    title: 'Chat With Your Quotations',
+    desc: 'Ask in plain language — "Which supplier has the best warranty?" — and get answers sourced from the uploaded documents.',
   },
 ] as const;
 
@@ -148,6 +148,7 @@ export default function Home() {
       <Hero />
       <Workflow />
       <Features />
+      <WhoFor />
       <Demo />
       <FinalCta />
       <SiteFooter />
@@ -401,6 +402,39 @@ function Features() {
           ))}
         </div>
       </div>
+    </section>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   Who it's for
+   ───────────────────────────────────────────── */
+function WhoFor() {
+  const audiences = [
+    'Procurement & purchasing teams',
+    'Planning departments',
+    'Construction & contracting',
+    'Manufacturing',
+    'Trading & distribution',
+  ];
+  return (
+    <section id="who" className="mx-auto max-w-6xl px-6 py-20 sm:py-24">
+      <SectionHeading
+        eyebrow="Who it's for"
+        title="Built for teams comparing supplier quotes by hand"
+        subtitle="Lining up quotations in spreadsheets is slow and error-prone — different formats, currencies, and terms make apples-to-apples comparison hard. This tool does that comparison for you and flags the risks, so the decision is faster and easier to defend."
+      />
+      <ul className="mx-auto mt-10 flex max-w-3xl flex-wrap justify-center gap-3">
+        {audiences.map((a) => (
+          <li
+            key={a}
+            className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium shadow-sm"
+          >
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-primary" />
+            {a}
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
