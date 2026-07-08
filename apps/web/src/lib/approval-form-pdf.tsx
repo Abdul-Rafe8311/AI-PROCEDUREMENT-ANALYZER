@@ -129,8 +129,10 @@ function ApprovalDocument({
   const prSubject =
     pr?.description?.trim() ||
     derivePrSubject(model.rows.filter((r) => r.kind === 'product').map((r) => r.label));
-  // Generation date — stamped into the TA Date field (the date this technical
-  // approval document was produced) and repeated in the footer.
+  // PDF creation date — shown ONLY in the "Generated on" note (and footer). It is
+  // deliberately kept OUT of the TA Date field: TA Date is the human approver's
+  // review date and must stay blank for them to fill in, so the two are never
+  // confused ("when this PDF was generated" vs "when it was actually reviewed").
   const generatedOn = new Date().toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
@@ -151,6 +153,7 @@ function ApprovalDocument({
     descRow: { flexDirection: 'row', borderWidth: 1, borderTopWidth: 0, borderColor: C.line, marginBottom: 6 },
     descCell: { flex: 1, paddingVertical: 2.5, paddingHorizontal: 5 },
     metaLabel: { fontFamily: 'Helvetica-Bold', color: C.ink },
+    faintVal: { color: C.faint, fontFamily: 'Helvetica-Oblique' },
     blockLabel: { fontSize: fs, fontFamily: 'Helvetica-Bold', color: C.muted, marginTop: 6, marginBottom: 2 },
     rowFlex: { flexDirection: 'row' },
     cellBox: { borderRightWidth: 1, borderRightColor: C.border, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 2, paddingHorizontal: 3, justifyContent: 'center' },
@@ -197,23 +200,28 @@ function ApprovalDocument({
           </Text>
         )}
 
-        {/* Compact form-style header block: TA Date (auto-stamped with the
-            generation date) and PR# on the top row; PR Description then Reviewed
-            By / Signature as rows below. Blank fields are for manual completion. */}
+        {/* Compact form-style header block. Top row: TA Date (LEFT BLANK — the
+            approver's own review date) · PR# · Generated on (the PDF creation
+            date, clearly distinct from TA Date). Then PR Description, then
+            Reviewed By / Signature. Blank fields are for manual completion. */}
         <View style={s.metaRow}>
-          <Text style={[s.metaCell, { width: 260 }]}>
+          <Text style={[s.metaCell, { width: 200 }]}>
             <Text style={s.metaLabel}>TA Date: </Text>
-            {generatedOn}
+            {/* left blank on purpose — filled in by the reviewer */}
+          </Text>
+          <Text style={[s.metaCell, { width: 200 }]}>
+            <Text style={s.metaLabel}>PR#: </Text>
+            {prNumber || <Text style={s.faintVal}>Not provided</Text>}
           </Text>
           <Text style={[s.metaCell, { flex: 1, borderRightWidth: 0 }]}>
-            <Text style={s.metaLabel}>PR#: </Text>
-            {prNumber}
+            <Text style={s.metaLabel}>Generated on: </Text>
+            {generatedOn}
           </Text>
         </View>
         <View style={s.metaRowMid}>
           <Text style={s.descCell}>
             <Text style={s.metaLabel}>PR Description: </Text>
-            {prSubject}
+            {prSubject || <Text style={s.faintVal}>Not provided</Text>}
           </Text>
         </View>
         <View style={s.descRow}>
