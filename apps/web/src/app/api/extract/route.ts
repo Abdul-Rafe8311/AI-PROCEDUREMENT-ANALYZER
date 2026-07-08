@@ -110,6 +110,7 @@ export async function POST(req: Request) {
       );
       if (pr) {
         purchaseRequisition = pr;
+        log(`PR "${name}" extracted ${pr.items.length} line item(s) (method=${method}, textLength=${textLength})`);
         debug.push({
           fileName: `${name} · Purchase Requisition${pr.requestNo ? ` (${pr.requestNo})` : ''}`,
           method,
@@ -124,8 +125,27 @@ export async function POST(req: Request) {
           lineItems: pr.items.length,
           ...(isDev && error ? { error } : {}),
         });
-      } else if (error) {
-        reasons.push(`${name} (PR): ${error}`);
+      } else {
+        // PR was uploaded but yielded NO usable line items. Surface it in the debug
+        // panel (not just server logs) so a silent fall-through to "no PR" is visible
+        // — this is the exact condition that makes the grid have no requisition rows.
+        const detail = error ?? 'no requisition line items were found in the document';
+        reasons.push(`${name} (PR): ${detail}`);
+        log(`PR "${name}" produced 0 line items (method=${method}, textLength=${textLength}) — ${detail}`);
+        debug.push({
+          fileName: `${name} · Purchase Requisition — NOT USED (0 items)`,
+          method,
+          textLength,
+          supplier: 'Company PR',
+          currency: '—',
+          currencyConfidence: 0,
+          total: null,
+          delivery: null,
+          payment: null,
+          warranty: null,
+          lineItems: 0,
+          ...(isDev ? { error: detail } : {}),
+        });
       }
     }
 

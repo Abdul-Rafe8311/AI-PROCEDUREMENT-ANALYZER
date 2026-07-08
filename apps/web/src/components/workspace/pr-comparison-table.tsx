@@ -30,8 +30,10 @@ export function PrComparisonTable({
   mode: CurrencyMode;
 }) {
   const { quotations } = analysis;
-  const model = buildComparisonModel(quotations, analysis.purchaseRequisition, analysis.prMatch);
-  if (!model.suppliers.length || !model.rows.length) return null;
+  // prOnly: rows come ONLY from the PR document — never a supplier-description
+  // union. With no PR line items the grid shows none (+ an explanatory note).
+  const model = buildComparisonModel(quotations, analysis.purchaseRequisition, analysis.prMatch, { prOnly: true });
+  if (!model.suppliers.length) return null;
 
   const qById = new Map(quotations.map((q) => [q.id, q]));
   const indexed: IndexedSupplier[] = model.suppliers.map((s, i) => ({ ...s, colIndex: i }));
@@ -51,28 +53,30 @@ export function PrComparisonTable({
           )}
         </span>
         <span className="text-xs text-muted-foreground">
-          {model.hasPr ? 'One row per requisition item' : 'Union of quoted items'} · unit price ·{' '}
+          {model.hasPr ? 'One row per requisition item' : 'No requisition items'} · unit price ·{' '}
           <span className="text-success">green = lowest</span>
         </span>
       </div>
 
-      <div className="space-y-6 py-2">
-        {groups.map((group, gi) => (
-          <GroupBlock
-            key={gi}
-            group={group}
-            rows={model.rows}
-            qById={qById}
-            mode={mode}
-            label={groups.length > 1 ? `Suppliers ${group[0].colIndex + 1}–${group[group.length - 1].colIndex + 1} of ${model.suppliers.length}` : null}
-          />
-        ))}
-      </div>
+      {model.rows.length > 0 && (
+        <div className="space-y-6 py-2">
+          {groups.map((group, gi) => (
+            <GroupBlock
+              key={gi}
+              group={group}
+              rows={model.rows}
+              qById={qById}
+              mode={mode}
+              label={groups.length > 1 ? `Suppliers ${group[0].colIndex + 1}–${group[group.length - 1].colIndex + 1} of ${model.suppliers.length}` : null}
+            />
+          ))}
+        </div>
+      )}
 
       {!model.hasPr && (
         <p className="border-t border-border px-5 py-2.5 text-xs text-muted-foreground">
-          No company Purchase Requisition was uploaded — rows are the union of the suppliers&apos; own quoted
-          items. Upload a PR to compare against your requisition line by line.
+          The Purchase Requisition produced no line items, so there is nothing to compare against line by line.
+          Re-upload the PR (with its item table) in the requisition slot to populate the rows.
         </p>
       )}
       {hasCharge && (
@@ -186,6 +190,7 @@ function RowView({
             unitPrice={cell?.unitPrice ?? null}
             currency={cell?.currency ?? 'USD'}
             unitPriceUsd={cell?.unitPriceUsd ?? null}
+            specDiff={cell?.matchState === 'quoted_spec_diff'}
             isLow={isLow}
             mode={mode}
           />
@@ -200,6 +205,7 @@ function SupplierCells({
   unitPrice,
   currency,
   unitPriceUsd,
+  specDiff,
   isLow,
   mode,
 }: {
@@ -207,6 +213,7 @@ function SupplierCells({
   unitPrice: number | null;
   currency: string;
   unitPriceUsd: number | null;
+  specDiff: boolean;
   isLow: boolean;
   mode: CurrencyMode;
 }) {
@@ -217,7 +224,12 @@ function SupplierCells({
       </td>
       <td className={cn('nums px-3 py-2.5 text-right', isLow ? 'bg-success/10 font-semibold text-success' : 'text-muted-foreground')}>
         {unitPrice != null ? (
-          <MoneyDual amount={unitPrice} currency={currency} usd={unitPriceUsd} mode={mode} precise />
+          <>
+            <MoneyDual amount={unitPrice} currency={currency} usd={unitPriceUsd} mode={mode} precise />
+            {specDiff && (
+              <span className="mt-0.5 block text-[10px] font-medium italic text-warning">spec differs</span>
+            )}
+          </>
         ) : (
           '—'
         )}
