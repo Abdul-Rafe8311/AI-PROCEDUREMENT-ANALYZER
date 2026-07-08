@@ -143,7 +143,17 @@ test('PR 12601612 · Krosaki & Refratechnik: 5/5 items QUOTED (0 not quoted); ch
     assert.equal(sm.notQuotedCount, 0, `${name} should have 0 not-quoted`);
     assert.equal(sm.matchCount + sm.specDiffCount + sm.notQuotedCount, 5, `${name} states must sum to 5`);
     assert.ok(sm.prItems.every((p) => p.state !== 'not_quoted'), `${name} every PR item is quoted`);
+    // Quantity-primary: part-number quotes line up by qty and, having no
+    // conflicting grade, show as CLEAN matches (not "spec differs").
+    assert.equal(sm.specDiffCount, 0, `${name} part-number quotes should be clean matches`);
+    assert.ok(sm.prItems.every((p) => p.mappedBy === 'quantity'), `${name} mapped by quantity`);
   }
+});
+
+test('PR 12601612 · Supply Wave is the ONLY supplier flagged spec-differs (grade SS 310)', () => {
+  const match = matchQuotationsToPr(quotations, pr);
+  const flagged = match.bySupplier.filter((s) => s.specDiffCount > 0).map((s) => s.supplier);
+  assert.deepEqual(flagged, ['Supply Wave']);
 });
 
 test('PR 12601612: unit prices keep 2 decimals (never rounded to integers)', () => {

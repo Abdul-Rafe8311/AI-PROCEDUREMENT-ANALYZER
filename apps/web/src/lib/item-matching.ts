@@ -124,17 +124,38 @@ function itemCodeHit(name: string, code: string | null): boolean {
 }
 
 /**
+ * True when a supplier line and a PR item are clearly the SAME item family
+ * (strong word overlap) BUT their distinctive spec codes disagree — i.e. a real
+ * grade/dimension conflict such as "Grade SS 310" vs "Grade 253 Ma", or
+ * "…-40-304…" vs "…-40-253…". This is the ONLY thing that downgrades a quoted
+ * cell to "spec differs": a supplier who simply quotes by internal part number
+ * (no recognizable spec codes) is NOT a conflict and stays a clean match.
+ */
+function specConflict(name: string, prText: string): boolean {
+  const A = specCodes(name);
+  const B = specCodes(prText);
+  if (!A.size || !B.size) return false; // no distinctive codes on one side → can't conflict
+  for (const t of A) if (B.has(t)) return false; // a shared distinctive code → same spec
+  // Codes exist on both sides and none agree → conflict only if the rows are
+  // otherwise the same item family (so we don't flag two unrelated lines).
+  return jaccard(wordTokens(name), wordTokens(prText)) >= 0.4;
+}
+
+/**
  * Match ONE supplier's quoted product items against the PR items, producing a
  * three-state verdict PER PR ITEM (so nothing is double-counted). Charge lines
  * (freight/shipping/insurance/handling) are not requisition items and are excluded.
  *
- * Two-pass mapping (priority):
- *   1) strong DESCRIPTION/spec similarity — the reworded-but-same-item case;
- *   2) FALLBACK by EXACT quantity for lines the description didn't place — the
- *      supplier who quotes by internal part number. Line order is the tiebreaker
- *      when several PR items share a quantity.
- * A line placed in pass 1 → quoted_match; a line placed only by qty (pass 2) →
- * quoted_spec_diff ("quoted, spec differs"); a PR item nothing maps to → not_quoted.
+ * Mapping priority (quantity is the PRIMARY key — the 5 suppliers describe the
+ * same anchors 5 different ways, so text similarity alone mis-places rows):
+ *   1) EXACT QUANTITY — each supplier line, in order, claims the best still-free
+ *      PR row sharing its quantity (description breaks ties among equal-qty rows;
+ *      line order is the final tiebreaker);
+ *   2) DESCRIPTION similarity — a secondary pass only for lines whose quantity
+ *      matched no PR row (or a PR row with no quantity).
+ * A mapped line is quoted_match UNLESS a spec/grade CONFLICT is detected
+ * (same item family, distinctive codes disagree) → quoted_spec_diff. A PR item
+ * that nothing maps to → not_quoted. Nothing is ever dropped or hidden.
  */
 export function matchSupplierItems(
   quotation: ExtractedQuotation,
@@ -154,15 +175,41 @@ export function matchSupplierItems(
   const prScore: number[] = new Array(prItems.length).fill(0);
   const lineUsed: boolean[] = new Array(products.length).fill(false);
 
-  // Pass 1 — strong description matches, assigned greedily from highest score down
-  // so the best evidence wins and neither a line nor a PR item is used twice.
+  // Pass 1 — PRIMARY: exact quantity. Each supplier line, in document order,
+  // claims the best still-free PR row that shares its quantity. Among several
+  // equal-quantity rows, description similarity picks the best (order breaks ties).
+  products.forEach((li, i) => {
+    if (li.quantity == null) return;
+    let bestJ = -1;
+    let bestSc = -1;
+    for (let j = 0; j < prItems.length; j++) {
+      if (prLine[j] != null) continue;
+      if (prItems[j].quantity == null || prItems[j].quantity !== li.quantity) continue;
+      const sc = simOf(li, prItems[j]);
+      if (sc > bestSc) {
+        bestSc = sc;
+        bestJ = j;
+      }
+    }
+    if (bestJ >= 0) {
+      prLine[bestJ] = i;
+      prBy[bestJ] = 'quantity';
+      prScore[bestJ] = Math.round(bestSc * 100) / 100;
+      lineUsed[i] = true;
+    }
+  });
+
+  // Pass 2 — SECONDARY: description similarity for lines the quantity pass didn't
+  // place (a supplier who quoted a quantity no PR row has, or a PR row with no qty).
   const cands: { li: number; pr: number; sc: number }[] = [];
-  products.forEach((li, i) =>
+  products.forEach((li, i) => {
+    if (lineUsed[i]) return;
     prItems.forEach((pr, j) => {
+      if (prLine[j] != null) return;
       const sc = simOf(li, pr);
       if (sc >= threshold) cands.push({ li: i, pr: j, sc });
-    }),
-  );
+    });
+  });
   cands.sort((a, b) => b.sc - a.sc);
   for (const c of cands) {
     if (lineUsed[c.li] || prLine[c.pr] != null) continue;
@@ -172,28 +219,20 @@ export function matchSupplierItems(
     lineUsed[c.li] = true;
   }
 
-  // Pass 2 — exact-quantity fallback for still-unplaced lines (part-number quotes).
-  products.forEach((li, i) => {
-    if (lineUsed[i] || li.quantity == null) return;
-    for (let j = 0; j < prItems.length; j++) {
-      if (prLine[j] != null) continue;
-      if (prItems[j].quantity != null && prItems[j].quantity === li.quantity) {
-        prLine[j] = i;
-        prBy[j] = 'quantity';
-        prScore[j] = Math.round(simOf(li, prItems[j]) * 100) / 100;
-        lineUsed[i] = true;
-        break;
-      }
-    }
-  });
-
-  const prItemMatches: PrItemMatch[] = prItems.map((_pr, j) => {
+  const prItemMatches: PrItemMatch[] = prItems.map((pr, j) => {
     const li = prLine[j];
     if (li == null) {
       return { prIndex: j, state: 'not_quoted' as PrItemMatchState, supplierItem: null, score: 0, mappedBy: null };
     }
-    const state: PrItemMatchState = prBy[j] === 'description' ? 'quoted_match' : 'quoted_spec_diff';
-    return { prIndex: j, state, supplierItem: products[li], score: prScore[j], mappedBy: prBy[j] };
+    const line = products[li];
+    // Quantity-mapped lines are clean matches unless a real spec/grade conflict is
+    // detectable; description-mapped lines are matches by construction.
+    const conflict =
+      prBy[j] === 'quantity' &&
+      !itemCodeHit(line.name, pr.itemCode) &&
+      specConflict(line.name, prItemText(pr));
+    const state: PrItemMatchState = conflict ? 'quoted_spec_diff' : 'quoted_match';
+    return { prIndex: j, state, supplierItem: line, score: prScore[j], mappedBy: prBy[j] };
   });
 
   const extraLines = products.filter((_, i) => !lineUsed[i]);

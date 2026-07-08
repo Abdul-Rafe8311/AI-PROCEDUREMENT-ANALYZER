@@ -21,15 +21,15 @@
 
 import { Document, Page, Text, View, StyleSheet, pdf } from '@react-pdf/renderer';
 import { scoreSuppliers } from './analysis-engine';
+import { type FxRates, getFxRates, sarPerUnit, toSar, toUsd } from './fx-rates';
 import { derivePrSubject, suggestTechnicalComments } from './item-matching';
-import { buildComparisonModel, supplierGroups } from './pr-comparison';
+import { buildComparisonModel, type ComparisonRow, supplierGroups } from './pr-comparison';
 import {
   type AnalysisResult,
   DEFAULT_SIGNATURE_ROLES,
   DEFAULT_WEIGHTS,
   deliveryNormalizedHint,
   type ExtractedQuotation,
-  formatUnitNumber,
   type PrMatchResult,
   type TechnicalComment,
 } from './workspace-types';
@@ -53,6 +53,8 @@ export interface ApprovalFormOptions {
   signatureRoles?: string[];
   /** per-supplier Technical Comments keyed by quotation id (AI-suggested unless edited) */
   technicalComments?: Record<string, TechnicalComment>;
+  /** SAR/USD rate override; when omitted a live rate is fetched (cached fallback). null = no rate */
+  fx?: FxRates | null;
 }
 
 const SUP_PER_GROUP = 3; // suppliers per stacked block — each is now wider (own description col)
@@ -62,17 +64,62 @@ const numFmt = (n: number | null | undefined) =>
   n == null || !Number.isFinite(n) ? '' : Math.round(n).toLocaleString('en-US');
 const plain = (n: number | null | undefined) =>
   n == null || !Number.isFinite(n) ? '' : n.toLocaleString('en-US');
+// Money with 2 decimals + thousands separators (SAR/USD on the TA form).
+const money2 = (n: number | null | undefined) =>
+  n == null || !Number.isFinite(n)
+    ? null
+    : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Document-stated currency totals only (no app-side conversion) → each supplier's
-// own currency (EUR/SAR/USD/QAR/…) is preserved.
-function totalLines(q: ExtractedQuotation): string[] {
-  const stated = (q.statedTotals ?? []).filter((t) => t.amount != null);
-  if (stated.length) return stated.map((t) => `${t.currency} ${numFmt(t.amount)}`);
-  if (q.totalCost != null) return [`${q.currency} ${numFmt(q.totalCost)}`];
-  return [''];
+// TA-form money is normalized to SAR (primary) + USD (secondary) at the live rate.
+// If the rate is unavailable OR the currency is unknown to the feed, we disclose
+// the original amount instead of inventing a conversion.
+function MoneyDual({
+  amount,
+  currency,
+  fx,
+  highlight,
+}: {
+  amount: number | null | undefined;
+  currency: string;
+  fx: FxRates | null;
+  highlight?: boolean;
+}) {
+  if (amount == null || !Number.isFinite(amount)) return <Text> </Text>;
+  const sar = fx ? toSar(amount, currency, fx) : null;
+  const usd = fx ? toUsd(amount, currency, fx) : null;
+  if (sar == null || usd == null) {
+    return <Text style={{ textAlign: 'right', color: C.body }}>{`${currency} ${money2(amount)}`}</Text>;
+  }
+  return (
+    <>
+      <Text style={{ fontFamily: 'Helvetica-Bold', color: highlight ? C.winInk : C.ink, textAlign: 'right' }}>
+        {`SAR ${money2(sar)}`}
+      </Text>
+      <Text style={{ color: C.muted, textAlign: 'right', fontSize: 5.5 }}>{`USD ${money2(usd)}`}</Text>
+    </>
+  );
 }
 
-function aiRecommendation(analysis: AnalysisResult): string {
+// One-line rate stamp for the form header (their "SAR Currency conversion rate"
+// cell). Shows USD plus every non-SAR supplier currency, and whether the rate is
+// live or served from cache (with its timestamp).
+function fxStampText(fx: FxRates, currencies: string[]): string {
+  const uniq = Array.from(new Set(['USD', ...currencies.map((c) => c.toUpperCase())])).filter((c) => c !== 'SAR');
+  const bits = uniq
+    .map((c) => {
+      const v = sarPerUnit(c, fx);
+      return v == null ? null : `1 ${c} = ${v.toFixed(4)} SAR`;
+    })
+    .filter((b): b is string => !!b);
+  let when = fx.asOf;
+  const d = new Date(fx.asOf);
+  if (!Number.isNaN(d.getTime())) {
+    when = d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+  return `${bits.join('   ·   ')} — rate as of ${when} (${fx.live ? 'live' : 'cached'})`;
+}
+
+function aiRecommendation(analysis: AnalysisResult, fx: FxRates | null): string {
   const scored = scoreSuppliers(analysis.quotations, analysis.risks, DEFAULT_WEIGHTS);
   const best = scored[0];
   if (!best) return '';
@@ -80,7 +127,11 @@ function aiRecommendation(analysis: AnalysisResult): string {
   const rec = analysis.recommendation;
   const bits: string[] = [];
   if (rec.lowestCost?.supplier === name && best.quotation.totalCost != null) {
-    bits.push(`lowest total cost (${best.quotation.currency} ${numFmt(best.quotation.totalCost)})`);
+    // Keep the whole form in SAR: express the winning cost in SAR when a rate is
+    // available, else fall back to the supplier's own currency.
+    const sar = fx ? toSar(best.quotation.totalCost, best.quotation.currency, fx) : null;
+    const cost = sar != null ? `SAR ${money2(sar)}` : `${best.quotation.currency} ${numFmt(best.quotation.totalCost)}`;
+    bits.push(`lowest total cost (${cost})`);
   }
   if (rec.fastestDelivery?.supplier === name && best.quotation.deliveryDays != null) {
     // Show the supplier's ORIGINAL delivery wording (e.g. "4 to 5 weeks"), never
@@ -113,16 +164,32 @@ function ApprovalDocument({
   analysis,
   signatureRoles,
   comments,
+  fx,
 }: {
   analysis: AnalysisResult;
   signatureRoles: string[];
   comments: Record<string, TechnicalComment>;
+  fx: FxRates | null;
 }) {
   const qs = analysis.quotations;
   const qById = new Map(qs.map((q) => [q.id, q]));
   const model = buildComparisonModel(qs, analysis.purchaseRequisition, analysis.prMatch);
   const prMatch = analysis.prMatch ?? null;
-  const ai = aiRecommendation(analysis);
+  const ai = aiRecommendation(analysis, fx);
+  const supplierCurrencies = qs.map((q) => q.currency);
+
+  // Lowest SAR unit price in a row (only when ≥2 present cells genuinely differ)
+  // — drives the green highlight, computed at the LIVE rate so it agrees with the
+  // SAR values printed in the cells. No rate → no highlight.
+  const lowestSarOf = (r: ComparisonRow): number | null => {
+    if (!fx) return null;
+    const sars = r.cells
+      .map((c) => (c && c.unitPrice != null ? toSar(c.unitPrice, c.currency, fx) : null))
+      .filter((v): v is number => v != null);
+    if (sars.length < 2) return null;
+    const min = Math.min(...sars);
+    return min === Math.max(...sars) ? null : min;
+  };
 
   const pr = analysis.purchaseRequisition;
   const prNumber = pr?.requestNo ?? qs.find((q) => q.prNumber)?.prNumber ?? '';
@@ -220,10 +287,24 @@ function ApprovalDocument({
             {generatedOn}
           </Text>
         </View>
-        <View style={[s.descRow, { borderTopWidth: 0 }]}>
+        <View style={[s.descRow, { borderTopWidth: 0, marginBottom: 0 }]}>
           <Text style={s.descCell}>
             <Text style={s.metaLabel}>PR Description: </Text>
             {prSubject || <Text style={s.faintVal}>Not provided</Text>}
+          </Text>
+        </View>
+        {/* SAR conversion rate — every amount below is shown in SAR + USD at this
+            LIVE rate (cached rate used, and labelled, if the feed is unreachable). */}
+        <View style={[s.descRow, { borderTopWidth: 0, marginBottom: 6 }]}>
+          <Text style={s.descCell}>
+            <Text style={s.metaLabel}>SAR conversion rate: </Text>
+            {fx ? (
+              fxStampText(fx, supplierCurrencies)
+            ) : (
+              <Text style={s.faintVal}>
+                live rate unavailable and none cached — amounts shown in each supplier&apos;s original currency
+              </Text>
+            )}
           </Text>
         </View>
 
@@ -251,7 +332,6 @@ function ApprovalDocument({
                 <Text style={[s.cellBox, s.headCell, { width: qtyLW, borderTopWidth: 1, borderTopColor: C.line }]}>Qty</Text>
                 <Text style={[s.cellBox, s.headCell, { width: uomW, borderTopWidth: 1, borderTopColor: C.line }]}>UOM</Text>
                 {group.map((sup) => {
-                  const q = qById.get(sup.quotationId)!;
                   return (
                     <View key={sup.quotationId} style={[s.supHead, { width: supW }]}>
                       <Text style={s.supName}>{sup.supplier}</Text>
@@ -259,7 +339,7 @@ function ApprovalDocument({
                       <View style={[s.rowFlex, { marginTop: 2 }]}>
                         <Text style={[s.subLabel, { width: subDescW }]}>Description</Text>
                         <Text style={[s.subLabel, { width: subQtyW, textAlign: 'center' }]}>Qty</Text>
-                        <Text style={[s.subLabel, { width: subPriceW, textAlign: 'right' }]}>Unit Price ({q.currency})</Text>
+                        <Text style={[s.subLabel, { width: subPriceW, textAlign: 'right' }]}>Unit Price (SAR / USD)</Text>
                       </View>
                     </View>
                   );
@@ -267,7 +347,9 @@ function ApprovalDocument({
               </View>
 
               {/* Item rows */}
-              {model.rows.map((r) => (
+              {model.rows.map((r) => {
+                const lowSar = lowestSarOf(r);
+                return (
                 <View key={`${r.kind}-${r.index}-${r.label}`} style={s.rowFlex} wrap={false}>
                   <Text style={[s.cellBox, { width: idxW, borderLeftWidth: 1, borderLeftColor: C.border, textAlign: 'center' }]}>
                     {r.kind === 'charge' ? '' : r.index}
@@ -280,7 +362,8 @@ function ApprovalDocument({
                   <Text style={[s.cellBox, { width: uomW, textAlign: 'center' }]}>{r.uom ?? ''}</Text>
                   {group.map((sup) => {
                     const cell = r.cells[sup.colIndex] ?? null;
-                    const isLow = cell?.unitPriceUsd != null && r.lowestUsd != null && cell.unitPriceUsd === r.lowestUsd;
+                    const cellSar = cell && fx ? toSar(cell.unitPrice, cell.currency, fx) : null;
+                    const isLow = cellSar != null && lowSar != null && cellSar === lowSar;
                     // A requisition/product row with no cell means the supplier truly
                     // did not quote it → "Not Quoted" (never a silent blank). Charge
                     // rows simply omit the charge, so they stay blank.
@@ -293,25 +376,28 @@ function ApprovalDocument({
                         <Text style={[s.cellBox, { width: subQtyW, textAlign: 'center', borderRightWidth: 1, borderRightColor: C.border }]}>
                           {cell ? plain(cell.qty) : ''}
                         </Text>
-                        <Text style={[s.cellBox, { width: subPriceW, textAlign: 'right' }, ...(isLow ? [s.winCell] : [])]}>
-                          {cell ? formatUnitNumber(cell.unitPrice) : ''}
-                        </Text>
+                        <View style={[s.cellBox, { width: subPriceW, alignItems: 'flex-end' }, ...(isLow ? [s.winCell] : [])]}>
+                          {cell ? (
+                            <MoneyDual amount={cell.unitPrice} currency={cell.currency} fx={fx} highlight={isLow} />
+                          ) : (
+                            <Text> </Text>
+                          )}
+                        </View>
                       </View>
                     );
                   })}
                 </View>
-              ))}
+                );
+              })}
 
-              {/* Total Price (document currencies) */}
+              {/* Total Price without VAT — normalized to SAR (primary) + USD. */}
               <View style={s.rowFlex} wrap={false}>
                 <Text style={[s.cellBox, s.labelRow, { width: leftW, borderLeftWidth: 1, borderLeftColor: C.border }]}>Total Price without VAT</Text>
                 {group.map((sup) => {
                   const q = qById.get(sup.quotationId)!;
                   return (
-                    <View key={sup.quotationId} style={{ width: supW, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3 }}>
-                      {totalLines(q).map((t, j) => (
-                        <Text key={j} style={{ fontFamily: 'Helvetica-Bold', color: C.ink, textAlign: 'right' }}>{t}</Text>
-                      ))}
+                    <View key={sup.quotationId} style={{ width: supW, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3, alignItems: 'flex-end' }}>
+                      <MoneyDual amount={q.totalCost} currency={q.currency} fx={fx} />
                     </View>
                   );
                 })}
@@ -469,7 +555,10 @@ export async function generateApprovalFormPdf(
   const roles = options?.signatureRoles?.length ? options.signatureRoles : DEFAULT_SIGNATURE_ROLES;
   const comments =
     options?.technicalComments ?? suggestTechnicalComments(analysis.prMatch, analysis.purchaseRequisition);
+  // Live SAR/USD rate at generation time (cached fallback if the feed is down);
+  // an injectable fx lets callers/tests supply a fixed rate.
+  const fx = options?.fx !== undefined ? options.fx : await getFxRates();
   return pdf(
-    <ApprovalDocument analysis={analysis} signatureRoles={roles} comments={comments} />,
+    <ApprovalDocument analysis={analysis} signatureRoles={roles} comments={comments} fx={fx} />,
   ).toBlob();
 }

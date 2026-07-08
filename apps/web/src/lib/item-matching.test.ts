@@ -120,9 +120,10 @@ test('PHASE 2: a wrong-grade quote maps by exact quantity as "quoted, spec diffe
   assert.equal(anchorPr.state, 'quoted_spec_diff');
   assert.equal(anchorPr.mappedBy, 'quantity');
   assert.ok(/304/.test(anchorPr.supplierItem!.name));
-  // The blanket is a clean description match (PR item 2).
+  // The blanket lines up by quantity (qty is the primary key) and its spec agrees,
+  // so it is a clean match — not flagged.
   assert.equal(m.prItems[2].state, 'quoted_match');
-  assert.equal(m.prItems[2].mappedBy, 'description');
+  assert.equal(m.prItems[2].mappedBy, 'quantity');
   // The castable (PR item 1) was not quoted at all.
   assert.equal(m.prItems[1].state, 'not_quoted');
   assert.equal(m.matchCount, 1);
