@@ -13,6 +13,7 @@ import { toUsd } from './analysis-engine';
 import type {
   ExtractedQuotation,
   LineItemCategory,
+  PrItemMatchState,
   PrMatchResult,
   PurchaseRequisition,
   SupplierMatch,
@@ -34,6 +35,8 @@ export interface SupplierCell {
   currency: string;
   /** USD-normalized unit price — drives the "lowest" highlight across currencies */
   unitPriceUsd: number | null;
+  /** PR-item match state for this cell (PR rows only) — 'quoted_spec_diff' flags a grade/spec difference */
+  matchState?: PrItemMatchState | null;
 }
 
 export interface ComparisonRow {
@@ -102,7 +105,8 @@ function prRows(
   );
   return pr.items.map((it, idx) => {
     const cells = quotations.map<SupplierCell | null>((q) => {
-      const li = byQuotation.get(q.id)?.prItems?.[idx]?.supplierItem ?? null;
+      const pm = byQuotation.get(q.id)?.prItems?.[idx] ?? null;
+      const li = pm?.supplierItem ?? null;
       if (!li) return null;
       return {
         description: li.name,
@@ -110,6 +114,7 @@ function prRows(
         unitPrice: li.unitPrice,
         currency: li.currency,
         unitPriceUsd: cellUsd(li.unitPrice, li.currency),
+        matchState: pm?.state ?? null,
       };
     });
     return {
@@ -208,6 +213,7 @@ export function buildComparisonModel(
   quotations: ExtractedQuotation[],
   pr: PurchaseRequisition | null | undefined,
   prMatch: PrMatchResult | null | undefined,
+  opts?: { prOnly?: boolean },
 ): ComparisonModel {
   const suppliers: SupplierCol[] = quotations.map((q) => ({
     quotationId: q.id,
@@ -216,7 +222,14 @@ export function buildComparisonModel(
     currency: q.currency,
   }));
   const hasPr = !!(pr && pr.items.length);
-  const productRows = hasPr ? prRows(pr!, quotations, prMatch ?? null) : unionProductRows(quotations);
+  // Product rows come from the PR. `prOnly` (the Technical Approval Form) NEVER
+  // fabricates rows from supplier descriptions — with no PR items it shows none.
+  // The on-screen comparison view leaves prOnly unset and keeps the union fallback.
+  const productRows = hasPr
+    ? prRows(pr!, quotations, prMatch ?? null)
+    : opts?.prOnly
+      ? []
+      : unionProductRows(quotations);
   const charges = chargeRows(quotations, productRows.length + 1);
   return { suppliers, rows: [...productRows, ...charges], hasPr };
 }

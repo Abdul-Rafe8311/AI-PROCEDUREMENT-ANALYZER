@@ -124,21 +124,32 @@ function itemCodeHit(name: string, code: string | null): boolean {
 }
 
 /**
- * True when a supplier line and a PR item are clearly the SAME item family
- * (strong word overlap) BUT their distinctive spec codes disagree — i.e. a real
- * grade/dimension conflict such as "Grade SS 310" vs "Grade 253 Ma", or
- * "…-40-304…" vs "…-40-253…". This is the ONLY thing that downgrades a quoted
- * cell to "spec differs": a supplier who simply quotes by internal part number
- * (no recognizable spec codes) is NOT a conflict and stays a clean match.
+ * Extract a material-GRADE signature — "253 MA", "253 C", "Grade SS 310" →
+ * "253ma" / "253c" / "ss310". This is the token that distinguishes an otherwise
+ * identical anchor. Returns null when the text states no recognizable grade.
+ */
+function gradeOf(str: string): string | null {
+  const s = str.toLowerCase().replace(/\s+/g, ' ');
+  // Prefer an explicit "grade <x>" phrase.
+  let m = s.match(/grade[\s:.-]*((?:ss\s*)?\d{2,4}(?:\s*[a-z]{1,3})?)/);
+  if (m?.[1]) return m[1].replace(/[^a-z0-9]/g, '');
+  // Else a bare material designation like "SS 310", "253 MA", "253 C".
+  m = s.match(/\b(ss\s*\d{2,4}|\d{3,4}\s*mac?\b|\d{3,4}\s*c\b)/);
+  if (m?.[1]) return m[1].replace(/[^a-z0-9]/g, '');
+  return null;
+}
+
+/**
+ * A quantity-mapped line "differs in spec" when both it and the PR item state a
+ * material grade and those grades DISAGREE — e.g. "Grade SS 310" vs "253 Ma", or
+ * "253 MA" vs "253 C". Dimension/part-number differences alone are NOT flagged:
+ * quantity already lined the rows up and the buyer sees the exact wording in-cell.
+ * This is the ONLY thing that downgrades a quoted cell to "spec differs".
  */
 function specConflict(name: string, prText: string): boolean {
-  const A = specCodes(name);
-  const B = specCodes(prText);
-  if (!A.size || !B.size) return false; // no distinctive codes on one side → can't conflict
-  for (const t of A) if (B.has(t)) return false; // a shared distinctive code → same spec
-  // Codes exist on both sides and none agree → conflict only if the rows are
-  // otherwise the same item family (so we don't flag two unrelated lines).
-  return jaccard(wordTokens(name), wordTokens(prText)) >= 0.4;
+  const g1 = gradeOf(name);
+  const g2 = gradeOf(prText);
+  return !!(g1 && g2 && g1 !== g2);
 }
 
 /**

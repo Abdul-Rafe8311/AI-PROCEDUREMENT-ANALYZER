@@ -20,18 +20,13 @@
 // and order vary per document — nothing is hardcoded.
 
 import { Document, Page, Text, View, StyleSheet, pdf } from '@react-pdf/renderer';
-import { scoreSuppliers } from './analysis-engine';
 import { type FxRates, getFxRates, sarPerUnit, toSar, toUsd } from './fx-rates';
-import { derivePrSubject, suggestTechnicalComments } from './item-matching';
+import { derivePrSubject } from './item-matching';
 import { buildComparisonModel, type ComparisonRow, supplierGroups } from './pr-comparison';
 import {
   type AnalysisResult,
   DEFAULT_SIGNATURE_ROLES,
-  DEFAULT_WEIGHTS,
   deliveryNormalizedHint,
-  type ExtractedQuotation,
-  type PrMatchResult,
-  type TechnicalComment,
 } from './workspace-types';
 
 const C = {
@@ -44,24 +39,19 @@ const C = {
   head: '#e2e8f0',
   win: '#dcfce7',
   winInk: '#166534',
-  aiBg: '#eef2ff',
-  aiBorder: '#6366f1',
+  specDiff: '#b45309', // amber-700 — factual "spec differs" grade-mismatch flag
 };
 
 export interface ApprovalFormOptions {
   /** ordered, enabled signature-block role names (defaults to DEFAULT_SIGNATURE_ROLES) */
   signatureRoles?: string[];
-  /** per-supplier Technical Comments keyed by quotation id (AI-suggested unless edited) */
-  technicalComments?: Record<string, TechnicalComment>;
   /** SAR/USD rate override; when omitted a live rate is fetched (cached fallback). null = no rate */
   fx?: FxRates | null;
 }
 
-const SUP_PER_GROUP = 3; // suppliers per stacked block — each is now wider (own description col)
+const SUP_PER_GROUP = 4; // suppliers per stacked block (Suppliers 1–4, then 5 wraps) — matches the company template
 const USABLE = 797; // landscape A4 usable width (pt)
 
-const numFmt = (n: number | null | undefined) =>
-  n == null || !Number.isFinite(n) ? '' : Math.round(n).toLocaleString('en-US');
 const plain = (n: number | null | undefined) =>
   n == null || !Number.isFinite(n) ? '' : n.toLocaleString('en-US');
 // Money with 2 decimals + thousands separators (SAR/USD on the TA form).
@@ -119,63 +109,20 @@ function fxStampText(fx: FxRates, currencies: string[]): string {
   return `${bits.join('   ·   ')} — rate as of ${when} (${fx.live ? 'live' : 'cached'})`;
 }
 
-function aiRecommendation(analysis: AnalysisResult, fx: FxRates | null): string {
-  const scored = scoreSuppliers(analysis.quotations, analysis.risks, DEFAULT_WEIGHTS);
-  const best = scored[0];
-  if (!best) return '';
-  const name = best.quotation.supplierName;
-  const rec = analysis.recommendation;
-  const bits: string[] = [];
-  if (rec.lowestCost?.supplier === name && best.quotation.totalCost != null) {
-    // Keep the whole form in SAR: express the winning cost in SAR when a rate is
-    // available, else fall back to the supplier's own currency.
-    const sar = fx ? toSar(best.quotation.totalCost, best.quotation.currency, fx) : null;
-    const cost = sar != null ? `SAR ${money2(sar)}` : `${best.quotation.currency} ${numFmt(best.quotation.totalCost)}`;
-    bits.push(`lowest total cost (${cost})`);
-  }
-  if (rec.fastestDelivery?.supplier === name && best.quotation.deliveryDays != null) {
-    // Show the supplier's ORIGINAL delivery wording (e.g. "4 to 5 weeks"), never
-    // the internal normalized day-count.
-    const del = best.quotation.deliveryRaw?.trim() || `${best.quotation.deliveryDays} days`;
-    bits.push(`faster delivery (${del})`);
-  }
-  const reason =
-    bits.length > 0
-      ? bits.join(' and ')
-      : analysis.quotations.length === 1
-        ? `only supplier analyzed; procurement score ${Math.round(best.overall * 100)}/100`
-        : `highest procurement score (${Math.round(best.overall * 100)}/100)`;
-  return `${name} — ${reason}.`;
-}
-
-// Per-supplier AI item-match signal (only meaningful with a PR). Counts are over
-// PR items and never overlap: spec-differs + not-quoted + clean-match = total.
-function matchSignal(prMatch: PrMatchResult | null, quotationId: string): string {
-  const sm = prMatch?.bySupplier.find((s) => s.quotationId === quotationId);
-  if (!sm) return '';
-  if (sm.allMatched) return 'Yes (all items)';
-  const bits: string[] = [];
-  if (sm.specDiffCount) bits.push(`${sm.specDiffCount} spec differ`);
-  if (sm.notQuotedCount) bits.push(`${sm.notQuotedCount} not quoted`);
-  return bits.length ? `No — ${bits.join(', ')}` : 'Review';
-}
-
 function ApprovalDocument({
   analysis,
   signatureRoles,
-  comments,
   fx,
 }: {
   analysis: AnalysisResult;
   signatureRoles: string[];
-  comments: Record<string, TechnicalComment>;
   fx: FxRates | null;
 }) {
   const qs = analysis.quotations;
   const qById = new Map(qs.map((q) => [q.id, q]));
-  const model = buildComparisonModel(qs, analysis.purchaseRequisition, analysis.prMatch);
-  const prMatch = analysis.prMatch ?? null;
-  const ai = aiRecommendation(analysis, fx);
+  // prOnly: rows come ONLY from the PR document — the TA form NEVER builds rows
+  // from supplier descriptions (no supplier-union fallback, no 23-row explosion).
+  const model = buildComparisonModel(qs, analysis.purchaseRequisition, analysis.prMatch, { prOnly: true });
   const supplierCurrencies = qs.map((q) => q.currency);
 
   // Lowest SAR unit price in a row (only when ≥2 present cells genuinely differ)
@@ -233,11 +180,7 @@ function ApprovalDocument({
     labelRow: { fontFamily: 'Helvetica-Bold', color: C.ink },
     winCell: { backgroundColor: C.win, color: C.winInk, fontFamily: 'Helvetica-Bold' },
     notQuoted: { color: C.faint, fontFamily: 'Helvetica-Oblique' },
-    aiRowLabel: { fontFamily: 'Helvetica-Bold', color: C.aiBorder },
-    aiTag: { fontSize: fs - 1.5, fontFamily: 'Helvetica-Bold', color: C.aiBorder, marginBottom: 1 },
-    aiText: { color: C.aiBorder, fontFamily: 'Helvetica-Oblique' },
-    aiBox: { marginTop: 6, borderWidth: 1, borderColor: C.aiBorder, backgroundColor: C.aiBg, borderRadius: 3, paddingVertical: 5, paddingHorizontal: 7 },
-    aiLabel: { fontSize: fs - 0.5, fontFamily: 'Helvetica-Bold', color: C.aiBorder, marginBottom: 2 },
+    specDiffTag: { fontSize: fs - 1.5, fontFamily: 'Helvetica-Oblique', color: C.specDiff, marginTop: 1 },
     finalRow: { marginTop: 7, flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
     signWrap: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
     signBox: { borderWidth: 1, borderColor: C.line, borderRadius: 3, paddingVertical: 4, paddingHorizontal: 5, minHeight: 48 },
@@ -262,9 +205,12 @@ function ApprovalDocument({
     <Document title="Technical Approval Form" author="AI Procurement Copilot">
       <Page size="A4" orientation="landscape" style={s.page} wrap>
         <Text style={s.title}>TECHNICAL APPROVAL FORM</Text>
+        {/* The item rows are anchored to the PR document. This note shows ONLY when
+            the requisition produced no line items (the grid can't be built) — never
+            when PR items exist. It is not the old supplier-union banner. */}
         {!model.hasPr && (
           <Text style={s.subNote}>
-            No internal Purchase Requisition was matched — the left column shows the supplier-quoted description.
+            No Purchase Requisition line items were found — attach the PR document (with its item rows) to populate the grid.
           </Text>
         )}
 
@@ -370,9 +316,14 @@ function ApprovalDocument({
                     const notQuoted = !cell && r.kind !== 'charge';
                     return (
                       <View key={sup.quotationId} style={[s.rowFlex, { width: supW, borderRightWidth: 1, borderRightColor: C.line }]}>
-                        <Text style={[s.cellBox, { width: subDescW, borderRightWidth: 1, borderRightColor: C.border }, ...(notQuoted ? [s.notQuoted] : [])]}>
-                          {cell?.description ?? (notQuoted ? 'Not Quoted' : '')}
-                        </Text>
+                        <View style={[s.cellBox, { width: subDescW, borderRightWidth: 1, borderRightColor: C.border }]}>
+                          <Text style={notQuoted ? s.notQuoted : undefined}>
+                            {cell?.description ?? (notQuoted ? 'Not Quoted' : '')}
+                          </Text>
+                          {cell?.matchState === 'quoted_spec_diff' && (
+                            <Text style={s.specDiffTag}>spec differs</Text>
+                          )}
+                        </View>
                         <Text style={[s.cellBox, { width: subQtyW, textAlign: 'center', borderRightWidth: 1, borderRightColor: C.border }]}>
                           {cell ? plain(cell.qty) : ''}
                         </Text>
@@ -423,48 +374,26 @@ function ApprovalDocument({
               />
               <TermRow label="Delivery Terms" s={s} leftW={leftW} supW={supW} values={group.map((sup) => qById.get(sup.quotationId)!.deliveryTerms ?? '')} />
 
-              {/* AI item-match signal — SEPARATE from Technical Comments, only with a PR. */}
-              {model.hasPr && (
-                <View style={s.rowFlex} wrap={false}>
-                  <Text style={[s.cellBox, s.aiRowLabel, { width: leftW, borderLeftWidth: 1, borderLeftColor: C.border }]}>
-                    AI: items match PR (not a verdict)
-                  </Text>
-                  {group.map((sup) => (
-                    <Text key={sup.quotationId} style={[s.cellBox, { width: supW, borderRightWidth: 1, borderRightColor: C.line, color: C.aiBorder }]}>
-                      {matchSignal(prMatch, sup.quotationId)}
-                    </Text>
-                  ))}
-                </View>
-              )}
-
-              {/* Technical Comments — AI-suggested (visually distinct) OR human-entered. */}
+              {/* Technical Comments — left BLANK for the human team to complete.
+                  The AI does NOT write any evaluation, suggestion or verdict here. */}
               <View style={s.rowFlex} wrap={false}>
                 <Text style={[s.cellBox, s.labelRow, { width: leftW, borderLeftWidth: 1, borderLeftColor: C.border }]}>Technical Comments</Text>
                 {group.map((sup) => (
-                  <CommentCell key={sup.quotationId} comment={comments[sup.quotationId]} width={supW} s={s} />
+                  <View
+                    key={sup.quotationId}
+                    style={{ width: supW, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, minHeight: 22 }}
+                  />
                 ))}
               </View>
             </View>
           );
         })}
 
-        {/* AI suggestion — clearly NOT a human decision */}
-        {ai ? (
-          <View style={s.aiBox}>
-            <Text style={s.aiLabel}>AI SUGGESTED RECOMMENDATION — system-generated, NOT an approval</Text>
-            <Text style={{ color: C.body }}>{ai}</Text>
-          </View>
-        ) : null}
-
         {/* Final Recommendation — blank for the human */}
         <View style={s.finalRow}>
           <Text style={{ fontFamily: 'Helvetica-Bold', color: C.ink }}>Final Recommendation:</Text>
           <View style={{ flex: 1, borderBottomWidth: 1, borderBottomColor: C.line, height: 12 }} />
         </View>
-        <Text style={{ fontSize: fs - 0.5, color: C.muted, marginTop: 2 }}>
-          Technical Comments shown in indigo/italic with an &quot;AI SUGGESTED&quot; tag are unreviewed machine
-          suggestions — the reviewing team confirms or overwrites them and signs below.
-        </Text>
 
         {/* Signature blocks — user-configured count / names / order. */}
         {signatureRoles.length > 0 && (
@@ -493,34 +422,6 @@ function ApprovalDocument({
         </View>
       </Page>
     </Document>
-  );
-}
-
-function CommentCell({
-  comment,
-  width,
-  s,
-}: {
-  comment: TechnicalComment | undefined;
-  width: number;
-  s: ReturnType<typeof StyleSheet.create>;
-}) {
-  const text = comment?.text?.trim() ?? '';
-  return (
-    <View style={{ width, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3, minHeight: 22, justifyContent: 'center' }}>
-      {text ? (
-        comment!.aiSuggested ? (
-          <>
-            <Text style={s.aiTag}>AI SUGGESTED — REVIEW</Text>
-            <Text style={s.aiText}>{text}</Text>
-          </>
-        ) : (
-          <Text style={{ color: C.ink }}>{text}</Text>
-        )
-      ) : (
-        <Text> </Text>
-      )}
-    </View>
   );
 }
 
@@ -553,12 +454,10 @@ export async function generateApprovalFormPdf(
   options?: ApprovalFormOptions,
 ): Promise<Blob> {
   const roles = options?.signatureRoles?.length ? options.signatureRoles : DEFAULT_SIGNATURE_ROLES;
-  const comments =
-    options?.technicalComments ?? suggestTechnicalComments(analysis.prMatch, analysis.purchaseRequisition);
   // Live SAR/USD rate at generation time (cached fallback if the feed is down);
   // an injectable fx lets callers/tests supply a fixed rate.
   const fx = options?.fx !== undefined ? options.fx : await getFxRates();
   return pdf(
-    <ApprovalDocument analysis={analysis} signatureRoles={roles} comments={comments} fx={fx} />,
+    <ApprovalDocument analysis={analysis} signatureRoles={roles} fx={fx} />,
   ).toBlob();
 }
