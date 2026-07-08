@@ -13,10 +13,12 @@
 
 import type {
   ExtractedQuotation,
+  LineItem,
   PrItem,
+  PrItemMatch,
+  PrItemMatchState,
   PrMatchResult,
   PurchaseRequisition,
-  SupplierItemMatch,
   SupplierMatch,
   TechnicalComment,
 } from './workspace-types';
@@ -122,9 +124,17 @@ function itemCodeHit(name: string, code: string | null): boolean {
 }
 
 /**
- * Match ONE supplier's quoted product items against the PR items. Charge lines
- * (freight/shipping/insurance/handling) are not requisition items and are
- * excluded from matching.
+ * Match ONE supplier's quoted product items against the PR items, producing a
+ * three-state verdict PER PR ITEM (so nothing is double-counted). Charge lines
+ * (freight/shipping/insurance/handling) are not requisition items and are excluded.
+ *
+ * Two-pass mapping (priority):
+ *   1) strong DESCRIPTION/spec similarity — the reworded-but-same-item case;
+ *   2) FALLBACK by EXACT quantity for lines the description didn't place — the
+ *      supplier who quotes by internal part number. Line order is the tiebreaker
+ *      when several PR items share a quantity.
+ * A line placed in pass 1 → quoted_match; a line placed only by qty (pass 2) →
+ * quoted_spec_diff ("quoted, spec differs"); a PR item nothing maps to → not_quoted.
  */
 export function matchSupplierItems(
   quotation: ExtractedQuotation,
@@ -133,43 +143,73 @@ export function matchSupplierItems(
 ): SupplierMatch {
   const products = quotation.lineItems.filter((li) => (li.category ?? 'product') === 'product');
 
-  const items: SupplierItemMatch[] = products.map((li) => {
-    let bestIdx = -1;
-    let bestScore = 0;
-    prItems.forEach((pr, idx) => {
-      let sc = similarity(li.name, prItemText(pr));
-      if (itemCodeHit(li.name, pr.itemCode)) sc = Math.max(sc, 0.95);
-      if (sc > bestScore) {
-        bestScore = sc;
-        bestIdx = idx;
+  const simOf = (li: LineItem, pr: PrItem): number => {
+    let sc = similarity(li.name, prItemText(pr));
+    if (itemCodeHit(li.name, pr.itemCode)) sc = Math.max(sc, 0.95);
+    return sc;
+  };
+
+  const prLine: (number | null)[] = new Array(prItems.length).fill(null); // prIndex → product index
+  const prBy: (PrItemMatch['mappedBy'])[] = new Array(prItems.length).fill(null);
+  const prScore: number[] = new Array(prItems.length).fill(0);
+  const lineUsed: boolean[] = new Array(products.length).fill(false);
+
+  // Pass 1 — strong description matches, assigned greedily from highest score down
+  // so the best evidence wins and neither a line nor a PR item is used twice.
+  const cands: { li: number; pr: number; sc: number }[] = [];
+  products.forEach((li, i) =>
+    prItems.forEach((pr, j) => {
+      const sc = simOf(li, pr);
+      if (sc >= threshold) cands.push({ li: i, pr: j, sc });
+    }),
+  );
+  cands.sort((a, b) => b.sc - a.sc);
+  for (const c of cands) {
+    if (lineUsed[c.li] || prLine[c.pr] != null) continue;
+    prLine[c.pr] = c.li;
+    prBy[c.pr] = 'description';
+    prScore[c.pr] = Math.round(c.sc * 100) / 100;
+    lineUsed[c.li] = true;
+  }
+
+  // Pass 2 — exact-quantity fallback for still-unplaced lines (part-number quotes).
+  products.forEach((li, i) => {
+    if (lineUsed[i] || li.quantity == null) return;
+    for (let j = 0; j < prItems.length; j++) {
+      if (prLine[j] != null) continue;
+      if (prItems[j].quantity != null && prItems[j].quantity === li.quantity) {
+        prLine[j] = i;
+        prBy[j] = 'quantity';
+        prScore[j] = Math.round(simOf(li, prItems[j]) * 100) / 100;
+        lineUsed[i] = true;
+        break;
       }
-    });
-    const approved = bestScore >= threshold && bestIdx >= 0;
-    return {
-      supplierItem: li,
-      prIndex: approved ? bestIdx : null,
-      closestPrIndex: bestIdx >= 0 ? bestIdx : null,
-      status: approved ? 'approved' : 'mismatch',
-      score: Math.round(bestScore * 100) / 100,
-    };
+    }
   });
 
-  const covered = new Set<number>();
-  for (const it of items) if (it.prIndex != null) covered.add(it.prIndex);
-  const missingPrIndexes = prItems.map((_, i) => i).filter((i) => !covered.has(i));
+  const prItemMatches: PrItemMatch[] = prItems.map((_pr, j) => {
+    const li = prLine[j];
+    if (li == null) {
+      return { prIndex: j, state: 'not_quoted' as PrItemMatchState, supplierItem: null, score: 0, mappedBy: null };
+    }
+    const state: PrItemMatchState = prBy[j] === 'description' ? 'quoted_match' : 'quoted_spec_diff';
+    return { prIndex: j, state, supplierItem: products[li], score: prScore[j], mappedBy: prBy[j] };
+  });
 
-  const approvedCount = items.filter((i) => i.status === 'approved').length;
-  const mismatchCount = items.filter((i) => i.status === 'mismatch').length;
-  const allMatched = prItems.length > 0 && mismatchCount === 0 && missingPrIndexes.length === 0;
+  const extraLines = products.filter((_, i) => !lineUsed[i]);
+  const matchCount = prItemMatches.filter((p) => p.state === 'quoted_match').length;
+  const specDiffCount = prItemMatches.filter((p) => p.state === 'quoted_spec_diff').length;
+  const notQuotedCount = prItemMatches.filter((p) => p.state === 'not_quoted').length;
 
   return {
     supplier: quotation.supplierName,
     quotationId: quotation.id,
-    items,
-    missingPrIndexes,
-    approvedCount,
-    mismatchCount,
-    allMatched,
+    prItems: prItemMatches,
+    extraLines,
+    matchCount,
+    specDiffCount,
+    notQuotedCount,
+    allMatched: prItems.length > 0 && matchCount === prItems.length,
   };
 }
 
@@ -239,23 +279,27 @@ export function suggestTechnicalComments(
   const out: Record<string, TechnicalComment> = {};
   if (!prMatch || !pr) return out;
   for (const sm of prMatch.bySupplier) {
-    if (sm.mismatchCount === 0) {
-      let text = 'Technically accepted (AI-suggested: items match PR description)';
-      if (sm.missingPrIndexes.length) {
-        text += ` · Note: ${sm.missingPrIndexes.length} requisition item(s) not quoted — review scope.`;
-      }
-      out[sm.quotationId] = { text, aiSuggested: true };
-    } else {
-      const m = sm.items.find((i) => i.status === 'mismatch');
-      const closest = m && m.closestPrIndex != null ? pr.items[m.closestPrIndex] : null;
-      const eg = m
-        ? ` (e.g. "${short(m.supplierItem.name)}"${closest ? ` vs PR "${short(closest.description)}"` : ''})`
-        : '';
+    // Every PR item cleanly matched → suggest acceptance.
+    if (sm.specDiffCount === 0 && sm.notQuotedCount === 0) {
       out[sm.quotationId] = {
-        text: `AI note: items do not match PR description — review required${eg}`,
+        text: 'Technically accepted (AI-suggested: items match PR description)',
         aiSuggested: true,
       };
+      continue;
     }
+    const bits: string[] = [];
+    if (sm.specDiffCount > 0) {
+      const eg = sm.prItems.find((p) => p.state === 'quoted_spec_diff');
+      const prIt = eg ? pr.items[eg.prIndex] : null;
+      const example = eg?.supplierItem
+        ? ` (e.g. "${short(eg.supplierItem.name)}"${prIt ? ` vs PR "${short(prIt.description)}"` : ''})`
+        : '';
+      bits.push(`${sm.specDiffCount} item(s) quoted, spec differs — verify${example}`);
+    }
+    if (sm.notQuotedCount > 0) {
+      bits.push(`${sm.notQuotedCount} requisition item(s) not quoted — review scope`);
+    }
+    out[sm.quotationId] = { text: `AI note: ${bits.join(' · ')}`, aiSuggested: true };
   }
   return out;
 }

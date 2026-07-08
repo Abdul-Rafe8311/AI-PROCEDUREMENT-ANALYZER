@@ -104,6 +104,9 @@ interface LlmLineItem {
   category?: string | null;
   /** unit of measure, e.g. SET, PCS, KG, EA */
   uom?: string | null;
+  /** per-line stock/lead-time column ("Available in Days") when the doc has one —
+   * a DELIVERY signal, never the offer validity */
+  availableInDays?: number | null;
 }
 
 export interface LlmSupplier {
@@ -113,11 +116,17 @@ export interface LlmSupplier {
   /** form-level purchase-requisition (PR) number, if stated on the document */
   prNumber?: string | null;
   currency: string | null;
-  /** FULL payable grand total (incl. freight & all charges) in `currency` */
+  /** FULL payable grand total (incl. freight & all charges) in `currency`. If the
+   * doc shows a VAT-inclusive final AND a separate VAT line, this is the inclusive
+   * final; comparison derives the without-VAT figure from it and `vatAmount`. */
   totalAmount: number | null;
+  /** the VAT / tax amount if shown as a SEPARATE line — never a goods/freight line */
+  vatAmount?: number | null;
+  /** the total price WITHOUT VAT if the document states it explicitly */
+  totalWithoutVat?: number | null;
   /** every grand total as stated, each with its currency (multi-currency docs) */
   totalsByCurrency: { amount: number | null; currency: string | null }[] | null;
-  /** lead time / delivery duration text, e.g. "60 days" */
+  /** lead time / delivery duration text, e.g. "60 days" — NEVER the offer validity */
   deliveryTime: string | null;
   /** incoterms / delivery terms, e.g. "CFR Jeddah", "CIF Jeddah", "EXW" */
   deliveryTerms: string | null;
@@ -194,11 +203,14 @@ const EXTRACTION_SYSTEM_PROMPT = [
   '    supplierName: string|null, reference: string|null, prNumber: string|null,',
   '    currency: string|null (ISO code e.g. SAR, USD, AED, EUR, GBP),',
   '    totalAmount: number|null,   // FULL payable grand total INCLUDING freight & all charges',
+  '    vatAmount: number|null,     // the VAT/tax amount, if shown as a SEPARATE line',
+  '    totalWithoutVat: number|null, // total price WITHOUT VAT, if the doc states it',
   '    totalsByCurrency: { amount: number, currency: string }[]|null,',
   '    deliveryTime: string|null, deliveryTerms: string|null,',
   '    paymentTerms: string|null, warranty: string|null, validUntil: string|null (ISO date),',
   '    lineItems: { name: string, quantity: number|null, unitPrice: number|null,',
-  '                 totalPrice: number|null, category: string|null, uom: string|null }[]',
+  '                 totalPrice: number|null, category: string|null, uom: string|null,',
+  '                 availableInDays: number|null }[]',
   '  }[] }',
   '',
   'MULTIPLE SUPPLIERS: return ONE object per supplier that has ANY data (a name,',
@@ -245,6 +257,22 @@ const EXTRACTION_SYSTEM_PROMPT = [
   'NOT convert units or drop the unit (never turn "8 weeks" into "8"). deliveryTerms',
   '= the incoterms exactly as written (e.g. "CFR Jeddah", "CIF Jeddah", "EXW", "FOB"),',
   'with NO added explanation.',
+  'DELIVERY != VALIDITY: NEVER use an offer "Validity"/"Valid for"/"Offer valid"',
+  'field as deliveryTime — that is how long the PRICE holds, not the lead time. Put',
+  'validity in validUntil only. deliveryTime must come from an explicit delivery /',
+  'lead-time / "Available in Days" field. If the goods table has a per-line',
+  '"Available in Days" (or "Lead Time (days)") COLUMN, copy that number into that',
+  'line\'s availableInDays. If there is NO delivery/lead-time field at all, set',
+  'deliveryTime to null (do NOT fall back to validity, do NOT invent a number).',
+  '',
+  'VAT / TAX: comparison is on the price WITHOUT VAT. If the document shows a',
+  'VAT-inclusive "Final Amount"/"Grand Total" AND a separate VAT/tax line, put the',
+  'inclusive final in totalAmount and the VAT figure in vatAmount (and the pre-VAT',
+  'subtotal in totalWithoutVat if it is printed). Do NOT add the VAT/tax as a',
+  'lineItem — it is not a goods or freight charge.',
+  '',
+  'UNIT PRICE PRECISION: copy unitPrice EXACTLY as printed, keeping decimals',
+  '(15.50, 10.36, 2.42) — never round a unit price to a whole number.',
   '',
   'PR NUMBER: prNumber = the purchase-requisition / PR number if the document shows',
   'one (a form-level header field like "PR#", "PR No", "Requisition No", "PR Description"',
@@ -431,43 +459,73 @@ function mapSupplier(
 
   // Line items incl. charge lines (freight/shipping/insurance/handling). A
   // lump-sum charge with no unit price is shown with its amount as the unit price
-  // and qty 1 so it stays visible and comparable.
-  const lineItems: LineItem[] = (s.lineItems ?? []).map((li) => {
-    const category = normCategory(li.category);
-    let unitPrice = num(li.unitPrice);
-    let totalPrice = num(li.totalPrice);
-    let quantity = num(li.quantity);
-    if (category !== 'product') {
-      const amount = totalPrice ?? unitPrice;
-      totalPrice = totalPrice ?? amount;
-      unitPrice = unitPrice ?? amount;
-      quantity = quantity ?? 1;
-    }
-    const uom = li.uom?.trim() || null;
-    return { name: String(li.name ?? 'Item').trim(), quantity, unitPrice, totalPrice, currency, category, uom };
-  });
+  // and qty 1 so it stays visible and comparable. Unit prices are kept EXACTLY as
+  // extracted (never rounded — a 15.50 rate must not become 16). A VAT/tax line is
+  // NOT a goods/freight charge: it is pulled out here and handled as VAT below.
+  const isVatLine = (name: string, category: LineItemCategory): boolean =>
+    category !== 'product' && /\bvat\b|value[-\s]?added|\btax\b|\bgst\b/i.test(name);
+  let vatFromLines = 0;
+  const lineItems: LineItem[] = (s.lineItems ?? [])
+    .map((li) => {
+      const category = normCategory(li.category);
+      let unitPrice = num(li.unitPrice);
+      let totalPrice = num(li.totalPrice);
+      let quantity = num(li.quantity);
+      if (category !== 'product') {
+        const amount = totalPrice ?? unitPrice;
+        totalPrice = totalPrice ?? amount;
+        unitPrice = unitPrice ?? amount;
+        quantity = quantity ?? 1;
+      }
+      const uom = li.uom?.trim() || null;
+      return { name: String(li.name ?? 'Item').trim(), quantity, unitPrice, totalPrice, currency, category, uom };
+    })
+    .filter((li) => {
+      if (isVatLine(li.name, li.category ?? 'product')) {
+        vatFromLines += li.totalPrice ?? li.unitPrice ?? 0;
+        return false; // VAT never lives in lineItems, never in the goods sum
+      }
+      return true;
+    });
 
-  // Stated grand totals with their own currencies (multi-currency docs).
+  // ── VAT basis: comparison + scoring use the price WITHOUT VAT. Prefer an
+  // explicit without-VAT figure; else derive final − VAT; else use the stated
+  // total as-is (no VAT stated → it already is the comparison total). The
+  // VAT-inclusive final is kept for reference only, NEVER compared or scored. ──
+  const primaryStated = num(s.totalAmount); // may be VAT-inclusive
+  const vatStated = num(s.vatAmount) ?? (vatFromLines > 0 ? vatFromLines : null);
+  const exVatStated = num(s.totalWithoutVat);
+  const primaryWithoutVat =
+    exVatStated != null
+      ? exVatStated
+      : primaryStated != null && vatStated != null
+        ? primaryStated - vatStated
+        : primaryStated;
+  const totalCostInclVat =
+    primaryStated != null && primaryWithoutVat != null && primaryStated !== primaryWithoutVat
+      ? primaryStated
+      : null;
+
+  // Stated grand totals with their own currencies (multi-currency docs). For the
+  // PRIMARY currency store the WITHOUT-VAT figure so every "Total without VAT"
+  // surface (report, TA form) agrees with the compared/scored number.
   const statedTotals: StatedTotal[] = [];
   if (Array.isArray(s.totalsByCurrency)) {
     for (const t of s.totalsByCurrency) {
       const amount = num(t?.amount);
-      if (amount != null) statedTotals.push({ amount, currency: (t?.currency || currency).toUpperCase() });
+      const c = (t?.currency || currency).toUpperCase();
+      if (amount != null && c !== currency) statedTotals.push({ amount, currency: c });
     }
   }
-  const primaryStated = num(s.totalAmount);
-  if (primaryStated != null && !statedTotals.some((t) => t.currency === currency)) {
-    statedTotals.push({ amount: primaryStated, currency });
-  }
+  if (primaryWithoutVat != null) statedTotals.push({ amount: primaryWithoutVat, currency });
 
-  // The compared total must be the FULL payable amount incl. freight & all
-  // charges. Start from the document's own stated grand total (the bottom line
-  // the buyer signs off). If that total OMITTED charge lines (freight etc.), let
-  // the line-sum lift it — but cap that lift at stated + charges, so a MISREAD or
-  // duplicated PRODUCT line can't inflate the payable above the stated total
-  // (BUG 1: one supplier read ~15% high from an over-summed product column).
-  const statedInCurrency =
-    statedTotals.find((t) => t.currency === currency)?.amount ?? primaryStated ?? null;
+  // The compared total must be the FULL payable amount (WITHOUT VAT) incl. freight
+  // & all charges. Start from the document's own stated without-VAT total. If that
+  // total OMITTED charge lines (freight etc.), let the line-sum lift it — but cap
+  // that lift at stated + charges, so a MISREAD or duplicated PRODUCT line can't
+  // inflate the payable above the stated total (BUG 1: one supplier read ~15% high
+  // from an over-summed product column).
+  const statedInCurrency = primaryWithoutVat;
   const lineAmount = (li: LineItem): number =>
     li.totalPrice ?? (li.unitPrice != null && li.quantity != null ? li.unitPrice * li.quantity : 0);
   const lineSum = lineItems.reduce((sum, li) => sum + lineAmount(li), 0);
@@ -485,7 +543,16 @@ function mapSupplier(
         ? Math.round(lineSum)
         : null;
 
-  const deliveryRaw = s.deliveryTime ?? null;
+  // ── Delivery: prefer an explicit per-line "Available in Days" column (an
+  // unambiguous lead-time signal) — take the longest so the buyer sees when ALL
+  // items arrive; else the stated delivery/lead-time text; else MISSING. An offer
+  // "Validity" is NEVER used as delivery (that is validUntil). ──
+  const availDays = (s.lineItems ?? [])
+    .map((li) => num(li.availableInDays))
+    .filter((v): v is number => v != null && v > 0);
+  const deliveryRaw = availDays.length
+    ? `${Math.max(...availDays)} days`
+    : s.deliveryTime?.trim() || null;
   const deliveryTerms = s.deliveryTerms?.trim() || null;
   const reference = s.reference?.trim() || null;
   const prNumber = s.prNumber?.trim() || null;
@@ -500,7 +567,10 @@ function mapSupplier(
   const altTotals = statedTotals.filter((t) => t.currency !== currency);
   const totalSnippet =
     totalCost != null
-      ? `Total (incl. freight & charges): ${totalCost.toLocaleString('en-US')} ${currency}` +
+      ? `Total without VAT (incl. freight & charges): ${totalCost.toLocaleString('en-US')} ${currency}` +
+        (totalCostInclVat != null
+          ? ` · incl. VAT ${totalCostInclVat.toLocaleString('en-US')} ${currency}`
+          : '') +
         (altTotals.length
           ? ` · also stated ${altTotals.map((t) => `${t.amount.toLocaleString('en-US')} ${t.currency}`).join(', ')}`
           : '')
@@ -527,6 +597,7 @@ function mapSupplier(
     supplierName,
     totalCost,
     currency,
+    totalCostInclVat,
     totalCostUsd: toUsd(totalCost, currency),
     deliveryRaw,
     deliveryDays: normalizeDelivery(deliveryRaw),
@@ -886,7 +957,7 @@ function mapPr(
   fileName: string,
   method: 'llm' | 'vision',
 ): PurchaseRequisition {
-  const items: PrItem[] = (data.items ?? [])
+  const mapped: PrItem[] = (data.items ?? [])
     .map((it) => ({
       itemCode: it.itemCode?.trim() || null,
       description: (it.description ?? '').trim(),
@@ -896,6 +967,21 @@ function mapPr(
     }))
     // Keep any row that identifies an item (a description or a code).
     .filter((it) => it.description || it.itemCode);
+
+  // De-duplicate repeated requisition rows so a quantity is NEVER doubled — e.g.
+  // the same line echoed as a bilingual pair, or repeated in a summary block. Key
+  // on the item code when present, else the normalized English description. Keep
+  // the FIRST occurrence VERBATIM (quantities are taken as written, never summed).
+  const seen = new Set<string>();
+  const items: PrItem[] = mapped.filter((it) => {
+    const key =
+      (it.itemCode ?? '').replace(/[^a-z0-9]/gi, '').toLowerCase() ||
+      it.description.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!key) return true; // nothing to key on → keep (can't confidently dedupe)
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   return {
     fileName,
     description: data.description?.trim() || null,

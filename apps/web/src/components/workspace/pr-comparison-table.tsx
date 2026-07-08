@@ -217,7 +217,7 @@ function SupplierCells({
       </td>
       <td className={cn('nums px-3 py-2.5 text-right', isLow ? 'bg-success/10 font-semibold text-success' : 'text-muted-foreground')}>
         {unitPrice != null ? (
-          <MoneyDual amount={unitPrice} currency={currency} usd={unitPriceUsd} mode={mode} />
+          <MoneyDual amount={unitPrice} currency={currency} usd={unitPriceUsd} mode={mode} precise />
         ) : (
           '—'
         )}

@@ -29,6 +29,7 @@ import {
   DEFAULT_WEIGHTS,
   deliveryNormalizedHint,
   type ExtractedQuotation,
+  formatUnitNumber,
   type PrMatchResult,
   type TechnicalComment,
 } from './workspace-types';
@@ -96,15 +97,16 @@ function aiRecommendation(analysis: AnalysisResult): string {
   return `${name} — ${reason}.`;
 }
 
-// Per-supplier AI item-match signal (only meaningful with a PR).
+// Per-supplier AI item-match signal (only meaningful with a PR). Counts are over
+// PR items and never overlap: spec-differs + not-quoted + clean-match = total.
 function matchSignal(prMatch: PrMatchResult | null, quotationId: string): string {
   const sm = prMatch?.bySupplier.find((s) => s.quotationId === quotationId);
   if (!sm) return '';
   if (sm.allMatched) return 'Yes (all items)';
   const bits: string[] = [];
-  if (sm.mismatchCount) bits.push(`${sm.mismatchCount} mismatch`);
-  if (sm.missingPrIndexes.length) bits.push(`${sm.missingPrIndexes.length} not quoted`);
-  return `No — ${bits.join(', ')}`;
+  if (sm.specDiffCount) bits.push(`${sm.specDiffCount} spec differ`);
+  if (sm.notQuotedCount) bits.push(`${sm.notQuotedCount} not quoted`);
+  return bits.length ? `No — ${bits.join(', ')}` : 'Review';
 }
 
 function ApprovalDocument({
@@ -148,7 +150,6 @@ function ApprovalDocument({
     title: { textAlign: 'center', fontSize: 11.5, fontFamily: 'Helvetica-Bold', color: C.ink, letterSpacing: 0.5, marginBottom: 3 },
     subNote: { textAlign: 'center', fontSize: fs - 0.5, color: C.muted, marginBottom: 4 },
     metaRow: { flexDirection: 'row', borderWidth: 1, borderColor: C.line },
-    metaRowMid: { flexDirection: 'row', borderWidth: 1, borderTopWidth: 0, borderColor: C.line },
     metaCell: { paddingVertical: 2.5, paddingHorizontal: 5, borderRightWidth: 1, borderRightColor: C.line },
     descRow: { flexDirection: 'row', borderWidth: 1, borderTopWidth: 0, borderColor: C.line, marginBottom: 6 },
     descCell: { flex: 1, paddingVertical: 2.5, paddingHorizontal: 5 },
@@ -202,8 +203,9 @@ function ApprovalDocument({
 
         {/* Compact form-style header block. Top row: TA Date (LEFT BLANK — the
             approver's own review date) · PR# · Generated on (the PDF creation
-            date, clearly distinct from TA Date). Then PR Description, then
-            Reviewed By / Signature. Blank fields are for manual completion. */}
+            date, clearly distinct from TA Date). Then the PR Description row. The
+            approver's name/signature is captured by the per-role signature blocks
+            at the foot of the form, so there is no separate "Reviewed By" row. */}
         <View style={s.metaRow}>
           <Text style={[s.metaCell, { width: 200 }]}>
             <Text style={s.metaLabel}>TA Date: </Text>
@@ -218,18 +220,10 @@ function ApprovalDocument({
             {generatedOn}
           </Text>
         </View>
-        <View style={s.metaRowMid}>
+        <View style={[s.descRow, { borderTopWidth: 0 }]}>
           <Text style={s.descCell}>
             <Text style={s.metaLabel}>PR Description: </Text>
             {prSubject || <Text style={s.faintVal}>Not provided</Text>}
-          </Text>
-        </View>
-        <View style={s.descRow}>
-          <Text style={[s.descCell, { flex: 2, borderRightWidth: 1, borderRightColor: C.line }]}>
-            <Text style={s.metaLabel}>Reviewed By: </Text>
-          </Text>
-          <Text style={[s.descCell, { flex: 1 }]}>
-            <Text style={s.metaLabel}>Signature / Date: </Text>
           </Text>
         </View>
 
@@ -300,7 +294,7 @@ function ApprovalDocument({
                           {cell ? plain(cell.qty) : ''}
                         </Text>
                         <Text style={[s.cellBox, { width: subPriceW, textAlign: 'right' }, ...(isLow ? [s.winCell] : [])]}>
-                          {cell ? numFmt(cell.unitPrice) : ''}
+                          {cell ? formatUnitNumber(cell.unitPrice) : ''}
                         </Text>
                       </View>
                     );

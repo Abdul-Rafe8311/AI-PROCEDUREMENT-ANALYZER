@@ -74,26 +74,30 @@ export function MoneyDual({
   usd,
   mode,
   align = 'end',
+  precise = false,
 }: {
   amount: number | null;
   currency: string;
   usd: number | null;
   mode: CurrencyMode;
   align?: 'start' | 'end';
+  /** unit prices show 2 decimals (never rounded to a whole number); totals show 0 */
+  precise?: boolean;
 }) {
   if (amount == null && usd == null) return <>—</>;
+  const digits = precise ? 2 : 0;
 
   if (mode === 'usd') {
-    return <span>{formatCurrency(usd ?? amount, usd != null ? 'USD' : currency)}</span>;
+    return <span>{formatCurrency(usd ?? amount, usd != null ? 'USD' : currency, digits)}</span>;
   }
 
   const showApprox = currency !== 'USD' && usd != null && amount != null;
   return (
     <span className={cn('inline-flex flex-col leading-tight', align === 'end' ? 'items-end' : 'items-start')}>
-      <span>{formatCurrency(amount ?? usd, amount != null ? currency : 'USD')}</span>
+      <span>{formatCurrency(amount ?? usd, amount != null ? currency : 'USD', digits)}</span>
       {showApprox && (
         <span className="text-xs font-normal text-muted-foreground">
-          ≈ {formatCurrency(usd, 'USD')}
+          ≈ {formatCurrency(usd, 'USD', digits)}
         </span>
       )}
     </span>

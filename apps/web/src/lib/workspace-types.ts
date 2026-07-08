@@ -61,9 +61,12 @@ export interface ExtractedQuotation {
   id: string;
   fileName: string;
   supplierName: string;
-  /** original amount in `currency` */
+  /** original amount in `currency` — the comparison/scoring total, WITHOUT VAT */
   totalCost: number | null;
   currency: string;
+  /** VAT-INCLUSIVE final amount in `currency`, when the doc states one separately
+   * from VAT — kept for reference/display only, NEVER used for ranking or scoring */
+  totalCostInclVat?: number | null;
   /** normalized to USD (single base currency) — used for sorting/scoring */
   totalCostUsd: number | null;
   /** raw delivery text as written ("2 weeks", "ASAP", a date) */
@@ -139,39 +142,44 @@ export interface PurchaseRequisition {
   items: PrItem[];
 }
 
-/** Result of matching one supplier's quoted item against the company's PR. */
-export type ItemMatchStatus = 'approved' | 'mismatch';
-
 /**
- * How a single supplier-quoted (product) line item relates to the company's
- * Purchase Requisition. `approved` = it matched a PR item on spec ("Technically
- * Approved" against that item); `mismatch` = it matched nothing confidently
- * (wrong spec/grade, or an item the PR never requested).
+ * Per-(PR item × supplier) technical-approval state — three NON-OVERLAPPING
+ * states so each PR item is counted exactly once (no "mismatch" AND "not quoted"
+ * double count):
+ *   - quoted_match     : a quoted line maps to it and the description/spec is consistent.
+ *   - quoted_spec_diff : a quoted line maps to it (by description OR by exact quantity)
+ *                        but the spec/description differs (e.g. grade "SS 310" vs
+ *                        PR "253 MA"). This is "quoted, spec differs" — NOT "not quoted".
+ *   - not_quoted       : no quoted line maps to this PR item at all.
  */
-export interface SupplierItemMatch {
-  /** the supplier's own line item, as quoted */
-  supplierItem: LineItem;
-  /** PR item index this was Technically Approved against — null on a mismatch */
-  prIndex: number | null;
-  /** closest PR item by similarity even below the match threshold — powers the
-   * "what was requested vs what was quoted" view for a mismatch */
-  closestPrIndex: number | null;
-  status: ItemMatchStatus;
-  /** 0..1 similarity that drove the decision */
+export type PrItemMatchState = 'quoted_match' | 'quoted_spec_diff' | 'not_quoted';
+
+/** How ONE company PR item was covered by ONE supplier's quotation. */
+export interface PrItemMatch {
+  /** index into PurchaseRequisition.items */
+  prIndex: number;
+  state: PrItemMatchState;
+  /** the supplier's own quoted line mapped here — null iff not_quoted */
+  supplierItem: LineItem | null;
+  /** 0..1 description similarity of the mapped line (0 when not_quoted) */
   score: number;
+  /** how the line was mapped to this PR item ('quantity' = fell back to exact qty) */
+  mappedBy: 'description' | 'quantity' | null;
 }
 
-/** One supplier's full technical-approval picture against the PR. */
+/** One supplier's full technical-approval picture against the PR (PR-item-centric). */
 export interface SupplierMatch {
   supplier: string;
   quotationId: string;
-  /** one entry per PRODUCT line the supplier quoted (freight/charge lines excluded) */
-  items: SupplierItemMatch[];
-  /** PR item indices this supplier did NOT quote at all (missing from its offer) */
-  missingPrIndexes: number[];
-  approvedCount: number;
-  mismatchCount: number;
-  /** true only when every PR item is matched AND no quoted item is a mismatch */
+  /** one entry per PR item, in PR order — states never overlap */
+  prItems: PrItemMatch[];
+  /** quoted PRODUCT lines that mapped to NO PR item (extra / unrequested items) */
+  extraLines: LineItem[];
+  /** counts over PR items — matchCount + specDiffCount + notQuotedCount === pr.items.length */
+  matchCount: number;
+  specDiffCount: number;
+  notQuotedCount: number;
+  /** true only when EVERY PR item is a clean quoted_match */
   allMatched: boolean;
 }
 
@@ -343,20 +351,34 @@ export interface ChatMessage {
 
 // Always shows the ISO code prefix (e.g. "SAR 308,994", "USD 120,000") so the
 // original document currency is unambiguous — never silently rendered as $.
-export const formatCurrency = (value: number | null, currency = 'USD') => {
+export const formatCurrency = (value: number | null, currency = 'USD', digits = 0) => {
   if (value == null) return '—';
   try {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: currency || 'USD',
       currencyDisplay: 'code',
-      maximumFractionDigits: 0,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
     }).format(value);
   } catch {
     // Unknown/non-ISO currency code — fall back to a plain prefixed number.
-    return `${currency} ${Math.round(value).toLocaleString('en-US')}`;
+    return `${currency} ${value.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
   }
 };
+
+// UNIT prices are shown with 2 decimals everywhere (never rounded to an integer) —
+// a per-piece rate like 15.50 or 2.42 must not collapse to 16 / 2 in the
+// comparison or the Technical Approval matrix.
+export const formatUnitPrice = (value: number | null, currency = 'USD') =>
+  formatCurrency(value, currency, 2);
+
+/** Plain 2-decimal number (no currency prefix) — for cells whose column already
+ *  states the currency (e.g. the TA form's "Unit Price (EUR)" sub-header). */
+export const formatUnitNumber = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value)
+    ? ''
+    : value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export const formatDelivery = (days: number | null) =>
   days == null ? '—' : `${days} day${days === 1 ? '' : 's'}`;

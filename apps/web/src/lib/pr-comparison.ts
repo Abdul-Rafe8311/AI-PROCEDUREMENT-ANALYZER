@@ -15,7 +15,6 @@ import type {
   LineItemCategory,
   PrMatchResult,
   PurchaseRequisition,
-  SupplierItemMatch,
   SupplierMatch,
 } from './workspace-types';
 
@@ -87,73 +86,24 @@ function lowestUsdOf(cells: (SupplierCell | null)[]): number | null {
   return min === max ? null : min;
 }
 
-// Decide, for ONE supplier, which of its quoted product lines corresponds to
-// each PR row. The buyer's form shows the supplier's OWN quoted item on every PR
-// row it plausibly maps to — even when the AI did NOT "approve" the match
-// (mismatch / review items are shown too). The AI match signal + Technical
-// Comments carry the "does it actually match the PR?" verdict; hiding the item
-// here is exactly what left Description/Qty blank. A PR row is left empty
-// (→ "Not Quoted") only when no quoted line maps to it.
-function assignSupplierRowItems(
-  sm: SupplierMatch | undefined,
-  prCount: number,
-): (SupplierItemMatch | null)[] {
-  const chosen: (SupplierItemMatch | null)[] = new Array(prCount).fill(null);
-  if (!sm) return chosen;
-  const used = new Set<number>();
-
-  // 1) Approved matches take their PR row first (strongest signal).
-  sm.items.forEach((it, i) => {
-    const idx = it.prIndex;
-    if (it.status === 'approved' && idx != null && idx >= 0 && idx < prCount && !chosen[idx]) {
-      chosen[idx] = it;
-      used.add(i);
-    }
-  });
-
-  // 2) For each still-empty PR row, take the best-scoring remaining line whose
-  //    AI-closest PR row is exactly this one — its own quoted wording is shown
-  //    regardless of the mismatch/review verdict, so nothing goes blank when the
-  //    supplier actually quoted something for that item.
-  for (let idx = 0; idx < prCount; idx++) {
-    if (chosen[idx]) continue;
-    let best = -1;
-    let bestScore = -1;
-    sm.items.forEach((it, i) => {
-      if (used.has(i) || it.closestPrIndex !== idx) return;
-      if (it.score > bestScore) {
-        bestScore = it.score;
-        best = i;
-      }
-    });
-    if (best >= 0) {
-      chosen[idx] = sm.items[best];
-      used.add(best);
-    }
-  }
-  return chosen;
-}
-
 // PR-item rows: the company's own description/qty/uom on the left; each
 // supplier's cell is the item it quoted for that row — its OWN wording, qty and
-// unit price — shown whether or not the AI approved the match, so the buyer sees
-// exactly what was quoted. A cell is null only when the supplier didn't quote it.
+// unit price — shown whether the match is a clean match OR a spec-diff, so the
+// buyer sees exactly what was quoted. A cell is null only when the supplier didn't
+// quote that PR item at all (→ "Not Quoted"). The match model already assigns one
+// quoted line per PR item (description match, else exact-quantity fallback).
 function prRows(
   pr: PurchaseRequisition,
   quotations: ExtractedQuotation[],
   prMatch: PrMatchResult | null,
 ): ComparisonRow[] {
-  const chosenBySupplier = quotations.map((q) =>
-    assignSupplierRowItems(
-      prMatch?.bySupplier.find((s) => s.quotationId === q.id),
-      pr.items.length,
-    ),
+  const byQuotation = new Map<string, SupplierMatch>(
+    (prMatch?.bySupplier ?? []).map((sm) => [sm.quotationId, sm]),
   );
   return pr.items.map((it, idx) => {
-    const cells = quotations.map<SupplierCell | null>((_q, qi) => {
-      const match = chosenBySupplier[qi][idx];
-      if (!match) return null;
-      const li = match.supplierItem;
+    const cells = quotations.map<SupplierCell | null>((q) => {
+      const li = byQuotation.get(q.id)?.prItems[idx]?.supplierItem ?? null;
+      if (!li) return null;
       return {
         description: li.name,
         qty: li.quantity,

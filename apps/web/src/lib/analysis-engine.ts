@@ -913,19 +913,29 @@ export function detectRisks(
       return shown.join('; ') + (extra > 0 ? `; +${extra} more` : '');
     };
     for (const sm of prMatch.bySupplier) {
-      if (sm.mismatchCount > 0) {
-        const names = sm.items.filter((i) => i.status === 'mismatch').map((i) => i.supplierItem.name);
-        const plural = sm.mismatchCount === 1 ? '' : 's';
+      // Quoted with a differing spec (matched by quantity / different grade), or an
+      // extra item that is not on the requisition → needs a requested-vs-quoted check.
+      const specDiffNames = sm.prItems
+        .filter((p) => p.state === 'quoted_spec_diff' && p.supplierItem)
+        .map((p) => p.supplierItem!.name);
+      const extraNames = sm.extraLines.map((l) => l.name);
+      const reviewNames = [...specDiffNames, ...extraNames];
+      if (reviewNames.length > 0) {
+        const n = reviewNames.length;
+        const plural = n === 1 ? '' : 's';
         add(
           sm.supplier,
           'technical_mismatch',
-          `${sm.supplier}: ${sm.mismatchCount} quoted item${plural} did not match the purchase requisition.`,
-          `Flagged: ${sm.mismatchCount} item${plural} on this quote could not be matched to any requisitioned item (${preview(names)}). This can mean a wrong spec/grade or an item that was never requested — it is not Technically Approved until a buyer confirms requested vs quoted.`,
+          `${sm.supplier}: ${n} quoted item${plural} need${n === 1 ? 's' : ''} a spec check against the requisition.`,
+          `Flagged: ${n} quoted item${plural} (${preview(reviewNames)}) ${n === 1 ? 'was' : 'were'} matched by quantity or is not on the requisition — the spec/grade was not confirmed from the description, so ${n === 1 ? 'it is' : 'they are'} not Technically Approved until a buyer checks requested vs quoted.`,
         );
       }
-      if (sm.missingPrIndexes.length > 0) {
-        const missNames = sm.missingPrIndexes.map((i) => pr.items[i]?.description ?? '').filter(Boolean);
-        const n = sm.missingPrIndexes.length;
+      if (sm.notQuotedCount > 0) {
+        const missNames = sm.prItems
+          .filter((p) => p.state === 'not_quoted')
+          .map((p) => pr.items[p.prIndex]?.description ?? '')
+          .filter(Boolean);
+        const n = sm.notQuotedCount;
         const plural = n === 1 ? '' : 's';
         add(
           sm.supplier,

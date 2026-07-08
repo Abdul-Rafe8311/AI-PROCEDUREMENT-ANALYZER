@@ -94,34 +94,41 @@ const supplierB: LlmSupplier = {
 
 const [qa, qb] = quotationsFromLlmSuppliers([supplierA, supplierB], 'compare.pdf', detected);
 
-test('PHASE 2: approved items, freight excluded, and not-quoted item detected', () => {
+test('PHASE 2: clean matches, freight excluded, and a not-quoted item detected', () => {
   const m = matchSupplierItems(qa, pr.items);
-  // Only the 2 PRODUCT lines are matched (freight is excluded from matching).
-  assert.equal(m.items.length, 2);
-  assert.equal(m.approvedCount, 2);
-  assert.equal(m.mismatchCount, 0);
-  // The anchor and castable map to PR items 0 and 1 respectively.
-  const prIndexes = m.items.map((i) => i.prIndex).sort();
-  assert.deepEqual(prIndexes, [0, 1]);
-  // The ceramic blanket (PR item 2) was not quoted → missing.
-  assert.deepEqual(m.missingPrIndexes, [2]);
+  // anchor→PR0 and castable→PR1 are clean description matches.
+  assert.equal(m.prItems[0].state, 'quoted_match');
+  assert.equal(m.prItems[1].state, 'quoted_match');
+  // The ceramic blanket (PR item 2) was not quoted at all.
+  assert.equal(m.prItems[2].state, 'not_quoted');
+  assert.equal(m.prItems[2].supplierItem, null);
+  assert.equal(m.matchCount, 2);
+  assert.equal(m.specDiffCount, 0);
+  assert.equal(m.notQuotedCount, 1);
+  // Freight is not a product line → never a PR match or an extra line.
+  assert.equal(m.extraLines.length, 0);
   assert.equal(m.allMatched, false);
+  // States cover every PR item exactly once.
+  assert.equal(m.matchCount + m.specDiffCount + m.notQuotedCount, pr.items.length);
 });
 
-test('PHASE 2: a wrong-grade quote is a mismatch, not an approval', () => {
+test('PHASE 2: a wrong-grade quote maps by exact quantity as "quoted, spec differs"', () => {
   const m = matchSupplierItems(qb, pr.items);
-  const anchor = m.items.find((i) => /304/.test(i.supplierItem.name))!;
-  assert.equal(anchor.status, 'mismatch');
-  assert.equal(anchor.prIndex, null);
-  // Its closest requisition item is still the 253 anchor (for requested-vs-quoted).
-  assert.equal(anchor.closestPrIndex, 0);
-  // The blanket matched PR item 2.
-  const blanket = m.items.find((i) => /blanket/i.test(i.supplierItem.name))!;
-  assert.equal(blanket.status, 'approved');
-  assert.equal(blanket.prIndex, 2);
-  assert.equal(m.mismatchCount, 1);
-  // Castable (1) and the anchor's PR item (0) are not covered.
-  assert.deepEqual(m.missingPrIndexes.sort(), [0, 1]);
+  // The 304 anchor has no strong description match, but its quantity (200) matches
+  // PR item 0 → quoted_spec_diff (shown & flagged for spec review, never dropped).
+  const anchorPr = m.prItems[0];
+  assert.equal(anchorPr.state, 'quoted_spec_diff');
+  assert.equal(anchorPr.mappedBy, 'quantity');
+  assert.ok(/304/.test(anchorPr.supplierItem!.name));
+  // The blanket is a clean description match (PR item 2).
+  assert.equal(m.prItems[2].state, 'quoted_match');
+  assert.equal(m.prItems[2].mappedBy, 'description');
+  // The castable (PR item 1) was not quoted at all.
+  assert.equal(m.prItems[1].state, 'not_quoted');
+  assert.equal(m.matchCount, 1);
+  assert.equal(m.specDiffCount, 1);
+  assert.equal(m.notQuotedCount, 1);
+  assert.equal(m.matchCount + m.specDiffCount + m.notQuotedCount, pr.items.length);
 });
 
 test('PHASE 2: matchQuotationsToPr covers every supplier', () => {

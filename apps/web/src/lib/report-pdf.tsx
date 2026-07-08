@@ -33,9 +33,10 @@ import {
   type PrMatchResult,
   type PurchaseRequisition,
   type RiskFlag,
+  type PrItemMatch,
   type RiskSeverity,
   type ScoreWeights,
-  type SupplierItemMatch,
+  type SupplierMatch,
   type SupplierScore,
 } from './workspace-types';
 
@@ -183,9 +184,9 @@ function Footer({ dateStr }: { dateStr: string }) {
 }
 
 // ── Technical Approval page (only when a company PR was matched) ──
-function approvedByPr(items: SupplierItemMatch[]): Map<number, SupplierItemMatch> {
-  const m = new Map<number, SupplierItemMatch>();
-  for (const it of items) if (it.status === 'approved' && it.prIndex != null) m.set(it.prIndex, it);
+function prByIndex(sm: SupplierMatch): Map<number, PrItemMatch> {
+  const m = new Map<number, PrItemMatch>();
+  for (const p of sm.prItems) m.set(p.prIndex, p);
   return m;
 }
 
@@ -199,7 +200,7 @@ function TechnicalApprovalPage({
   dateStr: string;
 }) {
   const supCol = Math.max(1.1, 3 / Math.max(match.bySupplier.length, 1));
-  const cells = match.bySupplier.map((sm) => ({ sm, byPr: approvedByPr(sm.items) }));
+  const cells = match.bySupplier.map((sm) => ({ sm, byPr: prByIndex(sm) }));
 
   return (
     <Page size="A4" style={s.page}>
@@ -218,8 +219,8 @@ function TechnicalApprovalPage({
         <View style={{ marginTop: 8 }}>
           {match.bySupplier.map((sm) => {
             const bits: string[] = [];
-            if (sm.mismatchCount) bits.push(`${sm.mismatchCount} mismatch`);
-            if (sm.missingPrIndexes.length) bits.push(`${sm.missingPrIndexes.length} not quoted`);
+            if (sm.specDiffCount) bits.push(`${sm.specDiffCount} spec differ`);
+            if (sm.notQuotedCount) bits.push(`${sm.notQuotedCount} not quoted`);
             return (
               <View key={sm.quotationId} style={s.recRow}>
                 <Text style={[s.recLabel, { width: 160, fontFamily: 'Helvetica-Bold', color: C.ink }]}>
@@ -255,17 +256,20 @@ function TechnicalApprovalPage({
                 {it.unit ? ` ${it.unit}` : ''}
               </Text>
               {cells.map(({ sm, byPr }) => {
-                const hit = byPr.get(ri);
+                const p = byPr.get(ri);
+                const quoted = p && p.state !== 'not_quoted';
+                const label = !quoted ? '—' : p.state === 'quoted_match' ? 'Approved' : 'Spec differs';
+                const color = !quoted ? C.faint : p.state === 'quoted_match' ? C.success : C.warning;
                 return (
                   <Text
                     key={sm.quotationId}
                     style={[
                       s.td,
                       { flex: supCol, textAlign: 'center' },
-                      ...(hit ? [{ color: C.success, fontFamily: 'Helvetica-Bold' }] : [{ color: C.faint }]),
+                      { color, ...(quoted ? { fontFamily: 'Helvetica-Bold' } : {}) },
                     ]}
                   >
-                    {hit ? 'Approved' : '—'}
+                    {label}
                   </Text>
                 );
               })}
@@ -273,34 +277,34 @@ function TechnicalApprovalPage({
           ))}
         </View>
         <Text style={s.note}>
-          &quot;Approved&quot; = matched to a requisitioned item; &quot;—&quot; = not quoted by that supplier. Green
-          highlights an approved match.
+          &quot;Approved&quot; = quoted and spec matches; &quot;Spec differs&quot; = quoted (by quantity / different
+          grade) but the spec needs a human check; &quot;—&quot; = not quoted by that supplier.
         </Text>
 
-        {/* Mismatches */}
-        {match.bySupplier.some((sm) => sm.mismatchCount > 0) && (
+        {/* Spec differences */}
+        {match.bySupplier.some((sm) => sm.specDiffCount > 0) && (
           <View style={{ marginTop: 16 }}>
             <Text style={{ fontSize: 10.5, fontFamily: 'Helvetica-Bold', color: C.ink, marginBottom: 5 }}>
-              Technical mismatches — requested vs quoted
+              Quoted, spec differs — requested vs quoted
             </Text>
             {match.bySupplier
-              .filter((sm) => sm.mismatchCount > 0)
+              .filter((sm) => sm.specDiffCount > 0)
               .map((sm) => (
                 <View key={sm.quotationId} style={{ marginTop: 6 }}>
                   <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', color: C.ink }}>{sm.supplier}</Text>
-                  {sm.items
-                    .filter((i) => i.status === 'mismatch')
-                    .map((i, k) => {
-                      const closest = i.closestPrIndex != null ? pr.items[i.closestPrIndex] : null;
+                  {sm.prItems
+                    .filter((p) => p.state === 'quoted_spec_diff' && p.supplierItem)
+                    .map((p, k) => {
+                      const reqItem = pr.items[p.prIndex] ?? null;
                       return (
                         <View key={k} style={s.ruleItem} wrap={false}>
                           <Text style={s.ruleTitle}>Quoted</Text>
                           <Text style={s.ruleDetail}>
-                            {i.supplierItem.name}
+                            {p.supplierItem!.name}
                             {'\n'}
                             <Text style={{ color: C.faint }}>
-                              Closest requisition item:{' '}
-                              {closest ? `${closest.description}${closest.itemCode ? ` (${closest.itemCode})` : ''} — ${Math.round(i.score * 100)}% match` : 'none'}
+                              Requisition item:{' '}
+                              {reqItem ? `${reqItem.description}${reqItem.itemCode ? ` (${reqItem.itemCode})` : ''} — ${Math.round(p.score * 100)}% match, mapped by ${p.mappedBy}` : 'none'}
                             </Text>
                           </Text>
                         </View>

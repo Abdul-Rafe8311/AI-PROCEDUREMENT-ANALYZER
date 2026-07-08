@@ -4,18 +4,19 @@ import { AlertTriangle, CheckCircle2, ClipboardCheck, MinusCircle } from 'lucide
 import { cn } from '@/lib/utils';
 import {
   type ExtractedQuotation,
-  formatCurrency,
+  formatUnitPrice,
+  type LineItem,
+  type PrItemMatch,
   type PrMatchResult,
   type PurchaseRequisition,
-  type SupplierItemMatch,
   type SupplierMatch,
 } from '@/lib/workspace-types';
 
-// Short quoted-value label, e.g. "×200 @ SAR 160" — used in approved cells.
-function quotedLabel(m: SupplierItemMatch): string {
-  const li = m.supplierItem;
+// Short quoted-value label, e.g. "×200 @ SAR 160.00" — used in quoted cells.
+// Unit price keeps 2 decimals (never rounded to a whole number).
+function quotedLabel(li: LineItem): string {
   const qty = li.quantity != null ? `×${li.quantity.toLocaleString('en-US')}` : '';
-  const price = li.unitPrice != null ? `@ ${formatCurrency(li.unitPrice, li.currency)}` : '';
+  const price = li.unitPrice != null ? `@ ${formatUnitPrice(li.unitPrice, li.currency)}` : '';
   return [qty, price].filter(Boolean).join(' ');
 }
 
@@ -24,9 +25,10 @@ function quotedLabel(m: SupplierItemMatch): string {
  * against the company's Purchase Requisition. Shows, at a glance:
  *  • a per-supplier "Items match PR" AI signal (kept SEPARATE from any human
  *    Technical Comments — it is a hint, not a verdict);
- *  • a PR-item × supplier grid — ✓ Technically Approved, or "—" not quoted;
- *  • the technical mismatches (quoted items that matched nothing) with the
- *    closest requisition item, so requested-vs-quoted is visible.
+ *  • a PR-item × supplier grid with THREE non-overlapping states per cell —
+ *    ✓ Approved (quoted & spec matches), ⚠ Quoted · spec differs, or — Not quoted;
+ *  • the spec-differences (quoted by part-number / different grade) with the
+ *    requisition item, so requested-vs-quoted is visible.
  */
 export function TechnicalApproval({
   pr,
@@ -41,13 +43,13 @@ export function TechnicalApproval({
 
   const qById = new Map(quotations.map((q) => [q.id, q]));
 
-  // For each supplier, map a PR index → the approved supplier item (for the cell).
-  const approvedByPr = (sm: SupplierMatch) => {
-    const m = new Map<number, SupplierItemMatch>();
-    for (const it of sm.items) if (it.status === 'approved' && it.prIndex != null) m.set(it.prIndex, it);
+  // For each supplier, map a PR index → its per-PR-item verdict (for the cell).
+  const prByIndex = (sm: SupplierMatch) => {
+    const m = new Map<number, PrItemMatch>();
+    for (const p of sm.prItems) m.set(p.prIndex, p);
     return m;
   };
-  const supplierCells = match.bySupplier.map((sm) => ({ sm, byPr: approvedByPr(sm) }));
+  const supplierCells = match.bySupplier.map((sm) => ({ sm, byPr: prByIndex(sm) }));
 
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
@@ -66,7 +68,7 @@ export function TechnicalApproval({
             <CheckCircle2 className="h-3.5 w-3.5" /> Approved
           </span>
           <span className="inline-flex items-center gap-1 text-warning">
-            <AlertTriangle className="h-3.5 w-3.5" /> Mismatch
+            <AlertTriangle className="h-3.5 w-3.5" /> Quoted · spec differs
           </span>
           <span className="inline-flex items-center gap-1">
             <MinusCircle className="h-3.5 w-3.5" /> Not quoted
@@ -84,8 +86,8 @@ export function TechnicalApproval({
           {match.bySupplier.map((sm) => {
             const ok = sm.allMatched;
             const bits: string[] = [];
-            if (sm.mismatchCount) bits.push(`${sm.mismatchCount} mismatch`);
-            if (sm.missingPrIndexes.length) bits.push(`${sm.missingPrIndexes.length} not quoted`);
+            if (sm.specDiffCount) bits.push(`${sm.specDiffCount} spec differ`);
+            if (sm.notQuotedCount) bits.push(`${sm.notQuotedCount} not quoted`);
             return (
               <span
                 key={sm.quotationId}
@@ -96,7 +98,7 @@ export function TechnicalApproval({
                 title={
                   ok
                     ? 'Every requisitioned item was matched to a quoted item.'
-                    : 'Some items did not match the requisition — review before technical approval.'
+                    : 'Some items were quoted with a differing spec or not quoted — review before technical approval.'
                 }
               >
                 {ok ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
@@ -138,20 +140,36 @@ export function TechnicalApproval({
                   {it.unit ? ` ${it.unit}` : ''}
                 </td>
                 {supplierCells.map(({ sm, byPr }) => {
-                  const hit = byPr.get(idx);
+                  const p = byPr.get(idx);
+                  const li = p?.supplierItem ?? null;
+                  const quoted = p && p.state !== 'not_quoted' && li;
                   return (
                     <td key={sm.quotationId} className="px-5 py-3 text-center">
-                      {hit ? (
+                      {quoted && p.state === 'quoted_match' ? (
                         <span
                           className="inline-flex flex-col items-center gap-0.5 text-success"
-                          title={`Technically Approved — matched "${hit.supplierItem.name}" (${Math.round(hit.score * 100)}% match)`}
+                          title={`Technically Approved — matched "${li.name}" (${Math.round(p.score * 100)}% match)`}
                         >
                           <span className="inline-flex items-center gap-1 text-xs font-semibold">
                             <CheckCircle2 className="h-3.5 w-3.5" /> Approved
                           </span>
-                          {quotedLabel(hit) && (
+                          {quotedLabel(li) && (
                             <span className="nums text-[11px] font-normal text-muted-foreground">
-                              {quotedLabel(hit)}
+                              {quotedLabel(li)}
+                            </span>
+                          )}
+                        </span>
+                      ) : quoted ? (
+                        <span
+                          className="inline-flex flex-col items-center gap-0.5 text-warning"
+                          title={`Quoted, but spec/description differs — "${li.name}" (mapped by ${p.mappedBy})`}
+                        >
+                          <span className="inline-flex items-center gap-1 text-xs font-semibold">
+                            <AlertTriangle className="h-3.5 w-3.5" /> Quoted · spec differs
+                          </span>
+                          {quotedLabel(li) && (
+                            <span className="nums text-[11px] font-normal text-muted-foreground">
+                              {quotedLabel(li)}
                             </span>
                           )}
                         </span>
@@ -172,19 +190,19 @@ export function TechnicalApproval({
         </table>
       </div>
 
-      {/* Technical mismatches — quoted items that matched no requisition item. */}
-      <MismatchDetails pr={pr} match={match} qById={qById} />
+      {/* Spec differences — quoted (by different grade / part number) but not a clean match. */}
+      <SpecDiffDetails pr={pr} match={match} qById={qById} />
 
       <p className="border-t border-border px-5 py-2.5 text-xs text-muted-foreground">
-        Matching is by item description &amp; spec, so wording differences between your requisition and a
-        supplier&apos;s quote still line up. &quot;Items match PR&quot; is an AI signal to speed review — the final
-        technical accept/reject stays a human decision.
+        Matching is by item description &amp; spec, with an exact-quantity fallback so a supplier who quotes by
+        internal part number still lines up against the requisition. &quot;Items match PR&quot; is an AI signal to
+        speed review — the final technical accept/reject stays a human decision.
       </p>
     </div>
   );
 }
 
-function MismatchDetails({
+function SpecDiffDetails({
   pr,
   match,
   qById,
@@ -193,61 +211,60 @@ function MismatchDetails({
   match: PrMatchResult;
   qById: Map<string, ExtractedQuotation>;
 }) {
-  const withMismatch = match.bySupplier.filter((sm) => sm.mismatchCount > 0);
-  if (!withMismatch.length) return null;
+  const withDiff = match.bySupplier.filter((sm) => sm.specDiffCount > 0);
+  if (!withDiff.length) return null;
 
   return (
     <div className="border-t border-border bg-warning/5 px-5 py-4">
       <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-warning">
         <AlertTriangle className="h-4 w-4" />
-        Technical mismatches — review requested vs quoted
+        Quoted, spec differs — review requested vs quoted
       </div>
       <div className="space-y-3">
-        {withMismatch.map((sm) => (
+        {withDiff.map((sm) => (
           <div key={sm.quotationId}>
             <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {sm.supplier}
             </div>
             <ul className="mt-1.5 space-y-2">
-              {sm.items
-                .filter((i) => i.status === 'mismatch')
-                .map((i, k) => {
-                  const closest = i.closestPrIndex != null ? pr.items[i.closestPrIndex] : null;
+              {sm.prItems
+                .filter((p) => p.state === 'quoted_spec_diff' && p.supplierItem)
+                .map((p, k) => {
+                  const reqItem = pr.items[p.prIndex] ?? null;
+                  const li = p.supplierItem!;
                   const q = qById.get(sm.quotationId);
-                  const currency = i.supplierItem.currency || q?.currency || 'USD';
+                  const currency = li.currency || q?.currency || 'USD';
                   return (
-                    <li
-                      key={k}
-                      className="rounded-lg border border-warning/30 bg-card p-3 text-sm"
-                    >
+                    <li key={k} className="rounded-lg border border-warning/30 bg-card p-3 text-sm">
                       <div className="flex flex-wrap items-baseline gap-x-2">
                         <span className="text-xs font-semibold uppercase tracking-wide text-warning">
                           Quoted
                         </span>
-                        <span className="font-medium">{i.supplierItem.name}</span>
-                        {i.supplierItem.unitPrice != null && (
+                        <span className="font-medium">{li.name}</span>
+                        {li.unitPrice != null && (
                           <span className="nums text-xs text-muted-foreground">
-                            {i.supplierItem.quantity != null
-                              ? `×${i.supplierItem.quantity.toLocaleString('en-US')} `
-                              : ''}
-                            @ {formatCurrency(i.supplierItem.unitPrice, currency)}
+                            {li.quantity != null ? `×${li.quantity.toLocaleString('en-US')} ` : ''}
+                            @ {formatUnitPrice(li.unitPrice, currency)}
                           </span>
                         )}
+                        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                          mapped by {p.mappedBy}
+                        </span>
                       </div>
                       <div className="mt-1 flex flex-wrap items-baseline gap-x-2 text-muted-foreground">
                         <span className="text-xs font-semibold uppercase tracking-wide">
-                          Closest requisition item
+                          Requisition item
                         </span>
-                        {closest ? (
+                        {reqItem ? (
                           <>
-                            <span>{closest.description}</span>
-                            {closest.itemCode && (
-                              <span className="nums text-xs">({closest.itemCode})</span>
+                            <span>{reqItem.description}</span>
+                            {reqItem.itemCode && (
+                              <span className="nums text-xs">({reqItem.itemCode})</span>
                             )}
-                            <span className="text-xs">· {Math.round(i.score * 100)}% match</span>
+                            <span className="text-xs">· {Math.round(p.score * 100)}% description match</span>
                           </>
                         ) : (
-                          <span className="text-xs">none — no requisition item is close</span>
+                          <span className="text-xs">none</span>
                         )}
                       </div>
                     </li>
