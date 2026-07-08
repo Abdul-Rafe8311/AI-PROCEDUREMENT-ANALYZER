@@ -20,12 +20,14 @@
 // and order vary per document — nothing is hardcoded.
 
 import { Document, Page, Text, View, StyleSheet, pdf } from '@react-pdf/renderer';
+import { scoreSuppliers } from './analysis-engine';
 import { type FxRates, getFxRates, sarPerUnit, toSar, toUsd } from './fx-rates';
 import { derivePrSubject } from './item-matching';
 import { buildComparisonModel, type ComparisonRow, supplierGroups } from './pr-comparison';
 import {
   type AnalysisResult,
   DEFAULT_SIGNATURE_ROLES,
+  DEFAULT_WEIGHTS,
   deliveryNormalizedHint,
 } from './workspace-types';
 
@@ -40,6 +42,8 @@ const C = {
   win: '#dcfce7',
   winInk: '#166534',
   specDiff: '#b45309', // amber-700 — factual "spec differs" grade-mismatch flag
+  aiBg: '#eef2ff',
+  aiBorder: '#6366f1', // indigo — AI-suggested (system-generated) content only
 };
 
 export interface ApprovalFormOptions {
@@ -109,6 +113,34 @@ function fxStampText(fx: FxRates, currencies: string[]): string {
   return `${bits.join('   ·   ')} — rate as of ${when} (${fx.live ? 'live' : 'cached'})`;
 }
 
+// AI-SUGGESTED recommendation shown as a clearly-labelled, visually-separate block
+// (indigo/italic, "NOT an approval"). It never writes into the human Technical
+// Comments / Final Recommendation fields — those stay blank for the team to sign.
+function aiRecommendation(analysis: AnalysisResult, fx: FxRates | null): string {
+  const scored = scoreSuppliers(analysis.quotations, analysis.risks, DEFAULT_WEIGHTS);
+  const best = scored[0];
+  if (!best) return '';
+  const name = best.quotation.supplierName;
+  const rec = analysis.recommendation;
+  const bits: string[] = [];
+  if (rec.lowestCost?.supplier === name && best.quotation.totalCost != null) {
+    const sar = fx ? toSar(best.quotation.totalCost, best.quotation.currency, fx) : null;
+    const cost = sar != null ? `SAR ${money2(sar)}` : `${best.quotation.currency} ${money2(best.quotation.totalCost)}`;
+    bits.push(`lowest total cost (${cost})`);
+  }
+  if (rec.fastestDelivery?.supplier === name && best.quotation.deliveryDays != null) {
+    const del = best.quotation.deliveryRaw?.trim() || `${best.quotation.deliveryDays} days`;
+    bits.push(`faster delivery (${del})`);
+  }
+  const reason =
+    bits.length > 0
+      ? bits.join(' and ')
+      : analysis.quotations.length === 1
+        ? `only supplier analyzed; procurement score ${Math.round(best.overall * 100)}/100`
+        : `highest procurement score (${Math.round(best.overall * 100)}/100)`;
+  return `${name} — ${reason}.`;
+}
+
 function ApprovalDocument({
   analysis,
   signatureRoles,
@@ -123,6 +155,7 @@ function ApprovalDocument({
   // prOnly: rows come ONLY from the PR document — the TA form NEVER builds rows
   // from supplier descriptions (no supplier-union fallback, no 23-row explosion).
   const model = buildComparisonModel(qs, analysis.purchaseRequisition, analysis.prMatch, { prOnly: true });
+  const ai = aiRecommendation(analysis, fx);
   const supplierCurrencies = qs.map((q) => q.currency);
 
   // Lowest SAR unit price in a row (only when ≥2 present cells genuinely differ)
@@ -181,6 +214,9 @@ function ApprovalDocument({
     winCell: { backgroundColor: C.win, color: C.winInk, fontFamily: 'Helvetica-Bold' },
     notQuoted: { color: C.faint, fontFamily: 'Helvetica-Oblique' },
     specDiffTag: { fontSize: fs - 1.5, fontFamily: 'Helvetica-Oblique', color: C.specDiff, marginTop: 1 },
+    aiBox: { marginTop: 6, borderWidth: 1, borderColor: C.aiBorder, backgroundColor: C.aiBg, borderRadius: 3, paddingVertical: 5, paddingHorizontal: 7 },
+    aiLabel: { fontSize: fs - 0.5, fontFamily: 'Helvetica-Bold', color: C.aiBorder, marginBottom: 2 },
+    aiText: { color: C.aiBorder, fontFamily: 'Helvetica-Oblique' },
     finalRow: { marginTop: 7, flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
     signWrap: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
     signBox: { borderWidth: 1, borderColor: C.line, borderRadius: 3, paddingVertical: 4, paddingHorizontal: 5, minHeight: 48 },
@@ -388,6 +424,16 @@ function ApprovalDocument({
             </View>
           );
         })}
+
+        {/* AI-SUGGESTED recommendation — clearly labelled, system-generated, NOT an
+            approval. Kept SEPARATE from the human Technical Comments / Final
+            Recommendation fields, which stay blank below. */}
+        {ai ? (
+          <View style={s.aiBox}>
+            <Text style={s.aiLabel}>AI SUGGESTED — system-generated, NOT an approval</Text>
+            <Text style={s.aiText}>{ai}</Text>
+          </View>
+        ) : null}
 
         {/* Final Recommendation — blank for the human */}
         <View style={s.finalRow}>

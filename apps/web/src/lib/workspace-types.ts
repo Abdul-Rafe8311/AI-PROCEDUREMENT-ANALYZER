@@ -163,8 +163,10 @@ export interface PrItemMatch {
   supplierItem: LineItem | null;
   /** 0..1 description similarity of the mapped line (0 when not_quoted) */
   score: number;
-  /** how the line was mapped to this PR item ('quantity' = fell back to exact qty) */
-  mappedBy: 'description' | 'quantity' | null;
+  /** how the line was mapped: by description/spec, or by line ORDER when the
+   *  description was inconclusive (e.g. a part-number quote). Quantity is never
+   *  used to gate a match — it is display-only. */
+  mappedBy: 'description' | 'order' | null;
 }
 
 /** One supplier's full technical-approval picture against the PR (PR-item-centric). */

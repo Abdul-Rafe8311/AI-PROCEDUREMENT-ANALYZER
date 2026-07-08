@@ -112,18 +112,18 @@ test('PHASE 2: clean matches, freight excluded, and a not-quoted item detected',
   assert.equal(m.matchCount + m.specDiffCount + m.notQuotedCount, pr.items.length);
 });
 
-test('PHASE 2: a wrong-grade quote maps by exact quantity as "quoted, spec differs"', () => {
+test('PHASE 2: a wrong-grade quote maps by line order as "quoted, spec differs"', () => {
   const m = matchSupplierItems(qb, pr.items);
-  // The 304 anchor has no strong description match, but its quantity (200) matches
-  // PR item 0 → quoted_spec_diff (shown & flagged for spec review, never dropped).
+  // The 304 anchor has no strong description match (wrong grade), so it falls to the
+  // line-order pass onto PR item 0 → quoted_spec_diff (shown & flagged, never dropped).
+  // Quantity is never a gate.
   const anchorPr = m.prItems[0];
   assert.equal(anchorPr.state, 'quoted_spec_diff');
-  assert.equal(anchorPr.mappedBy, 'quantity');
+  assert.equal(anchorPr.mappedBy, 'order');
   assert.ok(/304/.test(anchorPr.supplierItem!.name));
-  // The blanket lines up by quantity (qty is the primary key) and its spec agrees,
-  // so it is a clean match — not flagged.
+  // The blanket is a clean description match and its spec agrees → not flagged.
   assert.equal(m.prItems[2].state, 'quoted_match');
-  assert.equal(m.prItems[2].mappedBy, 'quantity');
+  assert.equal(m.prItems[2].mappedBy, 'description');
   // The castable (PR item 1) was not quoted at all.
   assert.equal(m.prItems[1].state, 'not_quoted');
   assert.equal(m.matchCount, 1);

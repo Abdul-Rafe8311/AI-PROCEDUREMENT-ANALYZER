@@ -132,7 +132,7 @@ test('PR 12601612 · Supply Wave item 1 is QUOTED, spec differs (SS 310 vs 253 M
   const match = matchQuotationsToPr(quotations, pr);
   const sw = match.bySupplier.find((s) => s.supplier === 'Supply Wave')!;
   assert.equal(sw.prItems[0].state, 'quoted_spec_diff');
-  assert.equal(sw.prItems[0].mappedBy, 'quantity');
+  assert.equal(sw.prItems[0].mappedBy, 'order');
   assert.ok(/310/.test(sw.prItems[0].supplierItem!.name));
 });
 
@@ -143,10 +143,10 @@ test('PR 12601612 · Krosaki & Refratechnik: 5/5 items QUOTED (0 not quoted); ch
     assert.equal(sm.notQuotedCount, 0, `${name} should have 0 not-quoted`);
     assert.equal(sm.matchCount + sm.specDiffCount + sm.notQuotedCount, 5, `${name} states must sum to 5`);
     assert.ok(sm.prItems.every((p) => p.state !== 'not_quoted'), `${name} every PR item is quoted`);
-    // Quantity-primary: part-number quotes line up by qty and, having no
-    // conflicting grade, show as CLEAN matches (not "spec differs").
+    // Part-number quotes line up by line ORDER (description inconclusive) and, having
+    // no conflicting grade, show as CLEAN matches (not "spec differs").
     assert.equal(sm.specDiffCount, 0, `${name} part-number quotes should be clean matches`);
-    assert.ok(sm.prItems.every((p) => p.mappedBy === 'quantity'), `${name} mapped by quantity`);
+    assert.ok(sm.prItems.every((p) => p.mappedBy === 'order'), `${name} mapped by order`);
   }
 });
 

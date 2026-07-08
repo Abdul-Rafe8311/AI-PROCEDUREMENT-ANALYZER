@@ -131,3 +131,30 @@ test('TA FORM: the supplier-union fallback is GONE — no PR items ⇒ zero prod
   assert.equal(model.hasPr, false);
   assert.equal(model.rows.filter((r) => r.kind !== 'charge').length, 0, 'never fabricates rows from supplier descriptions');
 });
+
+test('MATCHING: a PR qty different from the supplier qty NEVER causes "Not Quoted"', () => {
+  // Reproduce the reported bug: PR row 1 qty is (wrongly) doubled to 20,000 while
+  // every supplier quotes 10,000. Description/order matching must still fill row 1.
+  const prDoubled = purchaseRequisitionFromLlm(
+    {
+      requestNo: '12601612',
+      description: 'Anchors for production department.',
+      items: pr.items.map((it, i) => ({
+        itemCode: it.itemCode,
+        description: it.description,
+        quantity: i === 0 ? 20000 : it.quantity, // row 1 doubled
+        unit: it.unit,
+      })),
+    },
+    'pr.pdf',
+  )!;
+  assert.equal(prDoubled.items[0].quantity, 20000);
+
+  const m2 = matchQuotationsToPr(quotations, prDoubled);
+  for (const sm of m2.bySupplier) {
+    assert.equal(sm.prItems[0].state !== 'not_quoted', true, `${sm.supplier} row 1 must be quoted despite qty mismatch`);
+    // The cell keeps the supplier's OWN quantity (10,000), not the PR's 20,000.
+    assert.equal(sm.prItems[0].supplierItem!.quantity, 10000, `${sm.supplier} shows its own qty`);
+    assert.equal(sm.notQuotedCount, 0, `${sm.supplier} has zero not-quoted`);
+  }
+});
