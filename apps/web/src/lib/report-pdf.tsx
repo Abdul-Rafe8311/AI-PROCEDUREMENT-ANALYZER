@@ -186,7 +186,7 @@ function Footer({ dateStr }: { dateStr: string }) {
 // ── Technical Approval page (only when a company PR was matched) ──
 function prByIndex(sm: SupplierMatch): Map<number, PrItemMatch> {
   const m = new Map<number, PrItemMatch>();
-  for (const p of sm.prItems) m.set(p.prIndex, p);
+  for (const p of sm.prItems ?? []) m.set(p.prIndex, p);
   return m;
 }
 
@@ -292,7 +292,7 @@ function TechnicalApprovalPage({
               .map((sm) => (
                 <View key={sm.quotationId} style={{ marginTop: 6 }}>
                   <Text style={{ fontSize: 9, fontFamily: 'Helvetica-Bold', color: C.ink }}>{sm.supplier}</Text>
-                  {sm.prItems
+                  {(sm.prItems ?? [])
                     .filter((p) => p.state === 'quoted_spec_diff' && p.supplierItem)
                     .map((p, k) => {
                       const reqItem = pr.items[p.prIndex] ?? null;

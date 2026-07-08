@@ -11,7 +11,7 @@ import { AnalysisResults } from '@/components/workspace/analysis-results';
 import { ExtractionDebug } from '@/components/workspace/extraction-debug';
 import { ChatPanel } from '@/components/workspace/chat-panel';
 import { isSupabaseConfigured, STORAGE_BUCKET, supabase } from '@/lib/supabase';
-import { buildAnalysis, classifyQuestion } from '@/lib/analysis-engine';
+import { buildAnalysis, classifyQuestion, normalizeRestoredAnalysis } from '@/lib/analysis-engine';
 import {
   type DocStatus,
   type IndexStatus,
@@ -112,7 +112,9 @@ export default function WorkspacePage() {
           return;
         }
         if (cancelled) return;
-        setAnalysis(result);
+        // Upgrade an older persisted analysis to the current shape (rebuilds the
+        // PR-item match so a pre-refactor session can't crash the new UI).
+        setAnalysis(normalizeRestoredAnalysis(result));
         setAnalysisId(lastId);
 
         // Chat history incl. any charts. select('*') tolerates DBs without the

@@ -102,7 +102,7 @@ function prRows(
   );
   return pr.items.map((it, idx) => {
     const cells = quotations.map<SupplierCell | null>((q) => {
-      const li = byQuotation.get(q.id)?.prItems[idx]?.supplierItem ?? null;
+      const li = byQuotation.get(q.id)?.prItems?.[idx]?.supplierItem ?? null;
       if (!li) return null;
       return {
         description: li.name,

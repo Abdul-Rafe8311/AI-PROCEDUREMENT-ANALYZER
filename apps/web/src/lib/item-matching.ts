@@ -141,7 +141,7 @@ export function matchSupplierItems(
   prItems: PrItem[],
   threshold: number = MATCH_THRESHOLD,
 ): SupplierMatch {
-  const products = quotation.lineItems.filter((li) => (li.category ?? 'product') === 'product');
+  const products = (quotation.lineItems ?? []).filter((li) => (li.category ?? 'product') === 'product');
 
   const simOf = (li: LineItem, pr: PrItem): number => {
     let sc = similarity(li.name, prItemText(pr));
@@ -279,8 +279,11 @@ export function suggestTechnicalComments(
   const out: Record<string, TechnicalComment> = {};
   if (!prMatch || !pr) return out;
   for (const sm of prMatch.bySupplier) {
+    const prItems = sm.prItems ?? [];
+    const specDiffCount = sm.specDiffCount ?? 0;
+    const notQuotedCount = sm.notQuotedCount ?? 0;
     // Every PR item cleanly matched → suggest acceptance.
-    if (sm.specDiffCount === 0 && sm.notQuotedCount === 0) {
+    if (specDiffCount === 0 && notQuotedCount === 0) {
       out[sm.quotationId] = {
         text: 'Technically accepted (AI-suggested: items match PR description)',
         aiSuggested: true,
@@ -288,16 +291,16 @@ export function suggestTechnicalComments(
       continue;
     }
     const bits: string[] = [];
-    if (sm.specDiffCount > 0) {
-      const eg = sm.prItems.find((p) => p.state === 'quoted_spec_diff');
+    if (specDiffCount > 0) {
+      const eg = prItems.find((p) => p.state === 'quoted_spec_diff');
       const prIt = eg ? pr.items[eg.prIndex] : null;
       const example = eg?.supplierItem
         ? ` (e.g. "${short(eg.supplierItem.name)}"${prIt ? ` vs PR "${short(prIt.description)}"` : ''})`
         : '';
-      bits.push(`${sm.specDiffCount} item(s) quoted, spec differs — verify${example}`);
+      bits.push(`${specDiffCount} item(s) quoted, spec differs — verify${example}`);
     }
-    if (sm.notQuotedCount > 0) {
-      bits.push(`${sm.notQuotedCount} requisition item(s) not quoted — review scope`);
+    if (notQuotedCount > 0) {
+      bits.push(`${notQuotedCount} requisition item(s) not quoted — review scope`);
     }
     out[sm.quotationId] = { text: `AI note: ${bits.join(' · ')}`, aiSuggested: true };
   }

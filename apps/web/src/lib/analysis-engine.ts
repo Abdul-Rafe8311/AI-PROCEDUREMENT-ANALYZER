@@ -330,6 +330,24 @@ export function assembleAnalysis(
   };
 }
 
+/**
+ * Upgrade a RESTORED analysis (persisted JSON, possibly written by an OLDER app
+ * version) to the current shape before it is rendered. `prMatch` is deterministic
+ * from the stored quotations + PR, so we recompute it — this repairs sessions
+ * saved before the PR-item match model changed (the old SupplierMatch had
+ * `items`/`mismatchCount` and no `prItems`, which the current UI would read as
+ * `undefined` and crash on). Everything else is left as stored; with no PR,
+ * prMatch stays null.
+ */
+export function normalizeRestoredAnalysis(result: AnalysisResult): AnalysisResult {
+  const pr = result.purchaseRequisition;
+  const prMatch =
+    pr && pr.items.length && result.quotations?.length
+      ? matchQuotationsToPr(result.quotations, pr)
+      : null;
+  return { ...result, prMatch };
+}
+
 export function buildRecommendation(
   qs: ExtractedQuotation[],
   risks: RiskFlag[],
@@ -915,10 +933,10 @@ export function detectRisks(
     for (const sm of prMatch.bySupplier) {
       // Quoted with a differing spec (matched by quantity / different grade), or an
       // extra item that is not on the requisition → needs a requested-vs-quoted check.
-      const specDiffNames = sm.prItems
+      const specDiffNames = (sm.prItems ?? [])
         .filter((p) => p.state === 'quoted_spec_diff' && p.supplierItem)
         .map((p) => p.supplierItem!.name);
-      const extraNames = sm.extraLines.map((l) => l.name);
+      const extraNames = (sm.extraLines ?? []).map((l) => l.name);
       const reviewNames = [...specDiffNames, ...extraNames];
       if (reviewNames.length > 0) {
         const n = reviewNames.length;
@@ -930,8 +948,8 @@ export function detectRisks(
           `Flagged: ${n} quoted item${plural} (${preview(reviewNames)}) ${n === 1 ? 'was' : 'were'} matched by quantity or is not on the requisition — the spec/grade was not confirmed from the description, so ${n === 1 ? 'it is' : 'they are'} not Technically Approved until a buyer checks requested vs quoted.`,
         );
       }
-      if (sm.notQuotedCount > 0) {
-        const missNames = sm.prItems
+      if ((sm.notQuotedCount ?? 0) > 0) {
+        const missNames = (sm.prItems ?? [])
           .filter((p) => p.state === 'not_quoted')
           .map((p) => pr.items[p.prIndex]?.description ?? '')
           .filter(Boolean);

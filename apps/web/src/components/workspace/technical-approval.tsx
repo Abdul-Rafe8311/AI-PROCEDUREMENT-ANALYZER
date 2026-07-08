@@ -46,7 +46,7 @@ export function TechnicalApproval({
   // For each supplier, map a PR index → its per-PR-item verdict (for the cell).
   const prByIndex = (sm: SupplierMatch) => {
     const m = new Map<number, PrItemMatch>();
-    for (const p of sm.prItems) m.set(p.prIndex, p);
+    for (const p of sm.prItems ?? []) m.set(p.prIndex, p);
     return m;
   };
   const supplierCells = match.bySupplier.map((sm) => ({ sm, byPr: prByIndex(sm) }));
@@ -227,7 +227,7 @@ function SpecDiffDetails({
               {sm.supplier}
             </div>
             <ul className="mt-1.5 space-y-2">
-              {sm.prItems
+              {(sm.prItems ?? [])
                 .filter((p) => p.state === 'quoted_spec_diff' && p.supplierItem)
                 .map((p, k) => {
                   const reqItem = pr.items[p.prIndex] ?? null;
