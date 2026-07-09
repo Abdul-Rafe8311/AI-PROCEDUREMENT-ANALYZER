@@ -10,7 +10,7 @@ import {
   quotationsFromLlmSuppliers,
   type LlmSupplier,
 } from './extraction-server';
-import { matchQuotationsToPr } from './item-matching';
+import { matchQuotationsToPr, suggestTechnicalComments } from './item-matching';
 import { buildComparisonModel } from './pr-comparison';
 
 const PR_QTYS = [10000, 2000, 1500, 300, 700];
@@ -69,7 +69,8 @@ const alfran: LlmSupplier = {
     freight('Transportation', 7900),
   ],
 };
-// Supply Wave (SAR) quotes "SS 310" on row 1 → conflicts with PR "253 MA".
+// Supply Wave (SAR) quotes "SS 310" on every corrugated row (1,3,4,5) → those
+// conflict with the PR's 253 grades; row 2 is the matching SS 310 anchor.
 const supplyWave: LlmSupplier = {
   supplierName: 'Supply Wave', reference: 'SW-2606082547', prNumber: '12601612', currency: 'SAR',
   totalAmount: null, vatAmount: null, totalWithoutVat: null, totalsByCurrency: null,
@@ -77,9 +78,9 @@ const supplyWave: LlmSupplier = {
   lineItems: [
     { name: 'Anchor Corrugated Type: TWS.10(60)-200(140)-40-310. Material GRADE - SS 310', quantity: 10000, unitPrice: 10, totalPrice: null, category: 'product', uom: 'EA', availableInDays: null },
     { name: 'SS 310 ANCHOR TYPE: V, SIZE: 10 X 70 MM.', quantity: 2000, unitPrice: 3, totalPrice: null, category: 'product', uom: 'EA', availableInDays: null },
-    { name: 'Anchor, Corrugated, Type. TWS.10(60)-250(140)-40-253, Grade 253 MA', quantity: 1500, unitPrice: 12, totalPrice: null, category: 'product', uom: 'EA', availableInDays: null },
-    { name: 'Anchor, Corrugated, Type. TWS.10(60)-170(80)-40-253, Grade 253 C', quantity: 300, unitPrice: 9, totalPrice: null, category: 'product', uom: 'EA', availableInDays: null },
-    { name: 'Anchor, Corrugated, Type. TWS.10(60)-180(100)-40-253, Grade 253 C', quantity: 700, unitPrice: 9, totalPrice: null, category: 'product', uom: 'EA', availableInDays: null },
+    { name: 'Anchor Corrugated Type: TWS.10(60)-250(140)-40-310. Material GRADE - SS 310', quantity: 1500, unitPrice: 12, totalPrice: null, category: 'product', uom: 'EA', availableInDays: null },
+    { name: 'Anchor Corrugated Type: TWS.10(60)-170(80)-40-310. Material GRADE - SS 310', quantity: 300, unitPrice: 9, totalPrice: null, category: 'product', uom: 'EA', availableInDays: null },
+    { name: 'Anchor Corrugated Type: TWS.10(60)-180(100)-40-310. Material GRADE - SS 310', quantity: 700, unitPrice: 9, totalPrice: null, category: 'product', uom: 'EA', availableInDays: null },
   ],
 };
 
@@ -108,10 +109,13 @@ test('TA FORM: every supplier fills all 5 PR rows — ZERO "Not Quoted" cells', 
   }
 });
 
-test('TA FORM: grade conflicts tag "spec differs" — Supply Wave row 1 and Alfran rows 4-5', () => {
+test('TA FORM: grade conflicts tag "spec differs" — Supply Wave rows 1,3,4,5 and Alfran rows 4-5', () => {
   const sw = prMatch.bySupplier.find((s) => s.supplier === 'Supply Wave')!;
-  assert.equal(sw.prItems[0].state, 'quoted_spec_diff', 'Supply Wave row 1 (SS 310) spec differs');
-  assert.equal(sw.specDiffCount, 1);
+  for (const idx of [0, 2, 3, 4]) {
+    assert.equal(sw.prItems[idx].state, 'quoted_spec_diff', `Supply Wave row ${idx + 1} (SS 310) spec differs`);
+  }
+  assert.equal(sw.prItems[1].state, 'quoted_match', 'Supply Wave row 2 (SS 310 anchor) matches');
+  assert.equal(sw.specDiffCount, 4);
 
   const alf = prMatch.bySupplier.find((s) => s.supplier === 'AlFRAN')!;
   assert.equal(alf.prItems[3].state, 'quoted_spec_diff', 'Alfran row 4 (253 MA vs 253 C) spec differs');
@@ -120,6 +124,30 @@ test('TA FORM: grade conflicts tag "spec differs" — Supply Wave row 1 and Alfr
 
   // Everyone quoted everything → nobody has a not-quoted row.
   for (const sm of prMatch.bySupplier) assert.equal(sm.notQuotedCount, 0, `${sm.supplier} not-quoted`);
+});
+
+test('TA FORM: AI-SUGGESTED Technical Comment verdicts per supplier', () => {
+  const comments = suggestTechnicalComments(prMatch, pr);
+  const verdictFor = (name: string) =>
+    comments[quotations.find((q) => q.supplierName === name)!.id]?.text;
+
+  // AL-NAJIM quotes exact PR descriptions/grades → clean acceptance.
+  assert.equal(verdictFor('AL NAJIM'), 'AI SUGGESTED: Technically Accepted');
+  // Supply Wave: SS 310 grade conflicts on items 1,3,4,5.
+  assert.equal(
+    verdictFor('Supply Wave'),
+    'AI SUGGESTED: Technically Accepted — spec differs on items 1,3,4,5, review grade',
+  );
+  // Alfran: 253 MA vs PR 253 C on items 4,5.
+  assert.equal(
+    verdictFor('AlFRAN'),
+    'AI SUGGESTED: Technically Accepted — spec differs on items 4,5, review grade',
+  );
+  // Every verdict is AI-suggested and prefixed for the indigo/italic style.
+  for (const q of quotations) {
+    assert.equal(comments[q.id].aiSuggested, true);
+    assert.ok(comments[q.id].text.startsWith('AI SUGGESTED: '), `${q.supplierName} prefixed`);
+  }
 });
 
 test('TA FORM: PR Description prints the FULL text (not truncated to "Anchors")', () => {

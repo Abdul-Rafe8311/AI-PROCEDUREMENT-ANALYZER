@@ -274,8 +274,6 @@ export function matchSupplierItems(
   };
 }
 
-const short = (s: string, n = 44) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
-
 // Common material / quality adjectives — excluded so a derived subject lands on
 // the item NOUN ("anchor", "castable") rather than a describing word.
 const SUBJECT_ADJECTIVES = new Set([
@@ -325,13 +323,17 @@ export function derivePrSubject(names: string[]): string {
 }
 
 /**
- * Build AI-SUGGESTED Technical Comments per supplier from the PR matching. These
- * are STARTING POINTS a human reviews/overwrites — item-description match is
- * never sufficient grounds for approval on its own (capability, track record,
- * trust and pricing are human judgment calls). Only emitted when a PR was
- * matched; every entry is marked `aiSuggested: true`.
- *  - all quoted items match  → "Technically accepted (AI-suggested: items match PR description)"
- *  - any item mismatches     → "AI note: items do not match PR description — review required (e.g. …)"
+ * Build AI-SUGGESTED Technical Comment verdicts per supplier, based ONLY on how
+ * the supplier's quoted items compare to the PR items by DESCRIPTION. These are
+ * editable starting points — the AI never claims anything it can't see (supplier
+ * experience/capability/commercial terms); the wording is strictly about item and
+ * spec matching. Every entry is marked `aiSuggested: true` and prefixed
+ * "AI SUGGESTED:" (rendered indigo/italic; the tag is dropped once a human edits).
+ *
+ *  - all PR items quoted, grades match → "AI SUGGESTED: Technically Accepted"
+ *  - quoted but some spec/grade differs → "AI SUGGESTED: Technically Accepted —
+ *      spec differs on items <list>, review grade" (a spec difference does NOT block)
+ *  - genuinely missing PR items → "AI SUGGESTED: Review — items not quoted: <list>"
  */
 export function suggestTechnicalComments(
   prMatch: PrMatchResult | null | undefined,
@@ -339,31 +341,24 @@ export function suggestTechnicalComments(
 ): Record<string, TechnicalComment> {
   const out: Record<string, TechnicalComment> = {};
   if (!prMatch || !pr) return out;
+  const nums = (items: PrItemMatch[], state: PrItemMatchState) =>
+    items.filter((p) => p.state === state).map((p) => p.prIndex + 1).join(',');
+
   for (const sm of prMatch.bySupplier) {
     const prItems = sm.prItems ?? [];
-    const specDiffCount = sm.specDiffCount ?? 0;
-    const notQuotedCount = sm.notQuotedCount ?? 0;
-    // Every PR item cleanly matched → suggest acceptance.
-    if (specDiffCount === 0 && notQuotedCount === 0) {
-      out[sm.quotationId] = {
-        text: 'Technically accepted (AI-suggested: items match PR description)',
-        aiSuggested: true,
-      };
-      continue;
+    const specList = nums(prItems, 'quoted_spec_diff');
+    const missingList = nums(prItems, 'not_quoted');
+
+    let verdict: string;
+    if (missingList) {
+      verdict = `Review — items not quoted: ${missingList}`;
+      if (specList) verdict += `; spec differs on items ${specList}, review grade`;
+    } else if (specList) {
+      verdict = `Technically Accepted — spec differs on items ${specList}, review grade`;
+    } else {
+      verdict = 'Technically Accepted';
     }
-    const bits: string[] = [];
-    if (specDiffCount > 0) {
-      const eg = prItems.find((p) => p.state === 'quoted_spec_diff');
-      const prIt = eg ? pr.items[eg.prIndex] : null;
-      const example = eg?.supplierItem
-        ? ` (e.g. "${short(eg.supplierItem.name)}"${prIt ? ` vs PR "${short(prIt.description)}"` : ''})`
-        : '';
-      bits.push(`${specDiffCount} item(s) quoted, spec differs — verify${example}`);
-    }
-    if (notQuotedCount > 0) {
-      bits.push(`${notQuotedCount} requisition item(s) not quoted — review scope`);
-    }
-    out[sm.quotationId] = { text: `AI note: ${bits.join(' · ')}`, aiSuggested: true };
+    out[sm.quotationId] = { text: `AI SUGGESTED: ${verdict}`, aiSuggested: true };
   }
   return out;
 }

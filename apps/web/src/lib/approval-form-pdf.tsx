@@ -22,13 +22,14 @@
 import { Document, Page, Text, View, StyleSheet, pdf } from '@react-pdf/renderer';
 import { scoreSuppliers } from './analysis-engine';
 import { type FxRates, getFxRates, sarPerUnit, toSar, toUsd } from './fx-rates';
-import { derivePrSubject } from './item-matching';
+import { derivePrSubject, suggestTechnicalComments } from './item-matching';
 import { buildComparisonModel, type ComparisonRow, supplierGroups } from './pr-comparison';
 import {
   type AnalysisResult,
   DEFAULT_SIGNATURE_ROLES,
   DEFAULT_WEIGHTS,
   deliveryNormalizedHint,
+  type TechnicalComment,
 } from './workspace-types';
 
 const C = {
@@ -49,6 +50,8 @@ const C = {
 export interface ApprovalFormOptions {
   /** ordered, enabled signature-block role names (defaults to DEFAULT_SIGNATURE_ROLES) */
   signatureRoles?: string[];
+  /** per-supplier Technical Comments keyed by quotation id (AI-suggested unless a human edited it) */
+  technicalComments?: Record<string, TechnicalComment>;
   /** SAR/USD rate override; when omitted a live rate is fetched (cached fallback). null = no rate */
   fx?: FxRates | null;
 }
@@ -144,10 +147,12 @@ function aiRecommendation(analysis: AnalysisResult, fx: FxRates | null): string 
 function ApprovalDocument({
   analysis,
   signatureRoles,
+  comments,
   fx,
 }: {
   analysis: AnalysisResult;
   signatureRoles: string[];
+  comments: Record<string, TechnicalComment>;
   fx: FxRates | null;
 }) {
   const qs = analysis.quotations;
@@ -410,15 +415,12 @@ function ApprovalDocument({
               />
               <TermRow label="Delivery Terms" s={s} leftW={leftW} supW={supW} values={group.map((sup) => qById.get(sup.quotationId)!.deliveryTerms ?? '')} />
 
-              {/* Technical Comments — left BLANK for the human team to complete.
-                  The AI does NOT write any evaluation, suggestion or verdict here. */}
+              {/* Technical Comments — AI-SUGGESTED verdict (indigo/italic) OR the
+                  human's own plain comment once edited. Final Recommendation stays blank. */}
               <View style={s.rowFlex} wrap={false}>
                 <Text style={[s.cellBox, s.labelRow, { width: leftW, borderLeftWidth: 1, borderLeftColor: C.border }]}>Technical Comments</Text>
                 {group.map((sup) => (
-                  <View
-                    key={sup.quotationId}
-                    style={{ width: supW, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, minHeight: 22 }}
-                  />
+                  <CommentCell key={sup.quotationId} comment={comments[sup.quotationId]} width={supW} s={s} />
                 ))}
               </View>
             </View>
@@ -471,6 +473,29 @@ function ApprovalDocument({
   );
 }
 
+// A Technical Comment cell: an AI-SUGGESTED verdict renders indigo/italic; once a
+// human has edited it (aiSuggested=false) it renders as a plain human comment.
+function CommentCell({
+  comment,
+  width,
+  s,
+}: {
+  comment: TechnicalComment | undefined;
+  width: number;
+  s: ReturnType<typeof StyleSheet.create>;
+}) {
+  const text = comment?.text?.trim() ?? '';
+  return (
+    <View style={{ width, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3, minHeight: 22, justifyContent: 'center' }}>
+      {text ? (
+        <Text style={comment!.aiSuggested ? s.aiText : { color: C.ink }}>{text}</Text>
+      ) : (
+        <Text> </Text>
+      )}
+    </View>
+  );
+}
+
 function TermRow({
   label,
   values,
@@ -500,10 +525,12 @@ export async function generateApprovalFormPdf(
   options?: ApprovalFormOptions,
 ): Promise<Blob> {
   const roles = options?.signatureRoles?.length ? options.signatureRoles : DEFAULT_SIGNATURE_ROLES;
+  const comments =
+    options?.technicalComments ?? suggestTechnicalComments(analysis.prMatch, analysis.purchaseRequisition);
   // Live SAR/USD rate at generation time (cached fallback if the feed is down);
   // an injectable fx lets callers/tests supply a fixed rate.
   const fx = options?.fx !== undefined ? options.fx : await getFxRates();
   return pdf(
-    <ApprovalDocument analysis={analysis} signatureRoles={roles} fx={fx} />,
+    <ApprovalDocument analysis={analysis} signatureRoles={roles} comments={comments} fx={fx} />,
   ).toBlob();
 }
