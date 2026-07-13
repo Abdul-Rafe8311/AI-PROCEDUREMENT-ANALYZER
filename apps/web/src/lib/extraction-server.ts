@@ -4,7 +4,9 @@
 
 import { normalizeDelivery } from './analysis-engine';
 import {
+  EXTRACTION_MODEL,
   extractJsonFromMedia,
+  extractJsonWithClaude,
   isAnthropicConfigured,
   type ImageMediaType,
   type VisionMedia,
@@ -326,17 +328,36 @@ const SCAN_NOTE = [
   'company name appears anywhere for that supplier.',
 ].join('\n');
 
-// ── Raw structured-extraction call (Groq preferred, OpenAI fallback) ──
-// Sends a system prompt + user content and returns the model's raw JSON text.
-// Shared by supplier-quotation and purchase-requisition extraction so both use
-// the same provider, JSON-mode, and error handling.
+// ── Raw structured-extraction call (Claude primary; Groq/OpenAI fallback) ──
+// Sends a system prompt + document text and returns the model's raw JSON text.
+// Shared by supplier-quotation and purchase-requisition text extraction. Claude
+// (claude-sonnet-4-6) is the PRIMARY model — it reads clean text layers far more
+// accurately than Groq's llama-3.3-70b (grades, VAT, week/day units, quantities).
+// Groq/OpenAI stay as a fallback ONLY when ANTHROPIC_API_KEY is absent. Token
+// usage is logged per call so real cost can be measured.
 async function callExtractionLlm(
   system: string,
   userContent: string,
 ): Promise<{ content: string | null; error: string | null }> {
+  if (isAnthropicConfigured()) {
+    try {
+      const { content, usage } = await extractJsonWithClaude({ system, user: userContent });
+      log(
+        `[tokens] text extraction via ${EXTRACTION_MODEL}: input=${usage.inputTokens} output=${usage.outputTokens} (total=${usage.inputTokens + usage.outputTokens})`,
+      );
+      if (!content) return { content: null, error: 'Claude returned an empty extraction response.' };
+      return { content, error: null };
+    } catch (err) {
+      const error = `Claude extraction failed: ${(err as Error).message}`;
+      log(error);
+      return { content: null, error };
+    }
+  }
+
+  // Fallback: Groq (preferred) → OpenAI, only when no Anthropic key is set.
   const provider = resolveProvider();
   if (!provider) {
-    const error = 'No LLM provider configured — set GROQ_API_KEY (or OPENAI_API_KEY).';
+    const error = 'No LLM provider configured — set ANTHROPIC_API_KEY (or GROQ_API_KEY / OPENAI_API_KEY).';
     log(error);
     return { content: null, error };
   }
@@ -384,19 +405,21 @@ async function llmExtract(
     `DOCUMENT TEXT:\n${buildExtractionInput(text)}`,
   );
   if (!content) return { data: null, error };
-  try {
-    const suppliers = normalizeSuppliers(JSON.parse(content));
-    if (!suppliers.length) {
-      const e = 'LLM returned no supplier data.';
-      log(e);
-      return { data: null, error: e };
-    }
-    return { data: { suppliers }, error: null };
-  } catch {
+  // Lenient parse: Claude may wrap JSON in prose / markdown fences (same handling
+  // as the vision path). looseJsonParse returns null instead of throwing.
+  const parsed = looseJsonParse(content);
+  if (parsed == null) {
     const e = `LLM returned non-JSON content: ${String(content).slice(0, 200)}`;
     log(e);
     return { data: null, error: e };
   }
+  const suppliers = normalizeSuppliers(parsed);
+  if (!suppliers.length) {
+    const e = 'LLM returned no supplier data.';
+    log(e);
+    return { data: null, error: e };
+  }
+  return { data: { suppliers }, error: null };
 }
 
 function resolveProvider() {

@@ -1,9 +1,7 @@
-// Server-only Anthropic (Claude) client for the two written-answer LLM paths:
-// comparison chat (/api/chat) and deep-document RAG synthesis (/api/doc-answer).
-//
-// Extraction deliberately stays on Groq for now (see extraction-server.ts). The
-// model is env-configurable so extraction can later move to a cheaper Claude
-// model via ANTHROPIC_EXTRACTION_MODEL without touching this chat/answer path.
+// Server-only Anthropic (Claude) client for the written-answer LLM paths
+// (comparison chat, deep-document RAG synthesis) AND structured extraction —
+// both the text-layer path (extractJsonWithClaude) and the scanned/image vision
+// path (extractJsonFromMedia). Each model is env-configurable.
 
 import Anthropic from '@anthropic-ai/sdk';
 import { CHART_METRICS, type ChartDirective, type ChartMetric } from './workspace-types';
@@ -21,6 +19,15 @@ export const CHAT_MODEL = process.env.ANTHROPIC_CHAT_MODEL || 'claude-sonnet-4-6
 
 /** Model for scanned-PDF vision extraction. Override with ANTHROPIC_VISION_MODEL. */
 export const VISION_MODEL = process.env.ANTHROPIC_VISION_MODEL || 'claude-sonnet-4-6';
+
+/** Model for text-layer structured extraction. Override with ANTHROPIC_EXTRACTION_MODEL. */
+export const EXTRACTION_MODEL = process.env.ANTHROPIC_EXTRACTION_MODEL || 'claude-sonnet-4-6';
+
+/** Token usage from a Claude call, for per-extraction cost logging. */
+export interface ClaudeUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
 
 /** True when a Claude key is present — lets routes report a clear degraded state. */
 export function isAnthropicConfigured(): boolean {
@@ -176,6 +183,42 @@ export async function extractJsonFromMedia(opts: {
     .map((b) => b.text)
     .join('')
     .trim();
+}
+
+/**
+ * Structured extraction from a document's TEXT layer with Claude. Sends the
+ * system schema/rules + the document text, temperature 0, and returns the raw
+ * response (expected to be JSON — the caller parses leniently) together with the
+ * token usage for cost logging. Throws MissingAnthropicKeyError when the key is
+ * unset, or the SDK's typed API errors on failure — the caller decides how to
+ * degrade (never sample data).
+ */
+export async function extractJsonWithClaude(opts: {
+  system: string;
+  user: string;
+  model?: string;
+  maxTokens?: number;
+}): Promise<{ content: string; usage: ClaudeUsage }> {
+  const anthropic = getClient();
+  const res = await anthropic.messages.create({
+    model: opts.model || EXTRACTION_MODEL,
+    max_tokens: opts.maxTokens ?? 8192,
+    temperature: 0,
+    system: opts.system,
+    messages: [{ role: 'user', content: opts.user }],
+  });
+  const content = res.content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map((b) => b.text)
+    .join('')
+    .trim();
+  return {
+    content,
+    usage: {
+      inputTokens: res.usage?.input_tokens ?? 0,
+      outputTokens: res.usage?.output_tokens ?? 0,
+    },
+  };
 }
 
 /**
