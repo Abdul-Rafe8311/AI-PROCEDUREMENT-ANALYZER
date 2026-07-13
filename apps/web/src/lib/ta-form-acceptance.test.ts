@@ -12,6 +12,8 @@ import {
 } from './extraction-server';
 import { matchQuotationsToPr, suggestTechnicalComments } from './item-matching';
 import { buildComparisonModel } from './pr-comparison';
+import { withVatAmount } from './approval-form-pdf';
+import { isLocalCountry } from './workspace-types';
 
 const PR_QTYS = [10000, 2000, 1500, 300, 700];
 // PR grades per the company sheet: item2 is an SS 310 anchor; items 4–5 are 253 C.
@@ -39,27 +41,27 @@ const freight = (name: string, amount: number): LlmSupplier['lineItems'][number]
 const krosaki: LlmSupplier = {
   supplierName: 'KROSAKI', reference: 'OFR26-0040', prNumber: '12601612', currency: 'EUR',
   totalAmount: null, vatAmount: null, totalWithoutVat: null, totalsByCurrency: null,
-  deliveryTime: '4 weeks after official order', deliveryTerms: 'CIF JEDDAH', paymentTerms: 'CAD', warranty: null, validUntil: null,
+  deliveryTime: '4 weeks after official order', deliveryTerms: 'CIF JEDDAH', countryOfOrigin: 'Country of Origin: France', paymentTerms: 'CAD', warranty: null, validUntil: null,
   lineItems: [...partNos('TWS.10(60)-200', [2.42, 0.95, 2.93, 2.26, 2.33]), freight('TRANSPORT PRICE CIF JEDDAH', 3590)],
 };
 const refratechnik: LlmSupplier = {
   supplierName: 'Refratechnik', reference: '9100147169', prNumber: '12601612', currency: 'EUR',
   totalAmount: null, vatAmount: null, totalWithoutVat: null, totalsByCurrency: null,
-  deliveryTime: '4-5 weeks', deliveryTerms: 'FOB', paymentTerms: 'Cash against documents', warranty: null, validUntil: null,
+  deliveryTime: '4-5 weeks', deliveryTerms: 'FOB', countryOfOrigin: 'F.R. OF GERMANY', paymentTerms: 'Cash against documents', warranty: null, validUntil: null,
   lineItems: [...partNos('REVA-W.10', [3.07, 3.21, 3.7, 4.12, 2.8]), freight('Freight and FOB charges', 870)],
 };
 // AL-NAJIM (SAR) quotes full descriptions that match the PR grades → all clean.
 const alnajim: LlmSupplier = {
   supplierName: 'AL NAJIM', reference: 'WS/QM/06/26-117', prNumber: '12601612', currency: 'SAR',
   totalAmount: null, vatAmount: null, totalWithoutVat: null, totalsByCurrency: null,
-  deliveryTime: '08 - Weeks', deliveryTerms: 'by Naqel', paymentTerms: '100% Advance', warranty: null, validUntil: null,
+  deliveryTime: '08 - Weeks', deliveryTerms: 'by Naqel', countryOfOrigin: 'Saudi Arabia', paymentTerms: '100% Advance', warranty: null, validUntil: null,
   lineItems: pr.items.map((it, i) => ({ name: it.description, quantity: it.quantity!, unitPrice: [16, 6, 19, 14, 15][i], totalPrice: null, category: 'product', uom: 'EA', availableInDays: null })),
 };
 // Alfran (SAR) quotes "253 MA" on EVERY row → items 4–5 conflict with PR "253 C".
 const alfran: LlmSupplier = {
   supplierName: 'AlFRAN', reference: 'Q-ASA-NCC-260603', prNumber: '12601612', currency: 'SAR',
   totalAmount: null, vatAmount: null, totalWithoutVat: null, totalsByCurrency: null,
-  deliveryTime: '65 days after order confirmation', deliveryTerms: 'DDP', paymentTerms: '30 DAYS CREDIT', warranty: null, validUntil: null,
+  deliveryTime: '65 days after order confirmation', deliveryTerms: 'DDP', countryOfOrigin: 'KSA', paymentTerms: '30 DAYS CREDIT', warranty: null, validUntil: null,
   lineItems: [
     { name: 'Anchor, Corrugated, Type. TWS.10(60)-200(140)-40-253, Material Grade 253 MA. With Plastic Caps.', quantity: 10000, unitPrice: 10, totalPrice: null, category: 'product', uom: 'EA', availableInDays: null },
     { name: 'SS 310 ANCHOR TYPE: V, SIZE: 10 X 70 MM. - DRG NO.NCC-KL-42', quantity: 2000, unitPrice: 5, totalPrice: null, category: 'product', uom: 'EA', availableInDays: null },
@@ -74,7 +76,7 @@ const alfran: LlmSupplier = {
 const supplyWave: LlmSupplier = {
   supplierName: 'Supply Wave', reference: 'SW-2606082547', prNumber: '12601612', currency: 'SAR',
   totalAmount: null, vatAmount: null, totalWithoutVat: null, totalsByCurrency: null,
-  deliveryTime: '88 Days', deliveryTerms: 'EX WORKS', paymentTerms: '30 Days', warranty: null, validUntil: null,
+  deliveryTime: '88 Days', deliveryTerms: 'EX WORKS', countryOfOrigin: 'Saudi Arabia', paymentTerms: '30 Days', warranty: null, validUntil: null,
   lineItems: [
     { name: 'Anchor Corrugated Type: TWS.10(60)-200(140)-40-310. Material GRADE - SS 310', quantity: 10000, unitPrice: 10, totalPrice: null, category: 'product', uom: 'EA', availableInDays: null },
     { name: 'SS 310 ANCHOR TYPE: V, SIZE: 10 X 70 MM.', quantity: 2000, unitPrice: 3, totalPrice: null, category: 'product', uom: 'EA', availableInDays: null },
@@ -158,6 +160,49 @@ test('TA FORM: the supplier-union fallback is GONE — no PR items ⇒ zero prod
   const model = buildComparisonModel(quotations, null, null, { prOnly: true });
   assert.equal(model.hasPr, false);
   assert.equal(model.rows.filter((r) => r.kind !== 'charge').length, 0, 'never fabricates rows from supplier descriptions');
+});
+
+test('TA FORM: Country of Origin per supplier — stated → normalized; KSA → Saudi Arabia', () => {
+  const origin = (name: string) => quotations.find((q) => q.supplierName === name)!.countryOfOrigin;
+  assert.equal(origin('KROSAKI'), 'France'); // "Country of Origin: France"
+  assert.equal(origin('Refratechnik'), 'Germany'); // "F.R. OF GERMANY"
+  assert.equal(origin('AL NAJIM'), 'Saudi Arabia');
+  assert.equal(origin('AlFRAN'), 'Saudi Arabia'); // "KSA" → Saudi Arabia
+  assert.equal(origin('Supply Wave'), 'Saudi Arabia');
+});
+
+test('TA FORM VAT: no supplier states VAT on PR 12601612 → NO with-VAT line for anyone', () => {
+  for (const q of quotations) {
+    assert.equal(q.totalCostInclVat ?? null, null, `${q.supplierName} states no VAT`);
+    assert.equal(withVatAmount(q), null, `${q.supplierName} shows no with-VAT total`);
+  }
+});
+
+test('TA FORM VAT: with-VAT shows ONLY for international + quote-stated VAT (never computed, never local)', () => {
+  const mk = (o: Partial<LlmSupplier>) =>
+    quotationsFromLlmSuppliers(
+      [{ supplierName: 'X', reference: null, prNumber: null, currency: 'EUR', totalAmount: null, vatAmount: null, totalWithoutVat: null, totalsByCurrency: null, deliveryTime: null, deliveryTerms: null, paymentTerms: null, warranty: null, validUntil: null, lineItems: [], ...o }],
+      'q.pdf',
+      { currency: (o.currency as string) ?? 'EUR', confidence: 1 },
+    )[0];
+
+  // International (Germany) that STATES VAT (115 incl, 15 VAT, 100 ex) → with-VAT = 115.
+  const intlVat = mk({ countryOfOrigin: 'F.R. OF GERMANY', currency: 'EUR', totalAmount: 115, vatAmount: 15, totalWithoutVat: 100 });
+  assert.equal(isLocalCountry(intlVat.countryOfOrigin), false);
+  assert.equal(withVatAmount(intlVat), 115);
+
+  // International (France) that states NO VAT → no with-VAT line.
+  const intlNoVat = mk({ countryOfOrigin: 'France', currency: 'EUR', totalAmount: 100 });
+  assert.equal(withVatAmount(intlNoVat), null);
+
+  // LOCAL (Saudi) that DOES mention VAT → still NO with-VAT line.
+  const localVat = mk({ countryOfOrigin: 'Saudi Arabia', currency: 'SAR', totalAmount: 115, vatAmount: 15, totalWithoutVat: 100 });
+  assert.equal(isLocalCountry(localVat.countryOfOrigin), true);
+  assert.equal(withVatAmount(localVat), null);
+
+  // Origin not stated → not treated as international → no with-VAT line (no guessing).
+  const unknownVat = mk({ countryOfOrigin: null, currency: 'EUR', totalAmount: 115, vatAmount: 15, totalWithoutVat: 100 });
+  assert.equal(withVatAmount(unknownVat), null);
 });
 
 test('MATCHING: a PR qty different from the supplier qty NEVER causes "Not Quoted"', () => {

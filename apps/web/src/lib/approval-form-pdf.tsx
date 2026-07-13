@@ -29,6 +29,8 @@ import {
   DEFAULT_SIGNATURE_ROLES,
   DEFAULT_WEIGHTS,
   deliveryNormalizedHint,
+  type ExtractedQuotation,
+  isLocalCountry,
   type TechnicalComment,
 } from './workspace-types';
 
@@ -142,6 +144,15 @@ function aiRecommendation(analysis: AnalysisResult, fx: FxRates | null): string 
         ? `only supplier analyzed; procurement score ${Math.round(best.overall * 100)}/100`
         : `highest procurement score (${Math.round(best.overall * 100)}/100)`;
   return `${name} — ${reason}.`;
+}
+
+// INTERNATIONAL = a stated country of origin other than Saudi Arabia. The TA form
+// shows a WITH-VAT total ONLY for an international supplier whose OWN quote states a
+// VAT amount (→ totalCostInclVat). VAT is NEVER computed/estimated by the app; local
+// suppliers never get a with-VAT line even if their quote mentions VAT.
+export function withVatAmount(q: ExtractedQuotation): number | null {
+  const international = q.countryOfOrigin != null && !isLocalCountry(q.countryOfOrigin);
+  return international && q.totalCostInclVat != null ? q.totalCostInclVat : null;
 }
 
 function ApprovalDocument({
@@ -395,6 +406,24 @@ function ApprovalDocument({
                 })}
               </View>
 
+              {/* Total Price with VAT — ONLY when an international supplier's own quote
+                  states a VAT amount. Never computed; local suppliers never shown. The
+                  row itself is omitted when no supplier in the block qualifies. */}
+              {group.some((sup) => withVatAmount(qById.get(sup.quotationId)!) != null) && (
+                <View style={s.rowFlex} wrap={false}>
+                  <Text style={[s.cellBox, s.labelRow, { width: leftW, borderLeftWidth: 1, borderLeftColor: C.border }]}>Total Price with VAT</Text>
+                  {group.map((sup) => {
+                    const q = qById.get(sup.quotationId)!;
+                    const withVat = withVatAmount(q);
+                    return (
+                      <View key={sup.quotationId} style={{ width: supW, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3, alignItems: 'flex-end' }}>
+                        {withVat != null ? <MoneyDual amount={withVat} currency={q.currency} fx={fx} /> : <Text> </Text>}
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+
               {/* Terms */}
               <TermRow label="Payment Terms" s={s} leftW={leftW} supW={supW} values={group.map((sup) => qById.get(sup.quotationId)!.paymentTerms ?? '')} />
               {/* Delivery Time — the supplier's ORIGINAL wording verbatim (e.g.
@@ -414,6 +443,8 @@ function ApprovalDocument({
                 })}
               />
               <TermRow label="Delivery Terms" s={s} leftW={leftW} supW={supW} values={group.map((sup) => qById.get(sup.quotationId)!.deliveryTerms ?? '')} />
+              {/* Country of Origin — as stated on the quote (normalized), else blank. */}
+              <TermRow label="Country of Origin" s={s} leftW={leftW} supW={supW} values={group.map((sup) => qById.get(sup.quotationId)!.countryOfOrigin ?? '')} />
 
               {/* Technical Comments — AI-SUGGESTED verdict (indigo/italic) OR the
                   human's own plain comment once edited. Final Recommendation stays blank. */}

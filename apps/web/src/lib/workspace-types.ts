@@ -83,6 +83,9 @@ export interface ExtractedQuotation {
   prNumber?: string | null;
   /** incoterms / delivery terms as written, e.g. "CFR Jeddah", "CIF Jeddah", "EXW" */
   deliveryTerms?: string | null;
+  /** country of origin/manufacture as stated on the quote (normalized), else null —
+   * never guessed. Drives local (Saudi Arabia) vs international VAT display. */
+  countryOfOrigin?: string | null;
   /** every grand total as stated, each with its own currency (multi-currency docs) */
   statedTotals?: StatedTotal[];
   /** detected-currency confidence 0..1 (1 = explicit currency in document) */
@@ -429,3 +432,12 @@ export const DEFAULT_SIGNATURE_ROLES = [
   'Mech. Manager Response',
   'VP Operations Response',
 ];
+
+/**
+ * A supplier is LOCAL when its country of origin is Saudi Arabia; anything else
+ * (with a stated country) is INTERNATIONAL. Drives the TA form's VAT display.
+ * Used for display only — never to compute VAT.
+ */
+export function isLocalCountry(country: string | null | undefined): boolean {
+  return country?.trim().toLowerCase() === 'saudi arabia';
+}

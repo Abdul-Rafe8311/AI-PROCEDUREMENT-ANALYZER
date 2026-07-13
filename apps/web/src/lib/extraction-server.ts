@@ -126,6 +126,8 @@ export interface LlmSupplier {
   deliveryTime: string | null;
   /** incoterms / delivery terms, e.g. "CFR Jeddah", "CIF Jeddah", "EXW" */
   deliveryTerms: string | null;
+  /** country of origin / manufacture / supply as STATED on the quote, else null */
+  countryOfOrigin?: string | null;
   paymentTerms: string | null;
   warranty: string | null;
   validUntil: string | null;
@@ -135,6 +137,26 @@ export interface LlmSupplier {
 /** One document can compare several suppliers side by side → an array. */
 interface LlmResult {
   suppliers: LlmSupplier[];
+}
+
+/**
+ * Normalize a stated country of origin to a canonical name for the common cases
+ * (Saudi Arabia / Germany / France), else return the stated value as-is. Strips a
+ * leading label ("Country of Origin:", "Made in") and returns null when nothing is
+ * stated — never guesses a country.
+ */
+export function normalizeCountry(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const s = raw
+    .trim()
+    .replace(/^(country\s+of\s+origin|origin|made\s+in|manufactured\s+in|country)\s*[:\-–]?\s*/i, '')
+    .trim();
+  if (!s) return null;
+  const u = s.toLowerCase().replace(/[.\-_/]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (/(^|\s)(ksa|saudi|saudia|kingdom of saudi arabia)(\s|$)/.test(u)) return 'Saudi Arabia';
+  if (/germany|deutschland|f r of germany/.test(u)) return 'Germany';
+  if (/france|french/.test(u)) return 'France';
+  return s;
 }
 
 // Build the text sent to the extraction LLM. Sends the whole document when it
@@ -203,6 +225,7 @@ const EXTRACTION_SYSTEM_PROMPT = [
   '    totalWithoutVat: number|null, // total price WITHOUT VAT, if the doc states it',
   '    totalsByCurrency: { amount: number, currency: string }[]|null,',
   '    deliveryTime: string|null, deliveryTerms: string|null,',
+  '    countryOfOrigin: string|null, // country of origin/manufacture/supply if STATED (e.g. "Country of Origin: France", "F.R. OF GERMANY"); else null — NEVER guess',
   '    paymentTerms: string|null, warranty: string|null, validUntil: string|null (ISO date),',
   '    lineItems: { name: string, quantity: number|null, unitPrice: number|null,',
   '                 totalPrice: number|null, category: string|null, uom: string|null,',
@@ -552,6 +575,7 @@ function mapSupplier(
     ? `${Math.max(...availDays)} days`
     : s.deliveryTime?.trim() || null;
   const deliveryTerms = s.deliveryTerms?.trim() || null;
+  const countryOfOrigin = normalizeCountry(s.countryOfOrigin);
   const reference = s.reference?.trim() || null;
   const prNumber = s.prNumber?.trim() || null;
   // Never fall back to the uploaded filename as a supplier name — use the
@@ -605,6 +629,7 @@ function mapSupplier(
     reference,
     prNumber,
     deliveryTerms,
+    countryOfOrigin,
     statedTotals,
     currencyConfidence,
     usdRate,
