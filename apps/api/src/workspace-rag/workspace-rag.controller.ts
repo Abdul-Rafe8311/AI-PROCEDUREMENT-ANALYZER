@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Logger, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Public } from '../common/decorators/public.decorator';
 import { RagPrismaService } from './rag-prisma.service';
@@ -10,6 +10,8 @@ import { SearchService } from './search.service';
 @Public()
 @Controller('public/rag')
 export class WorkspaceRagController {
+  private readonly logger = new Logger(WorkspaceRagController.name);
+
   constructor(
     private readonly prisma: RagPrismaService,
     private readonly indexing: IndexingService,
@@ -66,8 +68,22 @@ export class WorkspaceRagController {
   async query(@Body() body: { documentId?: string; query?: string }) {
     const { documentId, query } = body ?? {};
     if (!documentId || !query?.trim()) {
-      return { status: 'error', message: 'documentId and query are required.', chunks: [] };
+      return { status: 'error', reason: 'bad_request', message: 'documentId and query are required.', chunks: [] };
     }
-    return this.search.search(documentId, query);
+    try {
+      return await this.search.search(documentId, query);
+    } catch (err) {
+      // Surface the REAL underlying error (embedding model failed to load, a
+      // pgvector query error, a DB connection drop, …) into the logs and the
+      // response body — previously this became a bare, reason-less HTTP 500.
+      const e = err as Error;
+      this.logger.error(`[rag] search failed for ${documentId}: ${e.message}`, e.stack);
+      const reason = /embed|onnx|model|pipeline|tensor/i.test(e.message)
+        ? 'embedding_failed'
+        : /database|connection|prisma|pgvector|vector|relation|column|pool/i.test(e.message)
+          ? 'db_error'
+          : 'error';
+      return { status: 'error', reason, message: `Deep search failed: ${e.message}`, chunks: [] };
+    }
   }
 }

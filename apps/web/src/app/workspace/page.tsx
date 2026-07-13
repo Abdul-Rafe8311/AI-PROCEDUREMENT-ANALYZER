@@ -16,6 +16,7 @@ import { useFxRates } from '@/lib/use-fx-rates';
 import {
   type DocStatus,
   type IndexStatus,
+  type SearchFailure,
   answerFromChunks,
   fetchStatus,
   searchDocument,
@@ -25,6 +26,22 @@ import { type AnalysisResult, CHART_METRICS, type ChartDirective, type ChatMessa
 
 // Points the next page load at the session to restore (analysis + chat + charts).
 const LAST_ANALYSIS_KEY = 'workspace:lastAnalysisId';
+
+// Turn a typed retrieval failure into an honest, specific chat message — never a
+// vague "temporarily unavailable". Each branch names the actual cause.
+function deepSearchFailureMessage(failure: SearchFailure): string {
+  switch (failure.kind) {
+    case 'not_configured':
+      return 'Deep-document search isn’t configured for this deployment (no RAG backend URL). Comparison questions — cost, delivery, payment terms, warranty, risk, scores — still work.';
+    case 'cold_start':
+    case 'timeout':
+      return 'The deep-search service is waking up (it sleeps when idle on the current plan) — I already retried once. Please ask again in a few seconds. Comparison questions work right now.';
+    case 'network':
+      return 'I couldn’t reach the deep-search service just now. Please try again in a moment. Comparison questions still work.';
+    case 'backend_error':
+      return `Deep search hit an error (HTTP ${failure.status}: ${failure.detail}). Comparison questions still work while this is looked into.`;
+  }
+}
 
 export default function WorkspacePage() {
   const [files, setFiles] = useState<File[]>([]);
@@ -361,24 +378,53 @@ export default function WorkspacePage() {
     if (kind === 'document') {
       const ready = docs.filter((d) => d.status === 'ready');
       if (!ready.length) {
-        const indexing = docs.some((d) => d.status === 'indexing' || d.status === 'pending');
+        const indexingDoc = docs.find((d) => d.status === 'indexing' || d.status === 'pending');
         const failed = docs.find((d) => d.status === 'failed');
-        push(
-          indexing
-            ? 'That looks like a question about the document’s wording. It’s still being indexed for deep search — please try again in a moment.'
-            : failed
-              ? `Deep search isn’t available for this upload (${failed.error ?? 'indexing failed'}). I can still answer comparison questions.`
-              : 'Deep document search isn’t available for this upload. I can answer comparison questions (cost, delivery, payment terms, warranty, risk, scores).',
-        );
+        if (indexingDoc) {
+          const pct =
+            indexingDoc.chunkCount > 0
+              ? Math.min(99, Math.round((indexingDoc.indexedChunks / indexingDoc.chunkCount) * 100))
+              : null;
+          push(
+            `Still reading your documents — deep-document search will be ready in a few seconds${
+              pct != null ? ` (${pct}% indexed)` : ''
+            }. Ask again in a moment, or ask a comparison question (cost, delivery, payment terms, warranty) now.`,
+          );
+        } else if (failed) {
+          push(
+            `Deep search isn’t available for this upload (${failed.error ?? 'indexing failed'}). I can still answer comparison questions (cost, delivery, payment terms, warranty, risk, scores).`,
+          );
+        } else {
+          push(
+            'Deep document search isn’t available for this upload. I can answer comparison questions (cost, delivery, payment terms, warranty, risk, scores).',
+          );
+        }
         return;
       }
       try {
         setSending(true);
         // Scope to the first ready document; label which one when multiple.
         const target = ready[0];
-        const result = await searchDocument(target.documentId, text);
-        if (!result) {
-          push('Deep search is temporarily unavailable. Please try again shortly.');
+        const outcome = await searchDocument(target.documentId, text);
+        if (!outcome.ok) {
+          push(deepSearchFailureMessage(outcome.failure));
+          return;
+        }
+        const result = outcome.result;
+        // The backend can itself report an internal error (e.g. embedding model
+        // failed to load on a woken instance) — surface the real reason.
+        if (result.status === 'error') {
+          push(
+            `Deep search hit an error: ${result.message ?? 'unknown error'}. Comparison questions (cost, delivery, payment terms, warranty) still work.`,
+          );
+          return;
+        }
+        // Race: the doc flipped out of 'ready' or is mid-reindex on the backend.
+        if (result.status !== 'ready' && !result.chunks.length) {
+          push(
+            result.message ??
+              'That document is still being prepared for deep search — please try again in a moment.',
+          );
           return;
         }
         if (!result.chunks.length) {

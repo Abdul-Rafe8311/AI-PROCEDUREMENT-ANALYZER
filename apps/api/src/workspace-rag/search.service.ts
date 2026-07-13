@@ -52,7 +52,14 @@ export class SearchService {
       };
     }
 
+    // First query after a free-tier spin-down reloads the MiniLM model here — a
+    // slow embed is the tell-tale of a cold start (helps correlate failures).
+    const embedStart = Date.now();
     const qVec = `[${(await this.embedder.embedOne(query)).join(',')}]`;
+    const embedMs = Date.now() - embedStart;
+    if (embedMs > 3_000) {
+      this.logger.warn(`[rag] slow query embed ${embedMs}ms for ${documentId} — likely a cold start / model reload.`);
+    }
     const matches = await this.prisma.$queryRawUnsafe<RetrievedChunk[]>(
       `select page, content, embedding <=> $1::vector as distance
        from document_chunks
