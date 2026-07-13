@@ -77,11 +77,15 @@ function MoneyDual({
   currency,
   fx,
   highlight,
+  showOriginal,
 }: {
   amount: number | null | undefined;
   currency: string;
   fx: FxRates | null;
   highlight?: boolean;
+  /** also show the ORIGINAL-currency amount above SAR (used on the total rows,
+   *  matching the company form's "EUR 36,388 / SAR 155,013"). No-op for SAR. */
+  showOriginal?: boolean;
 }) {
   if (amount == null || !Number.isFinite(amount)) return <Text> </Text>;
   const sar = fx ? toSar(amount, currency, fx) : null;
@@ -89,8 +93,12 @@ function MoneyDual({
   if (sar == null || usd == null) {
     return <Text style={{ textAlign: 'right', color: C.body }}>{`${currency} ${money2(amount)}`}</Text>;
   }
+  const cur = currency.toUpperCase();
   return (
     <>
+      {showOriginal && cur !== 'SAR' && (
+        <Text style={{ color: C.body, textAlign: 'right' }}>{`${cur} ${money2(amount)}`}</Text>
+      )}
       <Text style={{ fontFamily: 'Helvetica-Bold', color: highlight ? C.winInk : C.ink, textAlign: 'right' }}>
         {`SAR ${money2(sar)}`}
       </Text>
@@ -194,10 +202,9 @@ function ApprovalDocument({
   const prSubject =
     pr?.description?.trim() ||
     derivePrSubject(model.rows.filter((r) => r.kind === 'product').map((r) => r.label));
-  // PDF creation date — shown ONLY in the "Generated on" note (and footer). It is
-  // deliberately kept OUT of the TA Date field: TA Date is the human approver's
-  // review date and must stay blank for them to fill in, so the two are never
-  // confused ("when this PDF was generated" vs "when it was actually reviewed").
+  // PDF creation date — auto-fills BOTH the TA Date field and the "Generated on"
+  // note (and footer), per the company form (TA Date = the date the form was
+  // produced for approval).
   const generatedOn = new Date().toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
@@ -266,15 +273,14 @@ function ApprovalDocument({
           </Text>
         )}
 
-        {/* Compact form-style header block. Top row: TA Date (LEFT BLANK — the
-            approver's own review date) · PR# · Generated on (the PDF creation
-            date, clearly distinct from TA Date). Then the PR Description row. The
-            approver's name/signature is captured by the per-role signature blocks
-            at the foot of the form, so there is no separate "Reviewed By" row. */}
+        {/* Compact form-style header block. Top row: TA Date (auto-filled with the
+            PDF generation date) · PR# · Generated on. Then the PR Description row.
+            The approver's name/signature is captured by the per-role signature
+            blocks at the foot of the form, so there is no separate "Reviewed By" row. */}
         <View style={s.metaRow}>
           <Text style={[s.metaCell, { width: 200 }]}>
             <Text style={s.metaLabel}>TA Date: </Text>
-            {/* left blank on purpose — filled in by the reviewer */}
+            {generatedOn}
           </Text>
           <Text style={[s.metaCell, { width: 200 }]}>
             <Text style={s.metaLabel}>PR#: </Text>
@@ -393,14 +399,15 @@ function ApprovalDocument({
                 );
               })}
 
-              {/* Total Price without VAT — normalized to SAR (primary) + USD. */}
+              {/* Total Price without VAT — ORIGINAL currency + SAR (primary) + USD,
+                  matching the company form (e.g. "EUR 36,388 / SAR 155,013"). */}
               <View style={s.rowFlex} wrap={false}>
                 <Text style={[s.cellBox, s.labelRow, { width: leftW, borderLeftWidth: 1, borderLeftColor: C.border }]}>Total Price without VAT</Text>
                 {group.map((sup) => {
                   const q = qById.get(sup.quotationId)!;
                   return (
                     <View key={sup.quotationId} style={{ width: supW, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3, alignItems: 'flex-end' }}>
-                      <MoneyDual amount={q.totalCost} currency={q.currency} fx={fx} />
+                      <MoneyDual amount={q.totalCost} currency={q.currency} fx={fx} showOriginal />
                     </View>
                   );
                 })}
@@ -417,7 +424,7 @@ function ApprovalDocument({
                     const withVat = withVatAmount(q);
                     return (
                       <View key={sup.quotationId} style={{ width: supW, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3, alignItems: 'flex-end' }}>
-                        {withVat != null ? <MoneyDual amount={withVat} currency={q.currency} fx={fx} /> : <Text> </Text>}
+                        {withVat != null ? <MoneyDual amount={withVat} currency={q.currency} fx={fx} showOriginal /> : <Text> </Text>}
                       </View>
                     );
                   })}
@@ -452,6 +459,18 @@ function ApprovalDocument({
                 <Text style={[s.cellBox, s.labelRow, { width: leftW, borderLeftWidth: 1, borderLeftColor: C.border }]}>Technical Comments</Text>
                 {group.map((sup) => (
                   <CommentCell key={sup.quotationId} comment={comments[sup.quotationId]} width={supW} s={s} />
+                ))}
+              </View>
+
+              {/* Cost Justification — company-form footer row, left blank for the team
+                  to complete when the PR value exceeds SAR 100k. Never auto-filled. */}
+              <View style={s.rowFlex} wrap={false}>
+                <Text style={[s.cellBox, s.labelRow, { width: leftW, borderLeftWidth: 1, borderLeftColor: C.border }]}>Cost Justification (if PR value &gt; 100k SAR)</Text>
+                {group.map((sup) => (
+                  <View
+                    key={sup.quotationId}
+                    style={{ width: supW, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, minHeight: 22 }}
+                  />
                 ))}
               </View>
             </View>

@@ -112,14 +112,14 @@ test('PHASE 2: clean matches, freight excluded, and a not-quoted item detected',
   assert.equal(m.matchCount + m.specDiffCount + m.notQuotedCount, pr.items.length);
 });
 
-test('PHASE 2: a wrong-grade quote maps by line order as "quoted, spec differs"', () => {
+test('PHASE 2: a wrong-grade quote maps by DIMENSION as "quoted, spec differs"', () => {
   const m = matchSupplierItems(qb, pr.items);
-  // The 304 anchor has no strong description match (wrong grade), so it falls to the
-  // line-order pass onto PR item 0 → quoted_spec_diff (shown & flagged, never dropped).
-  // Quantity is never a gate.
+  // The 304 anchor has no clean description match (wrong grade), but its dimensions
+  // (200/140) uniquely identify PR item 0 → mapped by dimension → quoted_spec_diff
+  // (shown & flagged, never dropped). Quantity is never a gate.
   const anchorPr = m.prItems[0];
   assert.equal(anchorPr.state, 'quoted_spec_diff');
-  assert.equal(anchorPr.mappedBy, 'order');
+  assert.equal(anchorPr.mappedBy, 'dimension');
   assert.ok(/304/.test(anchorPr.supplierItem!.name));
   // The blanket is a clean description match and its spec agrees → not flagged.
   assert.equal(m.prItems[2].state, 'quoted_match');

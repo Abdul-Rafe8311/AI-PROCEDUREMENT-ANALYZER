@@ -115,6 +115,18 @@ function prItemText(pr: PrItem): string {
   return [pr.description, pr.itemCode ?? ''].filter(Boolean).join(' ');
 }
 
+/**
+ * The DIMENSION numbers in a string — every 2-4 digit run, normalized (leading
+ * zeros dropped): "REVA-W.10-200" → {10,200}; "REVA.10-070" → {10,70};
+ * "TWS.10(60)-200(140)-40-253" → {10,60,200,140,40,253}; "10 X 70 MM" → {10,70}.
+ * Used to line up part-number quotes by the SIZE they encode, not by source order.
+ */
+function dimNumbers(str: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of str.matchAll(/\d{2,4}/g)) out.add(String(parseInt(m[0], 10)));
+  return out;
+}
+
 /** True when the supplier line explicitly cites the PR's own item code. */
 function itemCodeHit(name: string, code: string | null): boolean {
   if (!code) return false;
@@ -230,9 +242,45 @@ export function matchSupplierItems(
     lineUsed[c.li] = true;
   }
 
-  // Pass 2 — LINE ORDER fallback (still no quantity gate): remaining lines fill the
-  // remaining PR rows in document order. This maps part-number quotes that the
-  // description pass couldn't place, instead of leaving the row "Not Quoted".
+  // Pass 1.5 — DIMENSION match (part-number quotes): for lines the description pass
+  // couldn't place, match by shared DISTINCTIVE dimension numbers. A part code like
+  // "REVA-W.10-200" shares its distinctive "200" only with the PR's 200(140) row,
+  // "REVA.10-070" shares "70" only with the 10×70 NCC-KL-42 anchor, etc. Numbers are
+  // IDF-weighted so a size that appears in ONE PR row drives the match, while common
+  // numbers (10, 40, 253) are down-weighted — the size decides, NOT source order.
+  const N = prItems.length;
+  const prDims = prItems.map((pr) => dimNumbers(prItemText(pr)));
+  const df = new Map<string, number>();
+  for (const dims of prDims) for (const n of dims) df.set(n, (df.get(n) ?? 0) + 1);
+  const idf = (n: string) => 1 / (df.get(n) ?? N);
+
+  const dimCands: { li: number; pr: number; sc: number }[] = [];
+  products.forEach((li, i) => {
+    if (lineUsed[i]) return;
+    const lineDims = dimNumbers(li.name);
+    prItems.forEach((_, j) => {
+      if (prLine[j] != null) return;
+      let sc = 0;
+      let distinctive = false; // shares a number that is NOT in every PR row
+      for (const n of lineDims) {
+        if (!prDims[j].has(n)) continue;
+        sc += idf(n);
+        if ((df.get(n) ?? N) < N) distinctive = true;
+      }
+      if (sc > 0 && distinctive) dimCands.push({ li: i, pr: j, sc });
+    });
+  });
+  dimCands.sort((a, b) => b.sc - a.sc);
+  for (const c of dimCands) {
+    if (lineUsed[c.li] || prLine[c.pr] != null) continue;
+    prLine[c.pr] = c.li;
+    prBy[c.pr] = 'dimension';
+    prScore[c.pr] = Math.round(simOf(products[c.li], prItems[c.pr]) * 100) / 100;
+    lineUsed[c.li] = true;
+  }
+
+  // Pass 2 — LINE ORDER (last resort, still no quantity gate): any lines the
+  // description and dimension passes couldn't place fill remaining rows in order.
   const freeRows = prItems.map((_, j) => j).filter((j) => prLine[j] == null);
   const freeLines = products.map((_, i) => i).filter((i) => !lineUsed[i]);
   freeRows.forEach((j, k) => {

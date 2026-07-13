@@ -138,7 +138,7 @@ test('PR 12601612 · Supply Wave item 1 is QUOTED, spec differs (SS 310 vs 253 M
   const match = matchQuotationsToPr(quotations, pr);
   const sw = match.bySupplier.find((s) => s.supplier === 'Supply Wave')!;
   assert.equal(sw.prItems[0].state, 'quoted_spec_diff');
-  assert.equal(sw.prItems[0].mappedBy, 'order');
+  assert.equal(sw.prItems[0].mappedBy, 'dimension'); // 200(140) dims line it up despite the 310 grade
   assert.ok(/310/.test(sw.prItems[0].supplierItem!.name));
 });
 
@@ -152,7 +152,13 @@ test('PR 12601612 · Krosaki & Refratechnik: 5/5 items QUOTED (0 not quoted); ch
     // Part-number quotes line up by line ORDER (description inconclusive) and, having
     // no conflicting grade, show as CLEAN matches (not "spec differs").
     assert.equal(sm.specDiffCount, 0, `${name} part-number quotes should be clean matches`);
-    assert.ok(sm.prItems.every((p) => p.mappedBy === 'order'), `${name} mapped by order`);
+    // Part-number quotes are placed by their embedded DIMENSION (or line order as a
+    // last resort) — never by description (bare codes carry no descriptive words).
+    // The precise per-code dimension mapping is pinned in refratechnik-matching.test.ts.
+    assert.ok(
+      sm.prItems.every((p) => p.mappedBy === 'dimension' || p.mappedBy === 'order'),
+      `${name} mapped by dimension/order, not description`,
+    );
   }
 });
 
