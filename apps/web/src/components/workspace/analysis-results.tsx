@@ -20,7 +20,7 @@ import {
   Trophy,
   Wallet,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, isChunkLoadError, STALE_BUILD_MESSAGE } from '@/lib/utils';
 import {
   buildExecutiveSummary,
   RISK_RULE_CATALOG,
@@ -725,7 +725,7 @@ function PdfDownloadButton({
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     } catch (err) {
       console.error('[pdf] generation failed', err);
-      setError('Could not generate the PDF. Please try again.');
+      setError(isChunkLoadError(err) ? STALE_BUILD_MESSAGE : 'Could not generate the PDF. Please try again.');
     } finally {
       setLoading(false);
     }
