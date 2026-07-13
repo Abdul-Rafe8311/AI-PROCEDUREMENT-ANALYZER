@@ -67,22 +67,35 @@ export async function POST(req: Request) {
     const debug: Record<string, unknown>[] = [];
     const reasons: string[] = [];
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const name = (file as File).name || `upload-${i + 1}`;
-      const buffer = Buffer.from(await file.arrayBuffer());
-      // One file can yield MULTIPLE suppliers (a side-by-side comparison sheet).
-      const { quotations: fileQuotations, textLength, method, error } = await extractQuotations(
-        buffer,
-        name,
-        file.type,
+    // Read every upload's bytes, then extract ALL documents CONCURRENTLY. Claude
+    // is slower per-document than Groq, so processing 5 quotes + a PR in series
+    // blew past the serverless function timeout ("Could not reach the extraction
+    // service"). In parallel, total latency ≈ the slowest single document.
+    const fileInputs = await Promise.all(
+      files.map(async (file, i) => ({
         i,
-      );
-      if (error) reasons.push(`${name}: ${error}`);
+        name: (file as File).name || `upload-${i + 1}`,
+        type: file.type,
+        buffer: Buffer.from(await file.arrayBuffer()),
+      })),
+    );
+    const prInput = prFile
+      ? { name: prFile.name || 'purchase-requisition', type: prFile.type, buffer: Buffer.from(await prFile.arrayBuffer()) }
+      : null;
+
+    const [fileResults, prResult] = await Promise.all([
+      Promise.all(fileInputs.map((f) => extractQuotations(f.buffer, f.name, f.type, f.i))),
+      prInput ? extractPurchaseRequisition(prInput.buffer, prInput.name, prInput.type) : Promise.resolve(null),
+    ]);
+
+    // Assemble in deterministic upload order (one file can yield MULTIPLE suppliers).
+    fileInputs.forEach((f, idx) => {
+      const { quotations: fileQuotations, textLength, method, error } = fileResults[idx];
+      if (error) reasons.push(`${f.name}: ${error}`);
       for (const quotation of fileQuotations) {
         quotations.push(quotation);
         debug.push({
-          fileName: fileQuotations.length > 1 ? `${name} (${quotation.supplierName})` : name,
+          fileName: fileQuotations.length > 1 ? `${f.name} (${quotation.supplierName})` : f.name,
           method,
           textLength,
           supplier: quotation.supplierName,
@@ -96,18 +109,13 @@ export async function POST(req: Request) {
           ...(isDev && error ? { error } : {}),
         });
       }
-    }
+    });
 
     // Extract the company's Purchase Requisition (PR), when one was uploaded.
     let purchaseRequisition: PurchaseRequisition | null = null;
-    if (prFile) {
-      const name = prFile.name || 'purchase-requisition';
-      const buffer = Buffer.from(await prFile.arrayBuffer());
-      const { pr, method, textLength, error } = await extractPurchaseRequisition(
-        buffer,
-        name,
-        prFile.type,
-      );
+    if (prInput && prResult) {
+      const name = prInput.name;
+      const { pr, method, textLength, error } = prResult;
       if (pr) {
         purchaseRequisition = pr;
         log(`PR "${name}" extracted ${pr.items.length} line item(s) (method=${method}, textLength=${textLength})`);
