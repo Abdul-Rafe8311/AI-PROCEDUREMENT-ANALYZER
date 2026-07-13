@@ -13,7 +13,8 @@ import {
   YAxis,
 } from 'recharts';
 import { BarChart3, Boxes, Clock, DollarSign } from 'lucide-react';
-import { toUsd } from '@/lib/analysis-engine';
+import { toUsd } from '@/lib/fx-rates';
+import { useFxRates } from '@/lib/use-fx-rates';
 import type { ExtractedQuotation, SupplierScore } from '@/lib/workspace-types';
 
 const C = {
@@ -66,6 +67,7 @@ export default function AnalysisCharts({
   quotations: ExtractedQuotation[];
   scored: SupplierScore[];
 }) {
+  const fx = useFxRates();
   const costData = useMemo(() => {
     const rows = quotations
       .map((q) => ({ name: shortName(q.supplierName), value: q.totalCostUsd ?? 0 }))
@@ -115,12 +117,12 @@ export default function AnalysisCharts({
       };
       quotations.forEach((q) => {
         const li = q.lineItems.find((l) => norm(l.name) === key);
-        row[shortName(q.supplierName)] = li?.unitPrice != null ? toUsd(li.unitPrice, li.currency) ?? 0 : 0;
+        row[shortName(q.supplierName)] = li?.unitPrice != null && fx ? toUsd(li.unitPrice, li.currency, fx) ?? 0 : 0;
       });
       return row;
     });
     return { materialData: data, supplierKeys: keys };
-  }, [quotations]);
+  }, [quotations, fx]);
 
   const palette = [C.primary, C.success, C.warning, C.danger, C.muted];
 

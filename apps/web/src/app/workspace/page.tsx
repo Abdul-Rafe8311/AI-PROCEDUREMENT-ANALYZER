@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Loader2, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -11,7 +11,8 @@ import { AnalysisResults } from '@/components/workspace/analysis-results';
 import { ExtractionDebug } from '@/components/workspace/extraction-debug';
 import { ChatPanel } from '@/components/workspace/chat-panel';
 import { isSupabaseConfigured, STORAGE_BUCKET, supabase } from '@/lib/supabase';
-import { buildAnalysis, classifyQuestion, normalizeRestoredAnalysis } from '@/lib/analysis-engine';
+import { applyFxRates, buildAnalysis, classifyQuestion, normalizeRestoredAnalysis } from '@/lib/analysis-engine';
+import { useFxRates } from '@/lib/use-fx-rates';
 import {
   type DocStatus,
   type IndexStatus,
@@ -32,6 +33,15 @@ export default function WorkspacePage() {
   const [uploading, setUploading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  // Single live FX source for the whole UI. Every USD figure (comparison view,
+  // dashboard, savings, charts, chat, TA form) is derived from this — so they all
+  // agree and never use a stale/hardcoded rate. Raw `analysis` is kept for
+  // persistence; `displayAnalysis` is what the UI and chat consume.
+  const fxLive = useFxRates();
+  const displayAnalysis = useMemo(
+    () => (analysis ? applyFxRates(analysis, fxLive) : null),
+    [analysis, fxLive],
+  );
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
   const [analysisId, setAnalysisId] = useState<string | null>(null);
@@ -398,7 +408,7 @@ export default function WorkspacePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           question: text,
-          analysis,
+          analysis: displayAnalysis ?? analysis,
           history: messages.map((m) => ({ role: m.role, content: m.content })),
         }),
       });
@@ -531,7 +541,9 @@ export default function WorkspacePage() {
 
           {analysis?.purchaseRequisition && <PrSummary pr={analysis.purchaseRequisition} />}
 
-          {analysis && analysis.quotations.length > 0 && <AnalysisResults analysis={analysis} />}
+          {displayAnalysis && displayAnalysis.quotations.length > 0 && (
+            <AnalysisResults analysis={displayAnalysis} />
+          )}
 
           {docs.length > 0 && <DeepSearchStatus docs={docs} />}
 
@@ -540,7 +552,7 @@ export default function WorkspacePage() {
             onSend={handleSend}
             sending={sending}
             disabled={!analysis || analysis.quotations.length === 0}
-            analysis={analysis}
+            analysis={displayAnalysis ?? analysis}
           />
         </div>
 

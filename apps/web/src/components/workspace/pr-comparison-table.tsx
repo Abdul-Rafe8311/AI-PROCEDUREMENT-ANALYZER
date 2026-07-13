@@ -9,6 +9,7 @@ import {
   type SupplierCol,
   supplierGroups,
 } from '@/lib/pr-comparison';
+import { useFxRates } from '@/lib/use-fx-rates';
 import { type CurrencyMode, MoneyDual } from './currency-mode';
 
 // A supplier column plus its absolute index into each row's `cells` array.
@@ -30,9 +31,11 @@ export function PrComparisonTable({
   mode: CurrencyMode;
 }) {
   const { quotations } = analysis;
+  const fx = useFxRates();
   // prOnly: rows come ONLY from the PR document — never a supplier-description
   // union. With no PR line items the grid shows none (+ an explanatory note).
-  const model = buildComparisonModel(quotations, analysis.purchaseRequisition, analysis.prMatch, { prOnly: true });
+  // USD per-unit is derived from the same live FX as the TA form (exact, 2 dp).
+  const model = buildComparisonModel(quotations, analysis.purchaseRequisition, analysis.prMatch, { prOnly: true, fx });
   if (!model.suppliers.length) return null;
 
   const qById = new Map(quotations.map((q) => [q.id, q]));

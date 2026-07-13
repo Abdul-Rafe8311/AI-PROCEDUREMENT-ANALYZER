@@ -9,7 +9,7 @@
 // it falls back to a union of the suppliers' own line items (the previous
 // behavior), so nothing regresses without a PR.
 
-import { toUsd } from './analysis-engine';
+import { type FxRates, toUsd } from './fx-rates';
 import type {
   ExtractedQuotation,
   LineItemCategory,
@@ -77,8 +77,10 @@ const CHARGE_BUCKET: Record<Exclude<LineItemCategory, 'product'>, { key: string;
   other: { key: 'other', label: 'Other Charges', rank: 3 },
 };
 
-function cellUsd(unitPrice: number | null, currency: string): number | null {
-  return unitPrice == null ? null : toUsd(unitPrice, currency);
+// USD via the single live FX source (exact — no integer rounding; the display
+// layer formats to 2 dp). null when no rate is available (never a stale guess).
+function cellUsd(unitPrice: number | null, currency: string, fx: FxRates | null): number | null {
+  return unitPrice == null || !fx ? null : toUsd(unitPrice, currency, fx);
 }
 
 function lowestUsdOf(cells: (SupplierCell | null)[]): number | null {
@@ -99,6 +101,7 @@ function prRows(
   pr: PurchaseRequisition,
   quotations: ExtractedQuotation[],
   prMatch: PrMatchResult | null,
+  fx: FxRates | null,
 ): ComparisonRow[] {
   const byQuotation = new Map<string, SupplierMatch>(
     (prMatch?.bySupplier ?? []).map((sm) => [sm.quotationId, sm]),
@@ -113,7 +116,7 @@ function prRows(
         qty: li.quantity,
         unitPrice: li.unitPrice,
         currency: li.currency,
-        unitPriceUsd: cellUsd(li.unitPrice, li.currency),
+        unitPriceUsd: cellUsd(li.unitPrice, li.currency, fx),
         matchState: pm?.state ?? null,
       };
     });
@@ -132,7 +135,7 @@ function prRows(
 }
 
 // Union of the suppliers' own PRODUCT line items (no PR uploaded).
-function unionProductRows(quotations: ExtractedQuotation[]): ComparisonRow[] {
+function unionProductRows(quotations: ExtractedQuotation[], fx: FxRates | null): ComparisonRow[] {
   const meta = new Map<string, { label: string; seq: number }>();
   let seq = 0;
   for (const q of quotations) {
@@ -148,7 +151,7 @@ function unionProductRows(quotations: ExtractedQuotation[]): ComparisonRow[] {
     const lines = quotations.map((q) => q.lineItems.find((l) => norm(l.name) === k && (l.category ?? 'product') === 'product') ?? null);
     const cells = lines.map<SupplierCell | null>((li) =>
       li
-        ? { description: li.name, qty: li.quantity, unitPrice: li.unitPrice, currency: li.currency, unitPriceUsd: cellUsd(li.unitPrice, li.currency) }
+        ? { description: li.name, qty: li.quantity, unitPrice: li.unitPrice, currency: li.currency, unitPriceUsd: cellUsd(li.unitPrice, li.currency, fx) }
         : null,
     );
     const qtys = lines.filter((l) => l).map((l) => l!.quantity).filter((v): v is number => v != null);
@@ -169,7 +172,7 @@ function unionProductRows(quotations: ExtractedQuotation[]): ComparisonRow[] {
 
 // Charge rows (freight/insurance/handling/other), collapsed into canonical
 // buckets, one row per bucket present, each supplier's summed amount in its cell.
-function chargeRows(quotations: ExtractedQuotation[], startIndex: number): ComparisonRow[] {
+function chargeRows(quotations: ExtractedQuotation[], startIndex: number, fx: FxRates | null): ComparisonRow[] {
   const buckets = new Map<string, { label: string; rank: number; cat: LineItemCategory }>();
   for (const q of quotations) {
     for (const li of q.lineItems) {
@@ -189,7 +192,7 @@ function chargeRows(quotations: ExtractedQuotation[], startIndex: number): Compa
       if (!lines.length) return null;
       const amount = lines.reduce((sum, li) => sum + (li.totalPrice ?? li.unitPrice ?? 0), 0);
       // Keep the supplier's OWN charge wording (e.g. "Sea freight", "Transport CIF").
-      return { description: lines[0]?.name ?? null, qty: null, unitPrice: amount, currency: q.currency, unitPriceUsd: cellUsd(amount, q.currency) };
+      return { description: lines[0]?.name ?? null, qty: null, unitPrice: amount, currency: q.currency, unitPriceUsd: cellUsd(amount, q.currency, fx) };
     });
     return {
       kind: 'charge',
@@ -213,8 +216,9 @@ export function buildComparisonModel(
   quotations: ExtractedQuotation[],
   pr: PurchaseRequisition | null | undefined,
   prMatch: PrMatchResult | null | undefined,
-  opts?: { prOnly?: boolean },
+  opts?: { prOnly?: boolean; fx?: FxRates | null },
 ): ComparisonModel {
+  const fx = opts?.fx ?? null;
   const suppliers: SupplierCol[] = quotations.map((q) => ({
     quotationId: q.id,
     supplier: q.supplierName,
@@ -226,11 +230,11 @@ export function buildComparisonModel(
   // fabricates rows from supplier descriptions — with no PR items it shows none.
   // The on-screen comparison view leaves prOnly unset and keeps the union fallback.
   const productRows = hasPr
-    ? prRows(pr!, quotations, prMatch ?? null)
+    ? prRows(pr!, quotations, prMatch ?? null, fx)
     : opts?.prOnly
       ? []
-      : unionProductRows(quotations);
-  const charges = chargeRows(quotations, productRows.length + 1);
+      : unionProductRows(quotations, fx);
+  const charges = chargeRows(quotations, productRows.length + 1, fx);
   return { suppliers, rows: [...productRows, ...charges], hasPr };
 }
 

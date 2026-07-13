@@ -17,7 +17,9 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { scoreSuppliers, toUsd } from '@/lib/analysis-engine';
+import { scoreSuppliers } from '@/lib/analysis-engine';
+import { toUsd } from '@/lib/fx-rates';
+import { useFxRates } from '@/lib/use-fx-rates';
 import {
   type AnalysisResult,
   type ChartDirective,
@@ -57,6 +59,7 @@ export function ChatChart({
   directive: ChartDirective;
 }) {
   const { quotations, risks } = analysis;
+  const fx = useFxRates();
   const scored = useMemo(
     () => scoreSuppliers(quotations, risks, DEFAULT_WEIGHTS),
     [quotations, risks],
@@ -118,7 +121,7 @@ export function ChatChart({
       };
       quotations.forEach((q) => {
         const li = q.lineItems.find((l) => norm(l.name) === key);
-        row[shortName(q.supplierName)] = li?.unitPrice != null ? toUsd(li.unitPrice, li.currency) ?? 0 : 0;
+        row[shortName(q.supplierName)] = li?.unitPrice != null && fx ? toUsd(li.unitPrice, li.currency, fx) ?? 0 : 0;
       });
       return row;
     });
@@ -137,7 +140,7 @@ export function ChatChart({
         </BarChart>
       </ResponsiveContainer>
     );
-  }, [directive.metric, quotations, scored]);
+  }, [directive.metric, quotations, scored, fx]);
 
   if (!body) return null;
 

@@ -159,7 +159,7 @@ function ApprovalDocument({
   const qById = new Map(qs.map((q) => [q.id, q]));
   // prOnly: rows come ONLY from the PR document — the TA form NEVER builds rows
   // from supplier descriptions (no supplier-union fallback, no 23-row explosion).
-  const model = buildComparisonModel(qs, analysis.purchaseRequisition, analysis.prMatch, { prOnly: true });
+  const model = buildComparisonModel(qs, analysis.purchaseRequisition, analysis.prMatch, { prOnly: true, fx });
   const ai = aiRecommendation(analysis, fx);
   const supplierCurrencies = qs.map((q) => q.currency);
 

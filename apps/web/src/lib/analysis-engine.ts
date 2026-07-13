@@ -5,6 +5,7 @@
 // produces the same AnalysisResult shape.
 
 import { DEFAULT_WEIGHTS, formatCurrency } from './workspace-types';
+import { type FxRates, toUsd as toUsdLive } from './fx-rates';
 import { matchQuotationsToPr } from './item-matching';
 import type {
   AnalysisResult,
@@ -96,8 +97,9 @@ function buildLineItems(
   q: Omit<ExtractedQuotation, 'fields' | 'lineItems'>,
   drop = 0,
 ): LineItem[] {
-  const totalUsd = q.totalCostUsd ?? 0;
-  const fx = STATIC_FX[q.currency?.toUpperCase()] ?? 1;
+  // Split the supplier's total in its OWN currency (no FX round-trip) — the USD
+  // view is derived later from the single live FX source, like every other amount.
+  const total = q.totalCost ?? 0;
   const kept = drop > 0 ? CATALOG.slice(0, CATALOG.length - drop) : CATALOG;
   const weights = kept.map((item) => {
     const jitter = ((hash(q.id + item.name) % 31) - 15) / 100; // ±15%
@@ -106,8 +108,7 @@ function buildLineItems(
   const wsum = weights.reduce((a, b) => a + b, 0);
 
   return kept.map((item, i) => {
-    const lineUsd = (totalUsd * weights[i]) / wsum;
-    const totalPrice = Math.round(lineUsd / fx);
+    const totalPrice = Math.round((total * weights[i]) / wsum);
     const unitPrice = item.quantity
       ? Math.round((totalPrice / item.quantity) * 100) / 100
       : null;
@@ -134,7 +135,7 @@ function buildFields(
       q.totalCost == null
         ? { snippet: null, confidence: 0 }
         : {
-            snippet: `Grand Total: ${q.totalCost.toLocaleString('en-US')} ${q.currency} (≈ ${money(q.totalCostUsd ?? 0)} USD)`,
+            snippet: `Grand Total: ${q.totalCost.toLocaleString('en-US')} ${q.currency}`,
             page: 2,
             confidence: conf(0.85, 5),
           },
@@ -190,30 +191,28 @@ const ARCHETYPES: {
 ];
 
 // ── Normalization ──────────────────────────────────────────────
-// TODO: replace STATIC_FX with a live FX source (e.g. an exchange-rate API).
-const STATIC_FX: Record<string, number> = {
-  USD: 1,
-  EUR: 1.08,
-  GBP: 1.27,
-  SAR: 0.2666,
-  AED: 0.2723,
-  CAD: 0.73,
-  AUD: 0.66,
-  QAR: 0.2747,
-  KWD: 3.25,
-  INR: 0.012,
-  JPY: 0.0064,
-};
+// There is ONE FX source in the app: ./fx-rates (live open.er-api.com + cache).
+// No hardcoded/stale rate tables live here anymore — every USD figure (comparison
+// view, dashboard, savings, charts, PDFs) is derived from the same live rate via
+// `applyFxRates` below, so the whole UI agrees with the Technical Approval Form.
 
-/** USD-per-unit FX rate for a currency (1 when unknown). */
-export function getUsdRate(currency: string): number {
-  return STATIC_FX[currency?.toUpperCase()] ?? 1;
-}
-
-/** Convert an amount in `currency` to a normalized USD value. */
-export function toUsd(amount: number | null, currency: string): number | null {
-  if (amount == null) return null;
-  return Math.round(amount * getUsdRate(currency));
+/**
+ * Re-express every USD figure in an analysis at a single LIVE FX rate. Recomputes
+ * each quotation's `totalCostUsd`/`usdRate`, then reruns scoring, risks, savings
+ * and PR matching so they are all consistent with that rate. When `fx` is null
+ * (no live rate and nothing cached) USD figures are left null — never a hardcoded
+ * guess; callers then display amounts in their original currency.
+ */
+export function applyFxRates(analysis: AnalysisResult, fx: FxRates | null): AnalysisResult {
+  const quotations = analysis.quotations.map((q) => ({
+    ...q,
+    totalCostUsd: fx ? toUsdLive(q.totalCost, q.currency, fx) : null,
+    usdRate: (fx ? toUsdLive(1, q.currency, fx) : null) ?? 1,
+  }));
+  return {
+    ...assembleAnalysis(quotations, analysis.simulated, analysis.purchaseRequisition ?? null),
+    debug: analysis.debug,
+  };
 }
 
 /** Normalize free-text delivery ("2 weeks", "08 - Weeks", "ASAP", a date) to integer days. */
@@ -285,14 +284,15 @@ export function buildAnalysis(fileNames: string[]): AnalysisResult {
       supplierName: prettySupplier(fileName, i),
       totalCost,
       currency: profile.currency,
-      totalCostUsd: toUsd(totalCost, profile.currency),
+      // USD is filled in at render from the single live FX source (applyFxRates).
+      totalCostUsd: null,
       deliveryRaw: profile.deliveryRaw,
       deliveryDays: normalizeDelivery(profile.deliveryRaw),
       paymentTerms: profile.terms,
       warranty: profile.warranty,
       validUntil,
       currencyConfidence: 1,
-      usdRate: getUsdRate(profile.currency),
+      usdRate: 1,
     };
     return {
       ...base,
@@ -989,7 +989,9 @@ export function answerFromData(question: string, analysis: AnalysisResult): stri
     const rows = qs
       .map((s) => {
         const li = s.lineItems.find((l) => l.name === item);
-        return { supplier: s.supplierName, usd: li?.unitPrice == null ? null : toUsd(li.unitPrice, li.currency) };
+        // USD-normalized via the quote's live usdRate (USD per unit of its currency,
+        // set by applyFxRates from the single live FX source).
+        return { supplier: s.supplierName, usd: li?.unitPrice == null ? null : li.unitPrice * s.usdRate };
       })
       .filter((r): r is { supplier: string; usd: number } => r.usd != null)
       .sort((a, b) => a.usd - b.usd);

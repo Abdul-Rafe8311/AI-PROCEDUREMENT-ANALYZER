@@ -2,11 +2,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildComparisonModel } from './pr-comparison';
 import { matchQuotationsToPr } from './item-matching';
+import type { FxRates } from './fx-rates';
 import {
   purchaseRequisitionFromLlm,
   quotationsFromLlmSuppliers,
   type LlmSupplier,
 } from './extraction-server';
+
+// USD figures now come from the single live FX source; tests inject a fixed rate.
+const FX: FxRates = {
+  base: 'USD', rates: { USD: 1, SAR: 3.7501, EUR: 0.8758 }, asOf: 't', live: true, source: 'test',
+};
 
 const pr = purchaseRequisitionFromLlm(
   {
@@ -90,7 +96,7 @@ test('PHASE 3: freight collapses into one Freight / Transport charge row', () =>
 });
 
 test('PHASE 3: lowestUsd marks the cheapest present cell (compared in USD across currencies)', () => {
-  const model = buildComparisonModel(qs, pr, matchQuotationsToPr(qs, pr));
+  const model = buildComparisonModel(qs, pr, matchQuotationsToPr(qs, pr), { fx: FX });
   // Anchor row: Gulf (SAR) approved + Euro (EUR) approved; Delta (wrong grade) excluded.
   const anchor = model.rows[0];
   const present = anchor.cells.filter((c) => c && c.unitPriceUsd != null).map((c) => c!.unitPriceUsd!);

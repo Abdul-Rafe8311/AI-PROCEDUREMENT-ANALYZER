@@ -16,12 +16,13 @@ import {
   pdf,
 } from '@react-pdf/renderer';
 import {
+  applyFxRates,
   buildExecutiveSummary,
   RISK_RULE_CATALOG,
   scoreSuppliers,
-  toUsd,
   warrantyMonths,
 } from './analysis-engine';
+import { type FxRates, getFxRates, toUsd } from './fx-rates';
 import {
   type AnalysisResult,
   DEFAULT_WEIGHTS,
@@ -138,7 +139,7 @@ interface ItemRow {
   usd: (number | null)[]; // USD unit price per supplier (drives "lowest")
   currencies: string[];
 }
-function buildItemRows(qs: ExtractedQuotation[]): ItemRow[] {
+function buildItemRows(qs: ExtractedQuotation[], fx: FxRates | null): ItemRow[] {
   const meta = new Map<string, { label: string; cat: LineItemCategory; seq: number }>();
   let seq = 0;
   for (const q of qs) {
@@ -160,7 +161,7 @@ function buildItemRows(qs: ExtractedQuotation[]): ItemRow[] {
       category: meta.get(k)!.cat,
       qty: lis.map((li) => li?.quantity).find((v) => v != null) ?? null,
       units: lis.map((li) => (li ? li.unitPrice : null)),
-      usd: lis.map((li) => (li && li.unitPrice != null ? toUsd(li.unitPrice, li.currency) : null)),
+      usd: lis.map((li) => (li && li.unitPrice != null && fx ? toUsd(li.unitPrice, li.currency, fx) : null)),
       currencies: lis.map((li) => li?.currency ?? 'USD'),
     };
   });
@@ -320,7 +321,7 @@ function TechnicalApprovalPage({
   );
 }
 
-function ReportDocument({ analysis }: { analysis: AnalysisResult }) {
+function ReportDocument({ analysis, fx }: { analysis: AnalysisResult; fx: FxRates | null }) {
   const { quotations, recommendation: rec, risks } = analysis;
   const scored = scoreSuppliers(quotations, risks, DEFAULT_WEIGHTS);
   const best = scored[0];
@@ -369,7 +370,7 @@ function ReportDocument({ analysis }: { analysis: AnalysisResult }) {
     return sc ? Math.round(sc.overall * 100) : null;
   });
   const riskRankVals = quotations.map((q) => SEV_RANK[worstFlagSeverity(q.supplierName, risks)]);
-  const itemRows = buildItemRows(quotations);
+  const itemRows = buildItemRows(quotations, fx);
   const itemUsdTotals = quotations.map((q) => q.totalCostUsd);
 
   return (
@@ -693,5 +694,9 @@ function ReportDocument({ analysis }: { analysis: AnalysisResult }) {
 
 /** Build the report PDF as a Blob from the real analysis data. */
 export async function generateReportPdf(analysis: AnalysisResult): Promise<Blob> {
-  return pdf(<ReportDocument analysis={analysis} />).toBlob();
+  // Same single live FX source as the TA form / comparison view (cached fallback,
+  // never a hardcoded rate), so every USD figure agrees across all outputs.
+  const fx = await getFxRates();
+  const withFx = applyFxRates(analysis, fx);
+  return pdf(<ReportDocument analysis={withFx} fx={fx} />).toBlob();
 }

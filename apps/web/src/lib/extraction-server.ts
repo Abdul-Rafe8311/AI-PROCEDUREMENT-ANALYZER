@@ -2,11 +2,7 @@
 // use an LLM (Groq, OpenAI-compatible) to extract structured quotation data.
 // Returns ACTUAL values from the document — no sample/placeholder data here.
 
-import {
-  getUsdRate,
-  normalizeDelivery,
-  toUsd,
-} from './analysis-engine';
+import { normalizeDelivery } from './analysis-engine';
 import {
   extractJsonFromMedia,
   isAnthropicConfigured,
@@ -455,7 +451,9 @@ function mapSupplier(
   }
   currency = currency.toUpperCase();
   currencyConfidence = cap(currencyConfidence);
-  const usdRate = getUsdRate(currency);
+  // USD figures are derived at render from the single live FX source (applyFxRates),
+  // never a stale rate baked in here.
+  const usdRate = 1;
 
   // Line items incl. charge lines (freight/shipping/insurance/handling). A
   // lump-sum charge with no unit price is shown with its amount as the unit price
@@ -598,7 +596,7 @@ function mapSupplier(
     totalCost,
     currency,
     totalCostInclVat,
-    totalCostUsd: toUsd(totalCost, currency),
+    totalCostUsd: null, // filled at render from live FX (applyFxRates)
     deliveryRaw,
     deliveryDays: normalizeDelivery(deliveryRaw),
     paymentTerms: s.paymentTerms ?? null,

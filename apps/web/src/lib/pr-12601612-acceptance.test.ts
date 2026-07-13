@@ -10,9 +10,15 @@ import {
   quotationsFromLlmSuppliers,
   type LlmSupplier,
 } from './extraction-server';
-import { assembleAnalysis, scoreSuppliers } from './analysis-engine';
+import { applyFxRates, assembleAnalysis, scoreSuppliers } from './analysis-engine';
+import type { FxRates } from './fx-rates';
 import { matchQuotationsToPr } from './item-matching';
 import { DEFAULT_WEIGHTS, formatUnitNumber } from './workspace-types';
+
+// USD figures come from the single live FX source; inject a fixed rate in tests.
+const FX: FxRates = {
+  base: 'USD', rates: { USD: 1, SAR: 3.7501, EUR: 0.8758 }, asOf: 't', live: true, source: 'test',
+};
 
 // ── The company requisition: 5 anchor lines with DISTINCT quantities so the
 // exact-quantity fallback can line up suppliers who quote by part number. ──
@@ -172,7 +178,8 @@ test('PR 12601612: unit prices keep 2 decimals (never rounded to integers)', () 
 });
 
 test('PR 12601612: scoring runs and produces a full ranking + badges (printed to eyeball)', () => {
-  const analysis = assembleAnalysis(quotations, false, pr);
+  // USD totals are derived at the live rate (applyFxRates), like the app does at render.
+  const analysis = applyFxRates(assembleAnalysis(quotations, false, pr), FX);
   const scored = scoreSuppliers(analysis.quotations, analysis.risks, DEFAULT_WEIGHTS);
   assert.equal(scored.length, 5);
 
