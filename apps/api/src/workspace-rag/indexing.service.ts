@@ -23,6 +23,19 @@ export interface Chunk {
   content: string;
 }
 
+/**
+ * Make text safe to store in a Postgres `text`/`varchar` column. Postgres cannot
+ * store a NUL byte (U+0000 → SQLSTATE 22021 character_not_in_repertoire), and a
+ * jumbled RTL/Arabic PDF text layer can contain NUL and stray C0/C1 control chars.
+ * We strip NUL and other disallowed control chars (keeping \t \n \r) and leave ALL
+ * printable text — Arabic/RTL included — untouched.
+ */
+export function sanitizeForPg(text: string): string {
+  return text
+    .replace(/\u0000/g, '')
+    .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, ' ');
+}
+
 @Injectable()
 export class IndexingService {
   private readonly logger = new Logger(IndexingService.name);
@@ -137,6 +150,12 @@ export class IndexingService {
           this.setStatus(documentId, 'indexing', { indexed_chunks: indexed }),
         );
       } catch (err) {
+        // Log the exact failing chunk so an encoding/content problem is visible.
+        const preview = (batch[0]?.content ?? '').slice(0, 200).replace(/\s+/g, ' ');
+        this.logger.error(
+          `[rag] ${documentId}: insert failed at chunk ${i}/${chunks.length}: ${(err as Error).message}. ` +
+            `First chunk preview: ${JSON.stringify(preview)}`,
+        );
         // Leave status 'indexing' + progress saved so a later call resumes here.
         return this.fail(
           documentId,
@@ -156,7 +175,7 @@ export class IndexingService {
     const params: unknown[] = [];
     const tuples = batch.map((c, j) => {
       const base = j * 5;
-      params.push(documentId, c.index, c.page, c.content, `[${(vectors[j] ?? []).join(',')}]`);
+      params.push(documentId, c.index, c.page, sanitizeForPg(c.content), `[${(vectors[j] ?? []).join(',')}]`);
       return `($${base + 1}::uuid, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}::vector)`;
     });
     await this.prisma.$executeRawUnsafe(
@@ -198,7 +217,9 @@ export class IndexingService {
       // Collect each page's text so chunks can carry a page number.
       pagerender: (pageData: { getTextContent: () => Promise<{ items: { str: string }[] }> }) =>
         pageData.getTextContent().then((tc) => {
-          const text = tc.items.map((it) => it.str).join(' ');
+          // Sanitize at the source so BOTH the stored full_text and the chunks are
+          // free of NUL/control bytes Postgres rejects (Arabic/RTL text kept).
+          const text = sanitizeForPg(tc.items.map((it) => it.str).join(' '));
           pages.push({ page: pages.length + 1, text });
           return text;
         }),
@@ -211,7 +232,7 @@ export class IndexingService {
     const chunks: Chunk[] = [];
     let index = 0;
     for (const { page, text } of pages) {
-      const clean = text.replace(/\s+/g, ' ').trim();
+      const clean = sanitizeForPg(text).replace(/\s+/g, ' ').trim();
       if (!clean) continue;
       if (clean.length <= CHUNK_SIZE) {
         chunks.push({ index: index++, page, content: clean });

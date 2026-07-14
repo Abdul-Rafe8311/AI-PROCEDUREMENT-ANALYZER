@@ -366,11 +366,16 @@ const EXTRACTION_SYSTEM_PROMPT = [
   '  1) prefer a Latin/English form of the name printed ANYWHERE in the document',
   '     (letterhead, logo, stamp, email domain, IBAN account name, website), else',
   '  2) TRANSLITERATE it phonetically.',
-  'Example: a supplier shown as "الفران" is the BRAND "Alfran" — output "Alfran…",',
-  'NEVER "Furnaces". The same company MUST get the same name from its Arabic and its',
-  'English quote, otherwise it looks like two different suppliers and cross-quote',
-  'matching breaks. The same applies to a brand name that appears inside an item',
-  'description — keep the brand, translate only the surrounding descriptive words.',
+  'Treat the ENTIRE supplier name as ONE identifier: do NOT translate ANY part of it',
+  '— not "شركة" (company), not "العربية السعودية" (Arabian/Saudi). Either output the',
+  'exact Latin/registered name the document prints (e.g. a letterhead "Alfran Saudi',
+  'Arabia Co."), or transliterate the whole Arabic name phonetically. Example: a',
+  'supplier shown as "الفران" / "شركة الفران العربية السعودية" is the brand "Alfran"',
+  '— output "Alfran Saudi Arabia Co." (its printed Latin name), NEVER "Furnaces" and',
+  'NEVER "…Arabian Saudi Company" (that translates the words). The same company MUST',
+  'get the same name from its Arabic and its English quote, or it looks like two',
+  'different suppliers and cross-quote matching breaks. A brand inside an item',
+  'description is likewise kept — translate only the surrounding descriptive words.',
   '',
   'EXTRACT EACH FIELD INDEPENDENTLY. Cells may be garbled, overlapping or truncated',
   'in the source. If ONE cell for a supplier is unreadable, still capture every',
@@ -538,11 +543,23 @@ async function callExtractionLlm(
 // ── LLM structured extraction (supplier quotations) ──
 async function llmExtract(
   text: string,
+  fileName = 'document',
 ): Promise<{ data: LlmResult | null; error: string | null }> {
+  const input = buildExtractionInput(text);
   const { content, error } = await callExtractionLlm(
     EXTRACTION_SYSTEM_PROMPT,
-    `DOCUMENT TEXT:\n${buildExtractionInput(text)}`,
+    `DOCUMENT TEXT:\n${input}`,
   );
+  // DEBUG: with EXTRACTION_DEBUG set, dump the exact text the model received AND
+  // its raw response, so we can tell whether item rows are missing from the input
+  // (a PDF-parsing / RTL problem) or being dropped by the model. Otherwise log a
+  // compact size line so the deployed logs still show the shape of each call.
+  if (process.env.EXTRACTION_DEBUG) {
+    log(`RAW INPUT for "${fileName}" (${text.length} chars, sent ${input.length}):\n${input}`);
+    log(`RAW LLM RESPONSE for "${fileName}":\n${content ?? '(empty)'}`);
+  } else {
+    log(`extract "${fileName}": input ${text.length} chars (sent ${input.length}) -> response ${content?.length ?? 0} chars`);
+  }
   if (!content) return { data: null, error };
   // Lenient parse: Claude may wrap JSON in prose / markdown fences (same handling
   // as the vision path). looseJsonParse returns null instead of throwing.
@@ -986,7 +1003,7 @@ export async function extractQuotations(
   const language = detectLanguage(text);
   const wantTranslation = language === 'ar' && isAnthropicConfigured();
   const [{ data: llm, error: llmError }, translation] = await Promise.all([
-    llmExtract(text),
+    llmExtract(text, fileName),
     wantTranslation ? translateDocument(text, language, fileName) : Promise.resolve(null),
   ]);
 
@@ -1007,10 +1024,45 @@ export async function extractQuotations(
   const quotations = llm.suppliers.map((s, i) =>
     mapSupplier(s, { id: `q_${baseIndex}_${i}`, fileName, detected, index: i, count }),
   );
+
+  // Arabic RTL rescue: a right-to-left goods table often survives PDF text
+  // extraction as jumbled, mis-ordered text, so the row structure is lost and only
+  // scattered singletons (total, freight) come through — the model gets ZERO
+  // product line items even though the document clearly has items. When that
+  // happens on an Arabic PDF, re-read the RENDERED page with Claude vision, which
+  // reads the RTL table layout (and the Latin letterhead name) natively.
+  const productCount = countProducts(quotations);
+  const arabicTableDropped =
+    isPdf &&
+    language !== 'en' &&
+    isAnthropicConfigured() &&
+    productCount === 0 &&
+    quotations.some((q) => q.totalCost != null || q.lineItems.length > 0);
+  if (arabicTableDropped) {
+    log(
+      `"${fileName}": Arabic PDF text path yielded 0 product line items — retrying with vision (RTL table likely jumbled in the text layer).`,
+    );
+    const vision = await visionExtractQuotations(buffer, fileName, mime, baseIndex);
+    if (vision && countProducts(vision.quotations) > 0) {
+      if (translation) for (const q of vision.quotations) q.translation = translation;
+      log(`"${fileName}": vision rescue recovered ${countProducts(vision.quotations)} product line item(s).`);
+      return vision;
+    }
+    log(`"${fileName}": vision rescue found no additional line items — keeping the text-path result.`);
+  }
+
   // The translation is per-DOCUMENT — attach it to every supplier read from this file.
   if (translation) for (const q of quotations) q.translation = translation;
 
   return { quotations, textLength: text.length, method: 'llm', error: llmError };
+}
+
+/** Total PRODUCT (non-charge) line items across a set of quotations. */
+function countProducts(quotations: ExtractedQuotation[]): number {
+  return quotations.reduce(
+    (n, q) => n + q.lineItems.filter((li) => (li.category ?? 'product') === 'product').length,
+    0,
+  );
 }
 
 function emptyQuotation(id: string, fileName: string): ExtractedQuotation {
