@@ -11,7 +11,15 @@ import { AnalysisResults } from '@/components/workspace/analysis-results';
 import { ExtractionDebug } from '@/components/workspace/extraction-debug';
 import { ChatPanel } from '@/components/workspace/chat-panel';
 import { isSupabaseConfigured, STORAGE_BUCKET, supabase } from '@/lib/supabase';
-import { applyFxRates, buildAnalysis, classifyQuestion, normalizeRestoredAnalysis } from '@/lib/analysis-engine';
+import {
+  applyFxRates,
+  buildAnalysis,
+  classifyQuestion,
+  isDeselectIntent,
+  isSelectionIntent,
+  normalizeRestoredAnalysis,
+  resolveSupplierFromText,
+} from '@/lib/analysis-engine';
 import { useFxRates } from '@/lib/use-fx-rates';
 import {
   type DocStatus,
@@ -26,6 +34,8 @@ import { type AnalysisResult, CHART_METRICS, type ChartDirective, type ChatMessa
 
 // Points the next page load at the session to restore (analysis + chat + charts).
 const LAST_ANALYSIS_KEY = 'workspace:lastAnalysisId';
+// The human's chosen supplier, persisted per supplier-set so it survives reload.
+const SELECTION_KEY = 'workspace:selection:v1';
 
 // Turn a typed retrieval failure into an honest, specific chat message — never a
 // vague "temporarily unavailable". Each branch names the actual cause.
@@ -64,6 +74,49 @@ export default function WorkspacePage() {
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // The human's chosen supplier — overrides the AI anchor for the dashboard and
+  // the TA form's Final Recommendation. AI suggests, human decides: this never
+  // overwrites the AI recommendation. Persisted per supplier-set.
+  const [selectedSupplier, setSelectedSupplier] = useState<string | null>(null);
+  const supKey = useMemo(
+    () => (displayAnalysis?.quotations ?? []).map((q) => q.id).join('|'),
+    [displayAnalysis],
+  );
+  const aiBest = displayAnalysis?.recommendation?.bestOverall?.supplier ?? null;
+  // Restore any persisted selection when the analysed supplier-set changes; drop
+  // it if it no longer matches a current supplier.
+  useEffect(() => {
+    if (!supKey) {
+      setSelectedSupplier(null);
+      return;
+    }
+    let stored: string | null = null;
+    try {
+      const all = JSON.parse(window.localStorage.getItem(SELECTION_KEY) ?? '{}');
+      stored = typeof all?.[supKey] === 'string' ? all[supKey] : null;
+    } catch {
+      /* ignore */
+    }
+    const valid = stored && (displayAnalysis?.quotations ?? []).some((q) => q.supplierName === stored);
+    setSelectedSupplier(valid ? stored : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supKey]);
+  // Set/clear the selection and persist it (validated against current suppliers).
+  function chooseSupplier(name: string | null) {
+    const valid = name && (displayAnalysis?.quotations ?? []).some((q) => q.supplierName === name);
+    const next = valid ? name : null;
+    setSelectedSupplier(next);
+    if (!supKey) return;
+    try {
+      const all = JSON.parse(window.localStorage.getItem(SELECTION_KEY) ?? '{}');
+      if (next) all[supKey] = next;
+      else delete all[supKey];
+      window.localStorage.setItem(SELECTION_KEY, JSON.stringify(all));
+    } catch {
+      /* ignore */
+    }
+  }
 
   // Per-document deep-search index status (RAG).
   interface DocEntry {
@@ -373,6 +426,36 @@ export default function WorkspacePage() {
       void persistMessage('assistant', content);
     };
 
+    // Supplier selection override, handled before routing ("go with Alfran",
+    // "back to the AI pick"). AI suggests, human decides — the AI recommendation
+    // is never overwritten; selection just re-anchors the dashboard + TA form.
+    const quotes = (displayAnalysis ?? analysis).quotations;
+    if (isDeselectIntent(text) && selectedSupplier) {
+      chooseSupplier(null);
+      push(
+        `Cleared your selection — the dashboard is back to the AI recommendation${aiBest ? ` (${aiBest})` : ''}.`,
+      );
+      return;
+    }
+    if (isSelectionIntent(text)) {
+      const name = resolveSupplierFromText(text, quotes);
+      if (name) {
+        if (name === selectedSupplier) {
+          push(`${name} is already your selected supplier.`);
+        } else {
+          chooseSupplier(name);
+          push(
+            `Selected ${name} as your chosen supplier. The dashboard and potential savings are now re-anchored to ${name}` +
+              (aiBest && aiBest !== name
+                ? ` — the AI still suggests ${aiBest}, and the trade-off panel shows the cost, delivery and score deltas vs the AI pick.`
+                : '.') +
+              ' It also carries into the Technical Approval Form’s Final Recommendation (still yours to edit).',
+          );
+        }
+        return;
+      }
+    }
+
     // Route: comparison questions -> analysis JSON; document questions -> RAG.
     const kind = classifyQuestion(text, deepSearchReady);
     if (kind === 'document') {
@@ -588,7 +671,11 @@ export default function WorkspacePage() {
           {analysis?.purchaseRequisition && <PrSummary pr={analysis.purchaseRequisition} />}
 
           {displayAnalysis && displayAnalysis.quotations.length > 0 && (
-            <AnalysisResults analysis={displayAnalysis} />
+            <AnalysisResults
+              analysis={displayAnalysis}
+              selectedSupplier={selectedSupplier}
+              onSelectSupplier={chooseSupplier}
+            />
           )}
 
           {docs.length > 0 && <DeepSearchStatus docs={docs} />}

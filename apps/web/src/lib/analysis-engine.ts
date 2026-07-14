@@ -78,6 +78,44 @@ export function classifyQuestion(text: string, deepSearchReady: boolean): Questi
   return deepSearchReady ? 'document' : 'comparison';
 }
 
+// ── Supplier selection from chat ("go with Alfran" / "back to the AI pick") ──
+const SELECT_INTENT =
+  /\b(go(?:ing)?\s+with|select|choos(?:e|ing)|pick|award(?:ed|\s+it)?\s+to|i\s+want|we\s+want|let'?s\s+go\s+with|prefer)\b/i;
+const DESELECT_INTENT =
+  /\b(deselect|unselect|clear (?:the |my )?selection|reset (?:the |my )?selection|remove (?:the |my )?selection|back to (?:the )?ai|use (?:the )?ai(?:'s)? (?:pick|recommendation|choice))\b/i;
+
+/** True when the user is asking to CHOOSE/override a supplier. */
+export function isSelectionIntent(text: string): boolean {
+  return SELECT_INTENT.test(text);
+}
+/** True when the user is asking to clear their selection (return to the AI pick). */
+export function isDeselectIntent(text: string): boolean {
+  return DESELECT_INTENT.test(text);
+}
+
+/**
+ * Resolve a supplier the user named in a chat message (e.g. "go with Alfran",
+ * "select supply wave"). Matches a quotation whose full name — or a distinctive
+ * (≥4-char) word of it — appears in the text; the longest name wins on ties.
+ * Returns the canonical supplier name, or null if none is clearly named. Pure.
+ */
+export function resolveSupplierFromText(
+  text: string,
+  quotations: ExtractedQuotation[],
+): string | null {
+  const t = ` ${text.toLowerCase()} `;
+  let best: { name: string; len: number } | null = null;
+  for (const q of quotations) {
+    const name = q.supplierName?.trim();
+    if (!name) continue;
+    const nl = name.toLowerCase();
+    const tokens = nl.split(/[^a-z0-9]+/).filter((w) => w.length >= 4);
+    const hit = t.includes(nl) || tokens.some((w) => new RegExp(`\\b${w}\\b`).test(t));
+    if (hit && (!best || nl.length > best.len)) best = { name, len: nl.length };
+  }
+  return best?.name ?? null;
+}
+
 // Map a free-text keyword to a catalog item name (for chat queries).
 const ITEM_KEYWORDS: { re: RegExp; name: string }[] = [
   { re: /steel|rebar|bar/i, name: 'Reinforced Steel Bars (12mm)' },

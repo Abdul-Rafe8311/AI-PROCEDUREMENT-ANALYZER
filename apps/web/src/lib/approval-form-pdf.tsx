@@ -56,6 +56,8 @@ export interface ApprovalFormOptions {
   technicalComments?: Record<string, TechnicalComment>;
   /** SAR/USD rate override; when omitted a live rate is fetched (cached fallback). null = no rate */
   fx?: FxRates | null;
+  /** the human's chosen supplier — printed as the Final Recommendation (never AI-written) */
+  selectedSupplier?: string | null;
 }
 
 const SUP_PER_GROUP = 4; // suppliers per stacked block (Suppliers 1–4, then 5 wraps) — matches the company template
@@ -168,11 +170,13 @@ function ApprovalDocument({
   signatureRoles,
   comments,
   fx,
+  selectedSupplier,
 }: {
   analysis: AnalysisResult;
   signatureRoles: string[];
   comments: Record<string, TechnicalComment>;
   fx: FxRates | null;
+  selectedSupplier: string | null;
 }) {
   const qs = analysis.quotations;
   const qById = new Map(qs.map((q) => [q.id, q]));
@@ -476,9 +480,18 @@ function ApprovalDocument({
           </View>
         ) : null}
 
-        {/* Final Recommendation — blank for the human */}
+        {/* Final Recommendation — the HUMAN's selection when one was made (never
+            AI-written); otherwise blank for the team to complete by hand. */}
         <View style={s.finalRow}>
           <Text style={{ fontFamily: 'Helvetica-Bold', color: C.ink }}>Final Recommendation:</Text>
+          {selectedSupplier ? (
+            <Text style={{ fontFamily: 'Helvetica-Bold', color: C.ink }}>
+              {`${selectedSupplier}  `}
+              <Text style={{ fontFamily: 'Helvetica-Oblique', color: C.muted, fontSize: 7 }}>
+                (selected by reviewer)
+              </Text>
+            </Text>
+          ) : null}
           <View style={{ flex: 1, borderBottomWidth: 1, borderBottomColor: C.line, height: 12 }} />
         </View>
 
@@ -570,6 +583,12 @@ export async function generateApprovalFormPdf(
   // an injectable fx lets callers/tests supply a fixed rate.
   const fx = options?.fx !== undefined ? options.fx : await getFxRates();
   return pdf(
-    <ApprovalDocument analysis={analysis} signatureRoles={roles} comments={comments} fx={fx} />,
+    <ApprovalDocument
+      analysis={analysis}
+      signatureRoles={roles}
+      comments={comments}
+      fx={fx}
+      selectedSupplier={options?.selectedSupplier ?? null}
+    />,
   ).toBlob();
 }

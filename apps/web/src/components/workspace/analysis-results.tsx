@@ -8,11 +8,14 @@ import {
   ArrowDown,
   ArrowUp,
   BarChart3,
+  Check,
+  CircleCheck,
   Clock,
   Download,
   HelpCircle,
   Info,
   Loader2,
+  RotateCcw,
   ShieldAlert,
   Sparkles,
   Table2,
@@ -50,11 +53,13 @@ import {
   type RiskSeverity,
   type SupplierScore,
 } from '@/lib/workspace-types';
+import { useFxRates } from '@/lib/use-fx-rates';
 import { PrComparisonTable } from './pr-comparison-table';
 import { TechnicalApproval } from './technical-approval';
 import { ApprovalFormDownload } from './approval-form-download';
 import { KpiCards } from './kpi-cards';
 import { CurrencyToggle, MoneyDual, useCurrencyMode } from './currency-mode';
+import { TradeOffPanel } from './trade-off-panel';
 
 // Lazy-load charts (recharts is heavy) — keeps initial JS lean for Lighthouse.
 const AnalysisCharts = dynamic(() => import('./analysis-charts'), {
@@ -355,7 +360,16 @@ function SourceDetail({ field, meta }: { field: FieldKey; meta: FieldProvenance 
   );
 }
 
-export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
+export function AnalysisResults({
+  analysis,
+  selectedSupplier = null,
+  onSelectSupplier,
+}: {
+  analysis: AnalysisResult;
+  /** the human's chosen supplier (overrides the AI anchor); null = AI-anchored */
+  selectedSupplier?: string | null;
+  onSelectSupplier?: (name: string | null) => void;
+}) {
   const { quotations, recommendation: rec, risks } = analysis;
   const cheapest = rec.lowestCost?.supplier;
   const fastest = rec.fastestDelivery?.supplier;
@@ -367,6 +381,17 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
   );
   const best = scored[0]?.quotation.supplierName;
   const bestScorePct = scored[0] ? Math.round(scored[0].overall * 100) : null;
+
+  // The human's selection (AI suggests, human decides). Only valid if it still
+  // matches a current supplier; the AI recommendation is ALWAYS kept visible.
+  const aiScore = scored[0] ?? null;
+  const selScore = selectedSupplier
+    ? scored.find((s) => s.quotation.supplierName === selectedSupplier) ?? null
+    : null;
+  const selectValid = !!selScore;
+  const selectDiffersFromAi = selectValid && selScore!.quotation.supplierName !== best;
+  const toggleSelect = (name: string) => onSelectSupplier?.(name === selectedSupplier ? null : name);
+  const fx = useFxRates();
 
   // Procurement score (0-100) + risk level per supplier, keyed by name.
   const scoreOf = useMemo(() => {
@@ -398,16 +423,26 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
   const minWarr = Math.min(...warrs);
   const maxWarr = Math.max(...warrs);
 
-  // Potential savings = highest − lowest quote (USD-normalized) across all
-  // quotations that actually have a total. Independent of which supplier is
-  // recommended, so it is never wrongly 0 when the recommended supplier isn't
-  // the cheapest. Failed/empty quotations (null cost) are already excluded.
+  // Potential savings = highest quote − the ANCHOR cost, USD-normalized. The
+  // anchor is the user's SELECTED supplier when one is chosen (re-anchored), else
+  // the cheapest quote. Failed/empty quotations (null cost) are already excluded.
+  const anchorCost = selectValid && selScore!.quotation.totalCostUsd != null
+    ? selScore!.quotation.totalCostUsd!
+    : minCost;
   const savings =
-    Number.isFinite(minCost) && Number.isFinite(maxCost) && maxCost > minCost
+    Number.isFinite(anchorCost) && Number.isFinite(maxCost) && maxCost > anchorCost
       ? {
-          amount: maxCost - minCost,
-          pct: Math.round(((maxCost - minCost) / maxCost) * 100),
+          amount: maxCost - anchorCost,
+          pct: Math.round(((maxCost - anchorCost) / maxCost) * 100),
         }
+      : null;
+
+  // The AI pick's OWN savings vs the highest quote — stays fixed to the AI pick
+  // (the "AI Recommendation" panel must not shift when the user selects someone).
+  const aiCostUsd = aiScore?.quotation.totalCostUsd ?? null;
+  const aiSavings =
+    aiCostUsd != null && Number.isFinite(maxCost) && maxCost > aiCostUsd
+      ? { amount: maxCost - aiCostUsd, pct: Math.round(((maxCost - aiCostUsd) / maxCost) * 100) }
       : null;
 
   const kpi = useMemo(
@@ -449,11 +484,48 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
             icon={Download}
             load={() => import('@/lib/report-pdf').then((m) => m.generateReportPdf)}
           />
-          <ApprovalFormDownload analysis={analysis} />
+          <ApprovalFormDownload analysis={analysis} selectedSupplier={selectValid ? selectedSupplier : null} />
         </div>
       </div>
 
       <KpiCards data={kpi} />
+
+      {/* Selection banner — AI suggests, human decides. Both stay visible. */}
+      {best && (
+        <div
+          className={cn(
+            'flex flex-wrap items-center justify-between gap-3 rounded-2xl border px-5 py-3 shadow-sm',
+            selectValid ? 'border-primary/30 bg-primary/[0.04]' : 'border-border bg-card',
+          )}
+        >
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+            <span className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-muted-foreground" />
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">AI Suggested</span>
+              <span className="font-semibold">{best}</span>
+              {bestScorePct != null && <span className="text-xs text-muted-foreground">{bestScorePct}/100</span>}
+            </span>
+            <span className="flex items-center gap-2">
+              <CircleCheck className={cn('h-4 w-4', selectValid ? 'text-primary' : 'text-muted-foreground/50')} />
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Your Selection</span>
+              {selectValid ? (
+                <span className="font-semibold text-primary">{selectedSupplier}</span>
+              ) : (
+                <span className="text-sm text-muted-foreground">none — using the AI pick</span>
+              )}
+            </span>
+          </div>
+          {selectValid && (
+            <button
+              type="button"
+              onClick={() => onSelectSupplier?.(null)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-sm transition hover:bg-muted/60 hover:text-foreground"
+            >
+              <RotateCcw className="h-3.5 w-3.5" /> Clear selection
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Comparison table */}
       <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
@@ -486,6 +558,7 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
             </thead>
             <tbody className="divide-y divide-border">
               {quotations.map((q) => {
+                const isSelected = selectValid && q.supplierName === selectedSupplier;
                 const costTone = extremeTone(q.totalCostUsd, minCost, maxCost, true);
                 const delTone = extremeTone(q.deliveryDays, minDel, maxDel, true);
                 const warrTone: Extreme =
@@ -496,8 +569,8 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                 const isOpen = (field: FieldKey) => open?.id === q.id && open.field === field;
                 return (
                   <Fragment key={q.id}>
-                    <tr className="transition hover:bg-muted/40">
-                      <td className="px-5 py-4">
+                    <tr className={cn('transition hover:bg-muted/40', isSelected && 'bg-primary/[0.06]')}>
+                      <td className={cn('px-5 py-4', isSelected && 'border-l-2 border-primary')}>
                         <FieldButton
                           q={q}
                           field="supplierName"
@@ -510,10 +583,26 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                           <div className="mt-0.5 text-xs text-muted-foreground">Ref: {q.reference}</div>
                         )}
                         <div className="mt-1 flex flex-wrap gap-1">
-                          {q.supplierName === best && <Tag tone="primary" icon={Trophy} label="Best overall" />}
+                          {q.supplierName === best && <Tag tone="primary" icon={Trophy} label="AI suggested" />}
+                          {isSelected && <Tag tone="primary" icon={CircleCheck} label="Your selection" />}
                           {q.supplierName === cheapest && <Tag tone="success" icon={Wallet} label="Lowest cost" />}
                           {q.supplierName === fastest && <Tag tone="warning" icon={Clock} label="Fastest" />}
                         </div>
+                        {onSelectSupplier && (
+                          <button
+                            type="button"
+                            onClick={() => toggleSelect(q.supplierName)}
+                            className={cn(
+                              'mt-2 inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold shadow-sm transition',
+                              isSelected
+                                ? 'border-primary bg-primary/10 text-primary hover:bg-primary/15'
+                                : 'border-border bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                            )}
+                          >
+                            {isSelected ? <Check className="h-3 w-3" /> : null}
+                            {isSelected ? 'Selected' : 'Select this supplier'}
+                          </button>
+                        )}
                       </td>
                       <td className={cn('px-5 py-4 text-right font-semibold nums', cellText(costTone, false))}>
                         <span className="inline-flex items-center justify-end gap-1.5">
@@ -621,6 +710,17 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
 
       <ScoreBreakdown scored={scored} />
 
+      {/* Trade-off — only when the user's selection differs from the AI pick. */}
+      {selectDiffersFromAi && aiScore && selScore && (
+        <TradeOffPanel selected={selScore} ai={aiScore} fx={fx} />
+      )}
+      {selectValid && !selectDiffersFromAi && (
+        <div className="flex items-center gap-2 rounded-2xl border border-success/30 bg-success/5 px-5 py-3 text-sm text-success">
+          <CircleCheck className="h-4 w-4 shrink-0" />
+          Your selection ({selectedSupplier}) matches the AI recommendation — no trade-off.
+        </div>
+      )}
+
       {execSummary && (
         <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
           <div className="flex items-center gap-2 text-sm font-semibold">
@@ -631,7 +731,11 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
         </div>
       )}
 
-      <SavingsPanel quotations={quotations} bestSupplier={best} />
+      <SavingsPanel
+        quotations={quotations}
+        anchorSupplier={selectValid ? selectedSupplier! : best}
+        isSelection={selectValid}
+      />
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* AI recommendation */}
@@ -658,10 +762,10 @@ export function AnalysisResults({ analysis }: { analysis: AnalysisResult }) {
                     : `Highest procurement score (${bestScorePct}/100) on the system methodology.`
                 } />
             )}
-            {best && savings && (
+            {best && aiSavings && (
               <li className="flex items-center gap-2 rounded-xl bg-success/10 px-3 py-2 text-sm font-medium text-success">
                 <TrendingDown className="h-4 w-4 shrink-0" />
-                {best} saves {formatCurrency(savings.amount, 'USD')} ({savings.pct}%) vs the
+                {best} saves {formatCurrency(aiSavings.amount, 'USD')} ({aiSavings.pct}%) vs the
                 highest quote.
               </li>
             )}
@@ -987,22 +1091,28 @@ function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
 // ── Cost-savings panel ──
 function SavingsPanel({
   quotations,
-  bestSupplier,
+  anchorSupplier,
+  isSelection = false,
 }: {
   quotations: ExtractedQuotation[];
-  bestSupplier?: string;
+  /** the supplier the savings are anchored to (the human's selection, else the AI pick) */
+  anchorSupplier?: string;
+  isSelection?: boolean;
 }) {
   const withCost = quotations.filter((q) => q.totalCostUsd != null);
   if (withCost.length < 2) return null;
-  const best = withCost.find((q) => q.supplierName === bestSupplier) ?? withCost[0];
+  const anchor = withCost.find((q) => q.supplierName === anchorSupplier) ?? withCost[0];
   const bestCost = Math.min(...withCost.map((q) => q.totalCostUsd!));
   const highCost = Math.max(...withCost.map((q) => q.totalCostUsd!));
-  const recCost = best.totalCostUsd!;
+  const recCost = anchor.totalCostUsd!;
   const savings = highCost - recCost;
   const pct = highCost > 0 ? Math.round((savings / highCost) * 1000) / 10 : 0;
 
   const cells: { label: string; value: string; tone?: string }[] = [
-    { label: 'Recommended supplier cost', value: formatCurrency(recCost, 'USD') },
+    {
+      label: isSelection ? 'Selected supplier cost' : 'Recommended supplier cost',
+      value: formatCurrency(recCost, 'USD'),
+    },
     { label: 'Lowest supplier cost', value: formatCurrency(bestCost, 'USD'), tone: 'text-success' },
     { label: 'Highest supplier cost', value: formatCurrency(highCost, 'USD'), tone: 'text-danger' },
     { label: 'Potential savings', value: `${formatCurrency(savings, 'USD')} (${pct}%)`, tone: 'text-success' },

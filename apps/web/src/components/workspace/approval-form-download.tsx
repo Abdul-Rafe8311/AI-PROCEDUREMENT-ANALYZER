@@ -99,7 +99,14 @@ function buildComments(
  * are marked and editable; editing one drops the "AI SUGGESTED:" tag and persists
  * it as the human's own comment. The Final Recommendation is never AI-written.
  */
-export function ApprovalFormDownload({ analysis }: { analysis: AnalysisResult }) {
+export function ApprovalFormDownload({
+  analysis,
+  selectedSupplier = null,
+}: {
+  analysis: AnalysisResult;
+  /** the human's chosen supplier — printed in the Final Recommendation area */
+  selectedSupplier?: string | null;
+}) {
   const [roles, setRoles] = useState<SigRole[]>(makeDefaultRoles);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -155,7 +162,11 @@ export function ApprovalFormDownload({ analysis }: { analysis: AnalysisResult })
     try {
       const signatureRoles = roles.filter((r) => r.enabled).map((r) => r.label.trim()).filter(Boolean);
       const { generateApprovalFormPdf } = await import('@/lib/approval-form-pdf');
-      const blob = await generateApprovalFormPdf(analysis, { signatureRoles, technicalComments: comments });
+      const blob = await generateApprovalFormPdf(analysis, {
+        signatureRoles,
+        technicalComments: comments,
+        selectedSupplier,
+      });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
