@@ -1,0 +1,3 @@
+
+# Build-time embedding model (bundled into the image; never committed)
+models/

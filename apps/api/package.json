@@ -14,7 +14,8 @@
     "prisma:deploy": "prisma migrate deploy",
     "db:push": "prisma db push",
     "db:seed": "ts-node prisma/seed.ts",
-    "test": "jest"
+    "test": "jest",
+    "prepare:model": "sh scripts/prepare-embedding-model.sh ./models"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
