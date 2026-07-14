@@ -462,17 +462,6 @@ function ApprovalDocument({
                 ))}
               </View>
 
-              {/* Cost Justification — company-form footer row, left blank for the team
-                  to complete when the PR value exceeds SAR 100k. Never auto-filled. */}
-              <View style={s.rowFlex} wrap={false}>
-                <Text style={[s.cellBox, s.labelRow, { width: leftW, borderLeftWidth: 1, borderLeftColor: C.border }]}>Cost Justification (if PR value &gt; 100k SAR)</Text>
-                {group.map((sup) => (
-                  <View
-                    key={sup.quotationId}
-                    style={{ width: supW, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, minHeight: 22 }}
-                  />
-                ))}
-              </View>
             </View>
           );
         })}

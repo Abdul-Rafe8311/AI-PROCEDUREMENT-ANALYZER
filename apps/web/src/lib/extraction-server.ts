@@ -130,6 +130,9 @@ export interface LlmSupplier {
   deliveryTerms: string | null;
   /** country of origin / manufacture / supply as STATED on the quote, else null */
   countryOfOrigin?: string | null;
+  /** the country where THIS SUPPLIER is registered/located, from its own address,
+   * letterhead, C.R. or VAT number — used to infer origin when none is stated */
+  supplierCountry?: string | null;
   paymentTerms: string | null;
   warranty: string | null;
   validUntil: string | null;
@@ -228,6 +231,7 @@ const EXTRACTION_SYSTEM_PROMPT = [
   '    totalsByCurrency: { amount: number, currency: string }[]|null,',
   '    deliveryTime: string|null, deliveryTerms: string|null,',
   '    countryOfOrigin: string|null, // country of origin/manufacture/supply if STATED (e.g. "Country of Origin: France", "F.R. OF GERMANY"); else null — NEVER guess',
+  '    supplierCountry: string|null, // the country where THIS SUPPLIER is registered/located, read from its OWN address, letterhead, Commercial Registration (C.R.) or VAT number (a 15-digit Saudi VAT number ⇒ Saudi Arabia). This is the supplier\'s country, NOT necessarily the goods\' origin. null only if the document shows no supplier address/registration at all.',
   '    paymentTerms: string|null, warranty: string|null, validUntil: string|null (ISO date),',
   '    lineItems: { name: string, quantity: number|null, unitPrice: number|null,',
   '                 totalPrice: number|null, category: string|null, uom: string|null,',
@@ -598,7 +602,13 @@ function mapSupplier(
     ? `${Math.max(...availDays)} days`
     : s.deliveryTime?.trim() || null;
   const deliveryTerms = s.deliveryTerms?.trim() || null;
-  const countryOfOrigin = normalizeCountry(s.countryOfOrigin);
+  // Origin = the STATED country of origin; if the quote doesn't state one, fall
+  // back to the country where the supplier itself is registered (its address/CR/
+  // VAT). This is document-supported — a Saudi-registered supplier resolves to
+  // "Saudi Arabia" (and thus LOCAL for VAT), never a guessed country. Stays null
+  // only when the document carries no country information at all.
+  const countryOfOrigin =
+    normalizeCountry(s.countryOfOrigin) ?? normalizeCountry(s.supplierCountry);
   const reference = s.reference?.trim() || null;
   const prNumber = s.prNumber?.trim() || null;
   // Never fall back to the uploaded filename as a supplier name — use the

@@ -171,6 +171,33 @@ test('TA FORM: Country of Origin per supplier — stated → normalized; KSA →
   assert.equal(origin('Supply Wave'), 'Saudi Arabia');
 });
 
+test('TA FORM: origin INFERRED from supplier registration when no origin line is stated', () => {
+  // The three Saudi suppliers don't print a "Country of Origin" line, but their
+  // letterhead/address/CR/VAT are Saudi → origin must resolve to "Saudi Arabia"
+  // (and thus LOCAL), never blank. Foreign/unknown registrations are respected.
+  const mk = (o: Partial<LlmSupplier>) =>
+    quotationsFromLlmSuppliers(
+      [{ supplierName: 'X', reference: null, prNumber: null, currency: 'SAR', totalAmount: null, vatAmount: null, totalWithoutVat: null, totalsByCurrency: null, deliveryTime: null, deliveryTerms: null, paymentTerms: null, warranty: null, validUntil: null, lineItems: [], ...o }],
+      'q.pdf',
+      { currency: (o.currency as string) ?? 'SAR', confidence: 1 },
+    )[0];
+
+  // No stated origin, Saudi registration → inferred "Saudi Arabia" + LOCAL.
+  const saudiByAddress = mk({ countryOfOrigin: null, supplierCountry: 'Saudi Arabia' });
+  assert.equal(saudiByAddress.countryOfOrigin, 'Saudi Arabia');
+  assert.equal(isLocalCountry(saudiByAddress.countryOfOrigin), true);
+  const saudiByKsa = mk({ countryOfOrigin: null, supplierCountry: 'KSA' });
+  assert.equal(saudiByKsa.countryOfOrigin, 'Saudi Arabia');
+
+  // A STATED origin always wins over the registration country.
+  const statedWins = mk({ countryOfOrigin: 'F.R. OF GERMANY', supplierCountry: 'Saudi Arabia' });
+  assert.equal(statedWins.countryOfOrigin, 'Germany');
+
+  // Genuinely no country information anywhere → stays blank (never guessed).
+  const blank = mk({ countryOfOrigin: null, supplierCountry: null });
+  assert.equal(blank.countryOfOrigin, null);
+});
+
 test('TA FORM VAT: no supplier states VAT on PR 12601612 → NO with-VAT line for anyone', () => {
   for (const q of quotations) {
     assert.equal(q.totalCostInclVat ?? null, null, `${q.supplierName} states no VAT`);
