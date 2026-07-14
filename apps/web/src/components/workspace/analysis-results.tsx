@@ -706,7 +706,12 @@ export function AnalysisResults({
 
       <PrComparisonTable analysis={analysis} mode={currencyMode} />
 
-      <AnalysisCharts quotations={quotations} scored={scored} />
+      <AnalysisCharts
+        quotations={quotations}
+        scored={scored}
+        prMatch={analysis.prMatch}
+        pr={analysis.purchaseRequisition}
+      />
 
       <ScoreBreakdown scored={scored} />
 
