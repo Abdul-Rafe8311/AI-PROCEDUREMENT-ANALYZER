@@ -60,6 +60,7 @@ import { ApprovalFormDownload } from './approval-form-download';
 import { KpiCards } from './kpi-cards';
 import { CurrencyToggle, MoneyDual, useCurrencyMode } from './currency-mode';
 import { TradeOffPanel } from './trade-off-panel';
+import { TranslationBadge } from './translation-view';
 
 // Lazy-load charts (recharts is heavy) — keeps initial JS lean for Lighthouse.
 const AnalysisCharts = dynamic(() => import('./analysis-charts'), {
@@ -581,6 +582,11 @@ export function AnalysisResults({
                         />
                         {q.reference && (
                           <div className="mt-0.5 text-xs text-muted-foreground">Ref: {q.reference}</div>
+                        )}
+                        {q.translation && (
+                          <div className="mt-1">
+                            <TranslationBadge translation={q.translation} supplierName={q.supplierName} />
+                          </div>
                         )}
                         <div className="mt-1 flex flex-wrap gap-1">
                           {q.supplierName === best && <Tag tone="primary" icon={Trophy} label="AI suggested" />}

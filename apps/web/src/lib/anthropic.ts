@@ -23,6 +23,9 @@ export const VISION_MODEL = process.env.ANTHROPIC_VISION_MODEL || 'claude-sonnet
 /** Model for text-layer structured extraction. Override with ANTHROPIC_EXTRACTION_MODEL. */
 export const EXTRACTION_MODEL = process.env.ANTHROPIC_EXTRACTION_MODEL || 'claude-sonnet-4-6';
 
+/** Model for full-document Arabic→English translation. Override with ANTHROPIC_TRANSLATION_MODEL. */
+export const TRANSLATION_MODEL = process.env.ANTHROPIC_TRANSLATION_MODEL || 'claude-sonnet-4-6';
+
 /** Token usage from a Claude call, for per-extraction cost logging. */
 export interface ClaudeUsage {
   inputTokens: number;
@@ -202,6 +205,41 @@ export async function extractJsonWithClaude(opts: {
   const anthropic = getClient();
   const res = await anthropic.messages.create({
     model: opts.model || EXTRACTION_MODEL,
+    max_tokens: opts.maxTokens ?? 8192,
+    temperature: 0,
+    system: opts.system,
+    messages: [{ role: 'user', content: opts.user }],
+  });
+  const content = res.content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map((b) => b.text)
+    .join('')
+    .trim();
+  return {
+    content,
+    usage: {
+      inputTokens: res.usage?.input_tokens ?? 0,
+      outputTokens: res.usage?.output_tokens ?? 0,
+    },
+  };
+}
+
+/**
+ * Faithful document translation with Claude. Temperature 0 for determinism.
+ * Returns the raw translated text plus token usage (for cost logging). The strict
+ * translation rules (never alter numbers/codes, preserve structure, flag ambiguity)
+ * live in the caller's system prompt. Throws MissingAnthropicKeyError when the key
+ * is unset, or the SDK's typed API errors on failure — the caller degrades.
+ */
+export async function translateWithClaude(opts: {
+  system: string;
+  user: string;
+  model?: string;
+  maxTokens?: number;
+}): Promise<{ content: string; usage: ClaudeUsage }> {
+  const anthropic = getClient();
+  const res = await anthropic.messages.create({
+    model: opts.model || TRANSLATION_MODEL,
     max_tokens: opts.maxTokens ?? 8192,
     temperature: 0,
     system: opts.system,

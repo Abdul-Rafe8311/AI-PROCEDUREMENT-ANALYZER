@@ -8,10 +8,13 @@ import {
   extractJsonFromMedia,
   extractJsonWithClaude,
   isAnthropicConfigured,
+  TRANSLATION_MODEL,
+  translateWithClaude,
   type ImageMediaType,
   type VisionMedia,
 } from './anthropic';
 import type {
+  DocumentTranslation,
   ExtractedQuotation,
   FieldKey,
   FieldProvenance,
@@ -19,6 +22,7 @@ import type {
   LineItemCategory,
   PrItem,
   PurchaseRequisition,
+  SourceLanguage,
   StatedTotal,
 } from './workspace-types';
 
@@ -91,6 +95,101 @@ export function detectCurrency(text: string): { currency: string; confidence: nu
     if (c.re.test(t)) return { currency: c.currency, confidence: c.conf };
   }
   return { currency: 'USD', confidence: 0.2 }; // unknown — low confidence, never assumed silently
+}
+
+// ── Language detection + full-document translation (Arabic → English) ──
+// Arabic script blocks (base + supplement + extended-A + presentation forms A/B).
+// Digits/codes are letter-free, so they don't skew the ratio.
+const ARABIC_RE = /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/g;
+
+/**
+ * Deterministic source-language detection from parsed text. 'ar' = predominantly
+ * Arabic (needs translation), 'bilingual' = substantial text in BOTH scripts (e.g.
+ * a bilingual quote whose English side is already readable — no translation), 'en'
+ * = English / no Arabic. Pure — no LLM.
+ */
+export function detectLanguage(text: string): SourceLanguage {
+  const arabic = (text.match(ARABIC_RE) ?? []).length;
+  if (arabic === 0) return 'en';
+  const latin = (text.match(/[A-Za-z]/g) ?? []).length;
+  const arRatio = arabic / (arabic + latin || 1);
+  if (arRatio >= 0.6) return 'ar'; // mostly Arabic — a fully-Arabic quotation
+  if (arRatio <= 0.15) return 'en'; // English with a stray Arabic mark
+  return 'bilingual'; // both scripts present in force (already has English)
+}
+
+// Inline flags the translator was told to leave for anything it could not safely
+// translate ("[untranslated: …]" / "[ambiguous: …]") — surfaced to the reader.
+const TRANSLATION_FLAG_RE = /\[(?:untranslated|ambiguous)\s*:\s*[^\]]+\]/gi;
+export function extractTranslationNotes(englishText: string): string[] {
+  return [...new Set((englishText.match(TRANSLATION_FLAG_RE) ?? []).map((s) => s.trim()))];
+}
+
+// One translation call comfortably covers a multi-page quote; cap the input so a
+// pathological document can't blow the request/latency budget (flagged as truncated).
+const MAX_TRANSLATE_CHARS = 40000;
+
+const TRANSLATION_SYSTEM_PROMPT = [
+  'You are a precise commercial/legal translator. Translate the procurement document',
+  'below into clear English for a manager who does not read Arabic. This translation',
+  'may inform a document that gets SIGNED, so ACCURACY matters more than fluency.',
+  '',
+  'RULES:',
+  '- Translate MEANING only. Do NOT re-format, re-order, summarize, shorten or',
+  '  "improve" anything. Preserve the original STRUCTURE exactly: the same lines in',
+  '  the same order, the same table/column layout, the same line breaks.',
+  '- Pass through EXACTLY and UNCHANGED every number, price, quantity, percentage,',
+  '  date, currency code/symbol, reference/quotation number, part/item/material code,',
+  '  IBAN, VAT number, C.R. number, phone number and email. NEVER change, reformat,',
+  '  localize or re-order a single digit or code.',
+  '- Do NOT add, explain, infer, annotate or omit anything not in the source. No',
+  '  commentary of your own, no markdown, no title, no preamble.',
+  '- Text already in English: copy it verbatim. Translate only the Arabic parts.',
+  '- If a word or phrase is untranslatable or genuinely ambiguous, KEEP the original',
+  '  and mark it inline as [untranslated: <original>] — never guess a meaning.',
+  '',
+  'Output ONLY the English translation as plain text, preserving line breaks.',
+].join('\n');
+
+/**
+ * Full-document Arabic→English translation via Claude (temperature 0). Preserves
+ * structure and passes numbers/codes through unchanged; flags anything it could not
+ * translate. Logs token usage. Returns null on failure (extraction, whose fields are
+ * already English, is unaffected — the manager just won't get the whole-doc render).
+ */
+export async function translateDocument(
+  text: string,
+  language: SourceLanguage,
+  fileName: string,
+): Promise<DocumentTranslation | null> {
+  const truncated = text.length > MAX_TRANSLATE_CHARS;
+  const input = truncated ? text.slice(0, MAX_TRANSLATE_CHARS) : text;
+  try {
+    const { content, usage } = await translateWithClaude({
+      system: TRANSLATION_SYSTEM_PROMPT,
+      user: input,
+      maxTokens: 8192,
+    });
+    const englishText = content.trim();
+    if (!englishText) {
+      log(`translation produced no text for "${fileName}"`);
+      return null;
+    }
+    const notes = extractTranslationNotes(englishText);
+    if (truncated) {
+      notes.push('[truncated: the document was long; only the first part was translated — see the original for the remainder]');
+    }
+    log(
+      `[tokens] translation (${language}->en) via ${TRANSLATION_MODEL}: input=${usage.inputTokens} output=${usage.outputTokens} (total=${usage.inputTokens + usage.outputTokens})`,
+    );
+    log(
+      `translated "${fileName}" (${language}->en): ${text.length} chars -> ${englishText.length} chars${truncated ? ' (truncated)' : ''}${notes.length ? `, ${notes.length} flag(s)` : ''}`,
+    );
+    return { language, originalText: text, englishText, model: TRANSLATION_MODEL, notes, truncated };
+  } catch (err) {
+    log(`translation failed for "${fileName}": ${(err as Error).message}`);
+    return null;
+  }
 }
 
 interface LlmLineItem {
@@ -252,6 +351,15 @@ const EXTRACTION_SYSTEM_PROMPT = [
   "add an Incoterm's standard meaning, a port, packing, duty or any detail that is",
   'not literally printed. If deliveryTerms is just "FOB", return "FOB" — never',
   '"FOB <port>, duty unpaid, seaworthy packing". Terse in the source → terse output.',
+  '',
+  'LANGUAGE — every TEXT field must be in English. If a value is written in Arabic,',
+  'translate it to CONCISE English (do not transliterate the words); if it is already',
+  'in English, copy it verbatim. Stay terse either way — translating is not a licence',
+  'to expand or explain. This covers item names, deliveryTerms, paymentTerms, warranty.',
+  'For a supplierName written only in Arabic, use the English/Latin name the document',
+  'itself prints if any, else a plain transliteration. NEVER translate, localize or',
+  'alter numbers, prices, quantities, dates, currency codes, reference numbers or',
+  'part/item codes — those are copied EXACTLY as written, in any language.',
   '',
   'EXTRACT EACH FIELD INDEPENDENTLY. Cells may be garbled, overlapping or truncated',
   'in the source. If ONE cell for a supplier is unreadable, still capture every',
@@ -844,12 +952,24 @@ export async function extractQuotations(
   }
 
   const detected = detectCurrency(text);
-  const { data: llm, error: llmError } = await llmExtract(text);
+  // Detect language and, for a predominantly-Arabic quote, translate the WHOLE
+  // document to English — in parallel with extraction (both read the SAME Arabic
+  // source, so structured fields are extracted from the original, not the
+  // translation). Bilingual docs already carry English → no translation needed.
+  const language = detectLanguage(text);
+  const wantTranslation = language === 'ar' && isAnthropicConfigured();
+  const [{ data: llm, error: llmError }, translation] = await Promise.all([
+    llmExtract(text),
+    wantTranslation ? translateDocument(text, language, fileName) : Promise.resolve(null),
+  ]);
 
   if (!llm || !llm.suppliers.length) {
-    // No structured result — return one empty quotation carrying the reason.
+    // No structured result — return one empty quotation carrying the reason (and
+    // the translation, if any, so the manager can still read the document).
+    const empty = emptyQuotation(`q_${baseIndex}`, fileName);
+    if (translation) empty.translation = translation;
     return {
-      quotations: [emptyQuotation(`q_${baseIndex}`, fileName)],
+      quotations: [empty],
       textLength: text.length,
       method: 'heuristic',
       error: llmError,
@@ -860,6 +980,8 @@ export async function extractQuotations(
   const quotations = llm.suppliers.map((s, i) =>
     mapSupplier(s, { id: `q_${baseIndex}_${i}`, fileName, detected, index: i, count }),
   );
+  // The translation is per-DOCUMENT — attach it to every supplier read from this file.
+  if (translation) for (const q of quotations) q.translation = translation;
 
   return { quotations, textLength: text.length, method: 'llm', error: llmError };
 }

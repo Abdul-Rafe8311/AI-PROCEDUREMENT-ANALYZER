@@ -96,6 +96,33 @@ export interface ExtractedQuotation {
   lineItems: LineItem[];
   /** per-field source snippet + confidence for traceability */
   fields: Record<FieldKey, FieldProvenance>;
+  /** full-document English translation when the source wasn't English (else null).
+   * The extracted fields above are already English; this is the whole-document
+   * translation the manager reads, with the binding Arabic original kept alongside. */
+  translation?: DocumentTranslation | null;
+}
+
+/** Language of the source document as detected during extraction. */
+export type SourceLanguage = 'en' | 'ar' | 'bilingual';
+
+/**
+ * A full-document translation to English. Produced once (cached in the persisted
+ * analysis), shown by default while the ORIGINAL text stays accessible — the
+ * original is the binding text; the English is a convenience.
+ */
+export interface DocumentTranslation {
+  /** detected source language ('ar' or 'bilingual' — English docs carry no translation) */
+  language: SourceLanguage;
+  /** the ORIGINAL document text exactly as parsed (the binding text) */
+  originalText: string;
+  /** full English translation — numbers/prices/dates/codes pass through unchanged */
+  englishText: string;
+  /** the Claude model that produced it, for the "machine translation" label */
+  model: string;
+  /** flags for anything untranslatable/ambiguous the model marked, never guessed */
+  notes: string[];
+  /** true when the source was too long and the translation was truncated */
+  truncated?: boolean;
 }
 
 /**
