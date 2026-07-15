@@ -5,6 +5,8 @@ import {
   ArrowDown,
   ArrowUp,
   ClipboardCheck,
+  Eye,
+  EyeOff,
   Loader2,
   Plus,
   RotateCcw,
@@ -21,8 +23,18 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { suggestTechnicalComments } from '@/lib/item-matching';
-import { type AnalysisResult, DEFAULT_SIGNATURE_ROLES, type TechnicalComment } from '@/lib/workspace-types';
+import {
+  buildApprovalFields,
+  suggestOrigins,
+  suggestTechnicalComments,
+  suggestWarranties,
+} from '@/lib/item-matching';
+import {
+  type AnalysisResult,
+  type ApprovalFieldValue,
+  DEFAULT_SIGNATURE_ROLES,
+  type TechnicalComment,
+} from '@/lib/workspace-types';
 
 interface SigRole {
   id: string;
@@ -32,6 +44,35 @@ interface SigRole {
 
 const ROLES_KEY = 'approval:signatureRoles';
 const COMMENTS_KEY = 'approval:comments:v1';
+const WARRANTY_KEY = 'approval:warranty:v1';
+const ORIGIN_KEY = 'approval:origin:v1';
+
+// A persisted per-supplier override for a toggleable field: `enabled` overrides the
+// default-ON toggle; a `text` string (incl. "") is the human's edit/clear. Absent
+// keys fall back to the fresh AI value. Stored per analysis (keyed by supplier set).
+type FieldOverride = { enabled?: boolean; text?: string | null };
+type FieldStore = Record<string, FieldOverride>;
+
+function loadFieldStore(key: string, supKey: string): FieldStore {
+  if (typeof window === 'undefined') return {};
+  try {
+    const all = JSON.parse(window.localStorage.getItem(key) ?? '{}');
+    const forKey = all?.[supKey];
+    return forKey && typeof forKey === 'object' ? forKey : {};
+  } catch {
+    return {};
+  }
+}
+function saveFieldStore(key: string, supKey: string, store: FieldStore) {
+  if (typeof window === 'undefined') return;
+  try {
+    const all = JSON.parse(window.localStorage.getItem(key) ?? '{}');
+    all[supKey] = store;
+    window.localStorage.setItem(key, JSON.stringify(all));
+  } catch {
+    /* ignore */
+  }
+}
 
 const makeDefaultRoles = (): SigRole[] =>
   DEFAULT_SIGNATURE_ROLES.map((label, i) => ({ id: `sig-${i}-${label}`, label, enabled: true }));
@@ -73,6 +114,61 @@ function saveHumanEdits(supKey: string, edits: Record<string, string>) {
   } catch {
     /* ignore */
   }
+}
+
+// A per-supplier toggleable field (Warranty, Country of Origin): AI pre-fills the
+// value; the human can edit, clear, or hide it per supplier; toggles + edits
+// persist per analysis and are overlaid on the fresh AI values. Mirrors the
+// Technical Comments pattern, plus an on/off switch.
+function useToggleableField(
+  analysis: AnalysisResult,
+  aiText: Record<string, string>,
+  storageKey: string,
+  supKey: string,
+) {
+  const [values, setValues] = useState<Record<string, ApprovalFieldValue>>(() =>
+    buildApprovalFields(analysis.quotations, aiText, loadFieldStore(storageKey, supKey)),
+  );
+  // Re-seed when the analysed suppliers change (or on reload) — overlay persisted edits.
+  useEffect(() => {
+    setValues(buildApprovalFields(analysis.quotations, aiText, loadFieldStore(storageKey, supKey)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supKey]);
+
+  // A human edit (or clear) → plain value, drops the AI tag, persisted.
+  const edit = (id: string, text: string) => {
+    setValues((prev) => ({ ...prev, [id]: { enabled: prev[id]?.enabled ?? true, text, aiSuggested: false } }));
+    const store = loadFieldStore(storageKey, supKey);
+    store[id] = { ...store[id], text };
+    saveFieldStore(storageKey, supKey, store);
+  };
+  // Show/hide this field for this supplier — HIDES on the form, never deletes data.
+  const toggle = (id: string) => {
+    const nextEnabled = !(values[id]?.enabled ?? true);
+    setValues((prev) => {
+      const cur = prev[id] ?? { text: aiText[id] ?? '', aiSuggested: (aiText[id] ?? '').trim() !== '' };
+      return { ...prev, [id]: { ...cur, enabled: nextEnabled } };
+    });
+    const store = loadFieldStore(storageKey, supKey);
+    store[id] = { ...store[id], enabled: nextEnabled };
+    saveFieldStore(storageKey, supKey, store);
+  };
+  // Reset the VALUE back to the AI suggestion (keeps the show/hide state).
+  const reset = (id: string) => {
+    const ai = aiText[id] ?? '';
+    setValues((prev) => ({
+      ...prev,
+      [id]: { enabled: prev[id]?.enabled ?? true, text: ai, aiSuggested: ai.trim() !== '' },
+    }));
+    const store = loadFieldStore(storageKey, supKey);
+    if (store[id]) {
+      delete store[id].text;
+      if (store[id].enabled === undefined) delete store[id];
+    }
+    saveFieldStore(storageKey, supKey, store);
+  };
+
+  return { values, edit, toggle, reset };
 }
 
 // AI suggestion for each supplier, with any persisted HUMAN edit overlaid (a human
@@ -120,6 +216,12 @@ export function ApprovalFormDownload({
     buildComments(analysis, suggestions, {}),
   );
 
+  // Per-supplier, toggleable Warranty + Country of Origin (AI-prefilled, editable).
+  const warrantyAi = useMemo(() => suggestWarranties(analysis.quotations), [analysis]);
+  const originAi = useMemo(() => suggestOrigins(analysis.quotations), [analysis]);
+  const warranty = useToggleableField(analysis, warrantyAi, WARRANTY_KEY, supKey);
+  const origin = useToggleableField(analysis, originAi, ORIGIN_KEY, supKey);
+
   useEffect(() => setRoles(loadRoles()), []);
   // Re-seed when the analysed suppliers change (or on reload) — overlay persisted edits.
   useEffect(() => {
@@ -165,6 +267,8 @@ export function ApprovalFormDownload({
       const blob = await generateApprovalFormPdf(analysis, {
         signatureRoles,
         technicalComments: comments,
+        warranties: warranty.values,
+        countriesOfOrigin: origin.values,
         selectedSupplier,
       });
       const url = URL.createObjectURL(blob);
@@ -192,6 +296,10 @@ export function ApprovalFormDownload({
           suggestions={suggestions}
           onEdit={editComment}
           onReset={resetComment}
+          warranty={warranty}
+          warrantyAi={warrantyAi}
+          origin={origin}
+          originAi={originAi}
           roles={roles}
           onRolesChange={persistRoles}
           enabledCount={enabledCount}
@@ -218,12 +326,123 @@ export function ApprovalFormDownload({
   );
 }
 
+interface ToggleableField {
+  values: Record<string, ApprovalFieldValue>;
+  edit: (id: string, text: string) => void;
+  toggle: (id: string) => void;
+  reset: (id: string) => void;
+}
+
+// A per-supplier, individually toggleable Approval Form field (Warranty, Country of
+// Origin). Same edit/reset/AI-label behaviour as Technical Comments, plus a
+// per-supplier show/hide switch. Turning a supplier OFF hides the field on the
+// generated form (it does NOT delete the underlying extracted value).
+function ToggleableFieldSection({
+  title,
+  hint,
+  quotations,
+  field,
+  aiText,
+  placeholder,
+}: {
+  title: string;
+  hint: string;
+  quotations: AnalysisResult['quotations'];
+  field: ToggleableField;
+  aiText: Record<string, string>;
+  placeholder: string;
+}) {
+  if (!quotations.length) return null;
+  return (
+    <section className="mt-6">
+      <h3 className="mb-1 text-sm font-semibold">{title}</h3>
+      <p className="mb-2 text-[11px] text-muted-foreground">{hint}</p>
+      <ul className="space-y-3">
+        {quotations.map((q) => {
+          const f = field.values[q.id] ?? { enabled: true, text: '', aiSuggested: false };
+          const hasAi = (aiText[q.id] ?? '').trim() !== '';
+          return (
+            <li
+              key={q.id}
+              className={cn(
+                'rounded-lg border p-3',
+                f.enabled ? 'border-border' : 'border-dashed border-border bg-muted/30',
+              )}
+            >
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className={cn('text-sm font-semibold', !f.enabled && 'text-muted-foreground')}>
+                  {q.supplierName}
+                </span>
+                <div className="flex items-center gap-2">
+                  {f.enabled && f.aiSuggested ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
+                      <Sparkles className="h-3 w-3" /> AI suggested — please review
+                    </span>
+                  ) : f.enabled && f.text.trim() ? (
+                    <span className="rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-semibold text-success">
+                      Your value
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => field.toggle(q.id)}
+                    aria-pressed={f.enabled}
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition',
+                      f.enabled
+                        ? 'border-primary/30 bg-primary/10 text-primary hover:bg-primary/15'
+                        : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
+                    )}
+                    title={f.enabled ? `Shown on the form — click to hide ${title} for ${q.supplierName}` : `Hidden — click to show ${title} for ${q.supplierName}`}
+                  >
+                    {f.enabled ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                    {f.enabled ? 'Shown' : 'Hidden'}
+                  </button>
+                </div>
+              </div>
+              {f.enabled && (
+                <>
+                  <input
+                    type="text"
+                    value={f.text}
+                    onChange={(e) => field.edit(q.id, e.target.value)}
+                    placeholder={placeholder}
+                    className={cn(
+                      'w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary',
+                      f.aiSuggested && 'italic text-primary',
+                    )}
+                  />
+                  {hasAi && !f.aiSuggested && (
+                    <div className="mt-1.5 flex items-center justify-end">
+                      <button
+                        type="button"
+                        onClick={() => field.reset(q.id)}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                      >
+                        <RotateCcw className="h-3 w-3" /> Reset to AI suggestion
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 function CustomizeFormDialog({
   analysis,
   comments,
   suggestions,
   onEdit,
   onReset,
+  warranty,
+  warrantyAi,
+  origin,
+  originAi,
   roles,
   onRolesChange,
   enabledCount,
@@ -235,6 +454,10 @@ function CustomizeFormDialog({
   suggestions: Record<string, TechnicalComment>;
   onEdit: (id: string, text: string) => void;
   onReset: (id: string) => void;
+  warranty: ToggleableField;
+  warrantyAi: Record<string, string>;
+  origin: ToggleableField;
+  originAi: Record<string, string>;
   roles: SigRole[];
   onRolesChange: (next: SigRole[]) => void;
   enabledCount: number;
@@ -336,6 +559,26 @@ function CustomizeFormDialog({
             </p>
           )}
         </section>
+
+        {/* ── Country of Origin (per-supplier, toggleable) ── */}
+        <ToggleableFieldSection
+          title="Country of Origin"
+          hint="AI-prefilled from each quote (local Saudi suppliers → Saudi Arabia). Edit or clear per supplier; turn a supplier off to hide it on the form. Hiding never changes the VAT local/international rule."
+          quotations={analysis.quotations}
+          field={origin}
+          aiText={originAi}
+          placeholder="e.g. Saudi Arabia"
+        />
+
+        {/* ── Warranty (per-supplier, toggleable) ── */}
+        <ToggleableFieldSection
+          title="Warranty"
+          hint={'AI-prefilled from each quote ("Not stated" when the quote states none — never invented). Edit or clear per supplier; turn a supplier off to hide the Warranty row.'}
+          quotations={analysis.quotations}
+          field={warranty}
+          aiText={warrantyAi}
+          placeholder="e.g. 12 months against manufacturing defects"
+        />
 
         {/* ── Signature blocks ── */}
         <section className="mt-6">

@@ -233,6 +233,20 @@ export interface TechnicalComment {
   aiSuggested: boolean;
 }
 
+/**
+ * A per-supplier, individually toggleable Approval Form field (Warranty, Country
+ * of Origin). Mirrors {@link TechnicalComment} but adds an `enabled` switch: the AI
+ * pre-fills `text` (aiSuggested=true, indigo/italic), the human may edit or clear
+ * it (flips aiSuggested=false), and `enabled=false` HIDES the field for that
+ * supplier on the generated form WITHOUT deleting the underlying extracted value
+ * (so Country of Origin still drives the VAT local/international rule when hidden).
+ */
+export interface ApprovalFieldValue {
+  enabled: boolean;
+  text: string;
+  aiSuggested: boolean;
+}
+
 export type RiskType =
   | 'missing_delivery'
   | 'missing_warranty'

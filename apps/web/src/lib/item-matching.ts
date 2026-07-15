@@ -12,6 +12,7 @@
 // A shared long spec code is treated as near-certain evidence of a match.
 
 import type {
+  ApprovalFieldValue,
   ExtractedQuotation,
   LineItem,
   PrItem,
@@ -407,6 +408,53 @@ export function suggestTechnicalComments(
       verdict = 'Technically Accepted';
     }
     out[sm.quotationId] = { text: `AI SUGGESTED: ${verdict}`, aiSuggested: true };
+  }
+  return out;
+}
+
+// The AI pre-fill VALUE (plain text) for the per-supplier Warranty field: the
+// warranty verbatim from the quote when stated, else "Not stated" — NEVER an
+// invented warranty. Keyed by quotation id.
+export function suggestWarranties(quotations: ExtractedQuotation[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const q of quotations) out[q.id] = q.warranty?.trim() || 'Not stated';
+  return out;
+}
+
+// The AI pre-fill VALUE for the per-supplier Country of Origin field: the origin
+// already derived during extraction (stated, or inferred "Saudi Arabia" for a
+// locally-registered supplier), else "Not stated". This is DISPLAY-ONLY — the VAT
+// local/international rule always reads the underlying extracted `countryOfOrigin`,
+// so editing/hiding this field never changes VAT. Keyed by quotation id.
+export function suggestOrigins(quotations: ExtractedQuotation[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const q of quotations) out[q.id] = q.countryOfOrigin?.trim() || 'Not stated';
+  return out;
+}
+
+/**
+ * Build the per-supplier {@link ApprovalFieldValue} map for a toggleable field
+ * (Warranty / Country of Origin) from the fresh AI values plus any persisted human
+ * overrides. Fields default ON, showing the AI value (aiSuggested). A persisted
+ * `enabled` overrides the toggle; a persisted `text` string (including "") is the
+ * human's edit/clear and drops the AI marker. Shared by the PDF and the dialog so
+ * both agree on the exact same state. Pure — no IO.
+ */
+export function buildApprovalFields(
+  quotations: ExtractedQuotation[],
+  aiText: Record<string, string>,
+  overrides: Record<string, { enabled?: boolean; text?: string | null }> = {},
+): Record<string, ApprovalFieldValue> {
+  const out: Record<string, ApprovalFieldValue> = {};
+  for (const q of quotations) {
+    const o = overrides[q.id];
+    const enabled = o?.enabled ?? true;
+    if (o && typeof o.text === 'string') {
+      out[q.id] = { enabled, text: o.text, aiSuggested: false };
+    } else {
+      const ai = aiText[q.id] ?? '';
+      out[q.id] = { enabled, text: ai, aiSuggested: ai.trim() !== '' };
+    }
   }
   return out;
 }

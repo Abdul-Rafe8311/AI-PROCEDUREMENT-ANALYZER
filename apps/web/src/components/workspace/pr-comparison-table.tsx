@@ -185,7 +185,13 @@ function RowView({
       <td className="px-3 py-2.5 text-muted-foreground">{row.uom ?? ''}</td>
       {group.map((s) => {
         const cell = row.cells[s.colIndex] ?? null;
-        const isLow = cell?.unitPriceUsd != null && row.lowestUsd != null && cell.unitPriceUsd === row.lowestUsd;
+        // Freight / transport is a non-comparable charge row — never highlight a
+        // "lowest" freight value (Farid's request). Only real item rows compete.
+        const isLow =
+          row.kind !== 'charge' &&
+          cell?.unitPriceUsd != null &&
+          row.lowestUsd != null &&
+          cell.unitPriceUsd === row.lowestUsd;
         return (
           <SupplierCells
             key={s.quotationId}

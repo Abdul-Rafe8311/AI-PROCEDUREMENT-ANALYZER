@@ -22,10 +22,17 @@
 import { Document, Page, Text, View, StyleSheet, pdf } from '@react-pdf/renderer';
 import { scoreSuppliers } from './analysis-engine';
 import { type FxRates, getFxRates, sarPerUnit, toSar, toUsd } from './fx-rates';
-import { derivePrSubject, suggestTechnicalComments } from './item-matching';
+import {
+  buildApprovalFields,
+  derivePrSubject,
+  suggestOrigins,
+  suggestTechnicalComments,
+  suggestWarranties,
+} from './item-matching';
 import { buildComparisonModel, type ComparisonRow, supplierGroups } from './pr-comparison';
 import {
   type AnalysisResult,
+  type ApprovalFieldValue,
   DEFAULT_SIGNATURE_ROLES,
   DEFAULT_WEIGHTS,
   deliveryNormalizedHint,
@@ -54,6 +61,11 @@ export interface ApprovalFormOptions {
   signatureRoles?: string[];
   /** per-supplier Technical Comments keyed by quotation id (AI-suggested unless a human edited it) */
   technicalComments?: Record<string, TechnicalComment>;
+  /** per-supplier Warranty field (toggle + AI-prefilled value) keyed by quotation id */
+  warranties?: Record<string, ApprovalFieldValue>;
+  /** per-supplier Country of Origin field (toggle + AI-prefilled value) keyed by quotation id.
+   *  DISPLAY-ONLY — the VAT local/international rule reads the extracted origin, not this. */
+  countriesOfOrigin?: Record<string, ApprovalFieldValue>;
   /** SAR/USD rate override; when omitted a live rate is fetched (cached fallback). null = no rate */
   fx?: FxRates | null;
   /** the human's chosen supplier — printed as the Final Recommendation (never AI-written) */
@@ -169,17 +181,26 @@ function ApprovalDocument({
   analysis,
   signatureRoles,
   comments,
+  warranties,
+  origins,
   fx,
   selectedSupplier,
 }: {
   analysis: AnalysisResult;
   signatureRoles: string[];
   comments: Record<string, TechnicalComment>;
+  warranties: Record<string, ApprovalFieldValue>;
+  origins: Record<string, ApprovalFieldValue>;
   fx: FxRates | null;
   selectedSupplier: string | null;
 }) {
   const qs = analysis.quotations;
   const qById = new Map(qs.map((q) => [q.id, q]));
+  // Show a Warranty / Country of Origin row only if AT LEAST ONE supplier has that
+  // field toggled ON; if OFF for everyone the row is omitted entirely. (Within a
+  // shown row, a supplier toggled OFF gets a blank cell.)
+  const showWarranty = qs.some((q) => warranties[q.id]?.enabled);
+  const showOrigin = qs.some((q) => origins[q.id]?.enabled);
   // prOnly: rows come ONLY from the PR document — the TA form NEVER builds rows
   // from supplier descriptions (no supplier-union fallback, no 23-row explosion).
   const model = buildComparisonModel(qs, analysis.purchaseRequisition, analysis.prMatch, { prOnly: true, fx });
@@ -356,7 +377,10 @@ function ApprovalDocument({
 
               {/* Item rows */}
               {model.rows.map((r) => {
-                const lowSar = lowestSarOf(r);
+                // Freight / transport is a non-comparable charge row — never
+                // highlight a "lowest" freight value (Farid's request). Only real
+                // item rows get best-in-column highlighting.
+                const lowSar = r.kind === 'charge' ? null : lowestSarOf(r);
                 return (
                 <View key={`${r.kind}-${r.index}-${r.label}`} style={s.rowFlex} wrap={false}>
                   <Text style={[s.cellBox, { width: idxW, borderLeftWidth: 1, borderLeftColor: C.border, textAlign: 'center' }]}>
@@ -454,8 +478,17 @@ function ApprovalDocument({
                 })}
               />
               <TermRow label="Delivery Terms" s={s} leftW={leftW} supW={supW} values={group.map((sup) => qById.get(sup.quotationId)!.deliveryTerms ?? '')} />
-              {/* Country of Origin — as stated on the quote (normalized), else blank. */}
-              <TermRow label="Country of Origin" s={s} leftW={leftW} supW={supW} values={group.map((sup) => qById.get(sup.quotationId)!.countryOfOrigin ?? '')} />
+              {/* Country of Origin — per-supplier toggle + AI-prefilled value (edit/
+                  clear). DISPLAY-ONLY: the VAT rule reads the extracted origin, so
+                  hiding/editing this never changes VAT. Row omitted if OFF for all. */}
+              {showOrigin && (
+                <FieldRow label="Country of Origin" s={s} leftW={leftW} supW={supW} group={group} byId={origins} />
+              )}
+              {/* Warranty — per-supplier toggle + AI-prefilled value ("Not stated"
+                  when the quote states none; never invented). Row omitted if OFF for all. */}
+              {showWarranty && (
+                <FieldRow label="Warranty" s={s} leftW={leftW} supW={supW} group={group} byId={warranties} />
+              )}
 
               {/* Technical Comments — AI-SUGGESTED verdict (indigo/italic) OR the
                   human's own plain comment once edited. Final Recommendation stays blank. */}
@@ -571,6 +604,48 @@ function TermRow({
   );
 }
 
+// A per-supplier, individually toggleable field row (Warranty, Country of Origin).
+// A supplier toggled OFF renders a BLANK cell (the row itself is only rendered when
+// ≥1 supplier is ON). An AI-suggested value renders indigo/italic; a human edit
+// (or a cleared value) renders as a plain, non-AI value.
+function FieldRow({
+  label,
+  group,
+  byId,
+  s,
+  leftW,
+  supW,
+}: {
+  label: string;
+  group: { quotationId: string }[];
+  byId: Record<string, ApprovalFieldValue>;
+  s: ReturnType<typeof StyleSheet.create>;
+  leftW: number;
+  supW: number;
+}) {
+  return (
+    <View style={s.rowFlex} wrap={false}>
+      <Text style={[s.cellBox, s.labelRow, { width: leftW, borderLeftWidth: 1, borderLeftColor: C.border }]}>{label}</Text>
+      {group.map((sup) => {
+        const f = byId[sup.quotationId];
+        const text = f?.enabled ? f.text?.trim() ?? '' : '';
+        return (
+          <View
+            key={sup.quotationId}
+            style={[s.cellBox, { width: supW, borderRightWidth: 1, borderRightColor: C.line }]}
+          >
+            {text ? (
+              <Text style={f!.aiSuggested ? s.aiText : { color: C.ink }}>{text}</Text>
+            ) : (
+              <Text> </Text>
+            )}
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 /** Build the Technical Approval Form PDF as a Blob from the real analysis data. */
 export async function generateApprovalFormPdf(
   analysis: AnalysisResult,
@@ -579,6 +654,13 @@ export async function generateApprovalFormPdf(
   const roles = options?.signatureRoles?.length ? options.signatureRoles : DEFAULT_SIGNATURE_ROLES;
   const comments =
     options?.technicalComments ?? suggestTechnicalComments(analysis.prMatch, analysis.purchaseRequisition);
+  // Warranty / Country of Origin: use the caller's per-supplier values (toggles +
+  // human edits) when provided; otherwise default every supplier ON with the AI
+  // pre-fill (so a direct download without opening the dialog still fills them).
+  const warranties =
+    options?.warranties ?? buildApprovalFields(analysis.quotations, suggestWarranties(analysis.quotations));
+  const origins =
+    options?.countriesOfOrigin ?? buildApprovalFields(analysis.quotations, suggestOrigins(analysis.quotations));
   // Live SAR/USD rate at generation time (cached fallback if the feed is down);
   // an injectable fx lets callers/tests supply a fixed rate.
   const fx = options?.fx !== undefined ? options.fx : await getFxRates();
@@ -587,6 +669,8 @@ export async function generateApprovalFormPdf(
       analysis={analysis}
       signatureRoles={roles}
       comments={comments}
+      warranties={warranties}
+      origins={origins}
       fx={fx}
       selectedSupplier={options?.selectedSupplier ?? null}
     />,
