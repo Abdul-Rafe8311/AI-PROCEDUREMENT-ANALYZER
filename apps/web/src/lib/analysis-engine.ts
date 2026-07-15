@@ -715,7 +715,10 @@ export function scoreSuppliers(
   const delivery = scoreMetric(deliveryIn, false, BENCH.delivery, 'Delivery', true);
   const payment = scoreMetric(paymentIn, true, BENCH.payment, 'Payment terms');
   const warranty = scoreMetric(warrantyIn, true, BENCH.warranty, 'Warranty');
-  const risk = scoreMetric(riskIn, false, BENCH.risk, 'Risk');
+  // Scored criterion is framed POSITIVELY as "Reliability" (fewer/less-severe risk
+  // flags → higher score), so the label agrees with the score direction. The math
+  // and the underlying risk detection are unchanged — only the label is positive.
+  const risk = scoreMetric(riskIn, false, BENCH.risk, 'Reliability');
 
   const w = renormWeights(weights);
 
@@ -765,6 +768,15 @@ export function riskLevelFor(supplierName: string, risks: RiskFlag[]): RiskLevel
   if (s >= 4) return 'High';
   if (s >= 2) return 'Medium';
   return 'Low';
+}
+
+/** Reliability level = POSITIVE framing of risk (High = safest, fewest/least-severe
+ *  flags). The inverse of {@link riskLevelFor}, so the label matches the score
+ *  direction (high Reliability = good). Underlying risk detection is unchanged. */
+export type ReliabilityLevel = 'High' | 'Medium' | 'Low';
+export function reliabilityLevelFor(supplierName: string, risks: RiskFlag[]): ReliabilityLevel {
+  const level = riskLevelFor(supplierName, risks);
+  return level === 'Low' ? 'High' : level === 'High' ? 'Low' : 'Medium';
 }
 
 /** Procurement score 0-100 for a supplier under the given weights. */

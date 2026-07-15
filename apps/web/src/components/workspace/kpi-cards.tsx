@@ -43,9 +43,11 @@ export function KpiCards({ data }: { data: KpiData }) {
       tone: 'text-primary bg-primary/10',
     },
     {
-      label: 'Risks Found',
+      // Count of items to REVIEW before award — not a score. A supplier can have
+      // high Reliability and still carry review flags (e.g. "100% advance payment").
+      label: 'Review Flags',
       value: String(data.risksFound),
-      sub: data.risksFound ? 'review before award' : 'none detected',
+      sub: data.risksFound ? 'items to review before award' : 'none detected',
       icon: ShieldAlert,
       tone: data.risksFound ? 'text-warning bg-warning/10' : 'text-success bg-success/10',
     },

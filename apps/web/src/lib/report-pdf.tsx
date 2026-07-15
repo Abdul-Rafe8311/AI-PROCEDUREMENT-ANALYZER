@@ -18,6 +18,8 @@ import {
 import {
   applyFxRates,
   buildExecutiveSummary,
+  type ReliabilityLevel,
+  reliabilityLevelFor,
   RISK_RULE_CATALOG,
   scoreSuppliers,
   warrantyMonths,
@@ -112,17 +114,9 @@ function isBest(v: number | null, vals: (number | null)[], lowerIsBetter: boolea
   return v === (lowerIsBetter ? min : max);
 }
 
-// Highest ACTUAL flag severity for a supplier — consistent with the Risk
-// Findings list (not a summed-weight "level"). 'None' when no flags.
-type WorstSev = 'High' | 'Medium' | 'Low' | 'None';
-const SEV_RANK: Record<WorstSev, number> = { None: 0, Low: 1, Medium: 2, High: 3 };
-function worstFlagSeverity(supplier: string, risks: RiskFlag[]): WorstSev {
-  const flags = risks.filter((r) => r.supplier === supplier);
-  if (flags.some((f) => f.severity === 'high')) return 'High';
-  if (flags.some((f) => f.severity === 'medium')) return 'Medium';
-  if (flags.some((f) => f.severity === 'low')) return 'Low';
-  return 'None';
-}
+// Reliability level (High = safest) shown in the comparison table, mirroring the
+// on-screen Reliability badge. Higher rank = more reliable → best-in-column green.
+const REL_RANK: Record<ReliabilityLevel, number> = { Low: 0, Medium: 1, High: 2 };
 
 // Item matching (same normalization as the on-screen Line-Item Matrix).
 const norm = (s: string) =>
@@ -172,7 +166,7 @@ const CRITERIA: { key: keyof ScoreWeights; label: string }[] = [
   { key: 'delivery', label: 'Delivery' },
   { key: 'payment', label: 'Payment' },
   { key: 'warranty', label: 'Warranty' },
-  { key: 'risk', label: 'Risk' },
+  { key: 'risk', label: 'Reliability' },
 ];
 
 function Footer({ dateStr }: { dateStr: string }) {
@@ -369,7 +363,7 @@ function ReportDocument({ analysis, fx }: { analysis: AnalysisResult; fx: FxRate
     const sc = scored.find((x) => x.quotation.id === q.id);
     return sc ? Math.round(sc.overall * 100) : null;
   });
-  const riskRankVals = quotations.map((q) => SEV_RANK[worstFlagSeverity(q.supplierName, risks)]);
+  const relRankVals = quotations.map((q) => REL_RANK[reliabilityLevelFor(q.supplierName, risks)]);
   const itemRows = buildItemRows(quotations, fx);
   const itemUsdTotals = quotations.map((q) => q.totalCostUsd);
 
@@ -450,7 +444,7 @@ function ReportDocument({ analysis, fx }: { analysis: AnalysisResult; fx: FxRate
             <Text style={[s.th, { flex: col.pay }]}>Payment</Text>
             <Text style={[s.th, { flex: col.war }]}>Warranty</Text>
             <Text style={[s.th, { flex: col.score, textAlign: 'right' }]}>Score</Text>
-            <Text style={[s.th, { flex: col.risk, textAlign: 'right' }]}>Risk</Text>
+            <Text style={[s.th, { flex: col.risk, textAlign: 'right' }]}>Reliability</Text>
           </View>
           {quotations.map((q, i) => {
             const sc = scored.find((x) => x.quotation.id === q.id);
@@ -460,8 +454,8 @@ function ReportDocument({ analysis, fx }: { analysis: AnalysisResult; fx: FxRate
             const winDel = isBest(q.deliveryDays, delVals, true);
             const winWarr = isBest(warrM > 0 ? warrM : null, warrVals, false);
             const winScore = isBest(scorePct, scoreVals, false);
-            const worst = worstFlagSeverity(q.supplierName, risks);
-            const winRisk = isBest(SEV_RANK[worst], riskRankVals, true);
+            const reliability = reliabilityLevelFor(q.supplierName, risks);
+            const winRel = isBest(REL_RANK[reliability], relRankVals, false);
             return (
               <View key={q.id} style={i % 2 ? [s.row, s.rowAlt] : s.row} wrap={false}>
                 <Text style={[s.td, { flex: col.sup, fontFamily: 'Helvetica-Bold', color: C.ink }]}>
@@ -488,14 +482,14 @@ function ReportDocument({ analysis, fx }: { analysis: AnalysisResult; fx: FxRate
                 <Text style={[s.td, { flex: col.score, textAlign: 'right', fontFamily: 'Helvetica-Bold' }, ...(winScore ? [s.win] : [])]}>
                   {scorePct}
                 </Text>
-                <Text style={[s.td, { flex: col.risk, textAlign: 'right' }, ...(winRisk ? [s.win] : [])]}>{worst}</Text>
+                <Text style={[s.td, { flex: col.risk, textAlign: 'right' }, ...(winRel ? [s.win] : [])]}>{reliability}</Text>
               </View>
             );
           })}
           <Text style={s.note}>
             Totals are the full payable amount including freight and all charge lines. &quot;Total (USD)&quot; is normalized
-            for comparison; original currency is shown alongside. Green = best value in that column; Risk shows each
-            supplier&apos;s highest actual flag severity (see Risk Findings).
+            for comparison; original currency is shown alongside. Green = best value in that column; Reliability
+            (High = safest) is the positive framing of risk — the detailed findings are listed under Risk Findings.
           </Text>
 
           {/* Item-level comparison (unit price, original currency; lowest highlighted) */}
@@ -562,12 +556,13 @@ function ReportDocument({ analysis, fx }: { analysis: AnalysisResult; fx: FxRate
             Each supplier is scored 0–100. Price and Delivery are scored PROPORTIONALLY to the best value in the field:
             the best supplier earns the full weight and others earn weight x (best / theirs), so a quote 2x the cheapest
             scores about half — never a flat 0 for a finite gap. Payment and Warranty are normalized across suppliers
-            (higher is better); Risk is scored from flagged severity. A value missing from the document scores 0 for that
+            (higher is better); Reliability is scored from flagged risk severity (fewer / less-severe findings → higher
+            Reliability). A value missing from the document scores 0 for that
             criterion (shown as &quot;missing (0)&quot;), never full marks. With a single supplier — or when all suppliers
             tie — a criterion is graded against an absolute benchmark (marked ~), and price (only meaningful versus peers)
             is marked n/a and excluded. Weights: Price {Math.round(DEFAULT_WEIGHTS.price * 100)}%, Delivery{' '}
             {Math.round(DEFAULT_WEIGHTS.delivery * 100)}%, Payment {Math.round(DEFAULT_WEIGHTS.payment * 100)}%, Warranty{' '}
-            {Math.round(DEFAULT_WEIGHTS.warranty * 100)}%, Risk {Math.round(DEFAULT_WEIGHTS.risk * 100)}%.
+            {Math.round(DEFAULT_WEIGHTS.warranty * 100)}%, Reliability {Math.round(DEFAULT_WEIGHTS.risk * 100)}%.
           </Text>
 
           {singleSupplier && (

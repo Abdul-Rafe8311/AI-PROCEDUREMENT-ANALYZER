@@ -26,9 +26,9 @@ import {
 import { cn, isChunkLoadError, STALE_BUILD_MESSAGE } from '@/lib/utils';
 import {
   buildExecutiveSummary,
+  type ReliabilityLevel,
+  reliabilityLevelFor,
   RISK_RULE_CATALOG,
-  type RiskLevel,
-  riskLevelFor,
   scoreSuppliers,
   warrantyMonths,
 } from '@/lib/analysis-engine';
@@ -260,42 +260,51 @@ function ScoreBadge({ score }: { score: number }) {
   );
 }
 
+// Reliability level badge (High = safest). POSITIVE framing so it reads the same
+// direction as the Reliability score (high = good) — High is green, Low is red.
+// The tooltip still lists the detailed risk findings (genuinely about risk), which
+// Farid needs; a high-reliability supplier can still carry review flags.
 function RiskBadge({
   level,
   flags,
   supplier,
 }: {
-  level: RiskLevel;
+  level: ReliabilityLevel;
   flags: RiskFlag[];
   supplier: string;
 }) {
-  const map: Record<RiskLevel, string> = {
-    Low: 'bg-success/15 text-success',
+  const map: Record<ReliabilityLevel, string> = {
+    High: 'bg-success/15 text-success',
     Medium: 'bg-warning/15 text-warning',
-    High: 'bg-danger/15 text-danger',
+    Low: 'bg-danger/15 text-danger',
   };
   const badge = (
     <span className={cn('inline-flex cursor-help items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold', map[level])}>
-      <span className={cn('h-1.5 w-1.5 rounded-full', level === 'Low' ? 'bg-success' : level === 'Medium' ? 'bg-warning' : 'bg-danger')} />
+      <span className={cn('h-1.5 w-1.5 rounded-full', level === 'High' ? 'bg-success' : level === 'Medium' ? 'bg-warning' : 'bg-danger')} />
       {level}
     </span>
   );
   return (
-    <InfoTip ariaLabel={`Why ${supplier} is ${level} risk`} trigger={badge}>
+    <InfoTip ariaLabel={`Why ${supplier} reliability is ${level}`} trigger={badge}>
       <p className="font-semibold text-foreground">
-        {supplier} — {level} risk
+        {supplier} — {level} reliability
       </p>
       {flags.length ? (
-        <ul className="mt-1.5 space-y-1.5 text-muted-foreground">
-          {flags.map((f, i) => (
-            <li key={i} className="flex gap-1.5">
-              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" />
-              <span>{f.explanation || f.message}</span>
-            </li>
-          ))}
-        </ul>
+        <>
+          <p className="mt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/80">
+            Review flags
+          </p>
+          <ul className="mt-1 space-y-1.5 text-muted-foreground">
+            {flags.map((f, i) => (
+              <li key={i} className="flex gap-1.5">
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" />
+                <span>{f.explanation || f.message}</span>
+              </li>
+            ))}
+          </ul>
+        </>
       ) : (
-        <p className="mt-1 text-muted-foreground">No risks were detected for this supplier.</p>
+        <p className="mt-1 text-muted-foreground">No review flags were detected for this supplier.</p>
       )}
     </InfoTip>
   );
@@ -554,7 +563,7 @@ export function AnalysisResults({
                 <th className="px-5 py-3 text-left font-semibold">Payment Terms</th>
                 <th className="px-5 py-3 text-right font-semibold">Warranty</th>
                 <th className="px-5 py-3 text-right font-semibold">Score</th>
-                <th className="px-5 py-3 text-center font-semibold">Risk</th>
+                <th className="px-5 py-3 text-center font-semibold">Reliability</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -663,7 +672,7 @@ export function AnalysisResults({
                       </td>
                       <td className="px-5 py-4 text-center">
                         <RiskBadge
-                          level={riskLevelFor(q.supplierName, risks)}
+                          level={reliabilityLevelFor(q.supplierName, risks)}
                           flags={risks.filter((r) => r.supplier === q.supplierName)}
                           supplier={q.supplierName}
                         />
@@ -938,7 +947,7 @@ const CRITERIA: { key: keyof typeof DEFAULT_WEIGHTS; label: string }[] = [
   { key: 'delivery', label: 'Delivery' },
   { key: 'payment', label: 'Payment Terms' },
   { key: 'warranty', label: 'Warranty' },
-  { key: 'risk', label: 'Risk' },
+  { key: 'risk', label: 'Reliability' },
 ];
 
 function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
@@ -965,7 +974,7 @@ function ScoreBreakdown({ scored }: { scored: SupplierScore[] }) {
         </span>
         <span
           className="cursor-help text-xs text-muted-foreground underline decoration-dotted underline-offset-2"
-          title="Each supplier is scored 0-100. Price and Delivery are scored PROPORTIONALLY to the best value in the field: the best supplier gets the full weight, and others get weight × (best ÷ theirs) — so a quote 2x the cheapest scores about half the price weight, never a flat 0. Payment Terms and Warranty are normalized across suppliers (0-1, higher is better); Risk is scored from flagged severity. A value missing from the document scores 0 for that criterion (shown as 'missing — 0'), never full marks. With a single supplier — or when every supplier ties — a criterion is graded against an absolute benchmark (shown with ≈), and price (only meaningful versus peers) is marked 'n/a' and excluded. Weights are system-defined and cannot be edited, so rankings are data-driven and auditable."
+          title="Each supplier is scored 0-100. Price and Delivery are scored PROPORTIONALLY to the best value in the field: the best supplier gets the full weight, and others get weight × (best ÷ theirs) — so a quote 2x the cheapest scores about half the price weight, never a flat 0. Payment Terms and Warranty are normalized across suppliers (0-1, higher is better); Reliability is scored from flagged risk severity (fewer / less-severe risk findings → higher Reliability). A value missing from the document scores 0 for that criterion (shown as 'missing — 0'), never full marks. With a single supplier — or when every supplier ties — a criterion is graded against an absolute benchmark (shown with ≈), and price (only meaningful versus peers) is marked 'n/a' and excluded. Weights are system-defined and cannot be edited, so rankings are data-driven and auditable."
         >
           How is this calculated?
         </span>

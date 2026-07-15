@@ -7,14 +7,14 @@ import { DEFAULT_WEIGHTS, formatCurrency, type SupplierScore } from '@/lib/works
 import { cn } from '@/lib/utils';
 
 // The five scored criteria + their system weights (Price 40 / Delivery 25 /
-// Payment 15 / Warranty 10 / Risk 10). Weights are NOT editable here — the
+// Payment 15 / Warranty 10 / Reliability 10). Weights are NOT editable here — the
 // trade-off only re-anchors what we compare against, never the scoring.
 const CRIT: { key: keyof typeof DEFAULT_WEIGHTS; label: string }[] = [
   { key: 'price', label: 'Price' },
   { key: 'delivery', label: 'Delivery' },
   { key: 'payment', label: 'Payment' },
   { key: 'warranty', label: 'Warranty' },
-  { key: 'risk', label: 'Risk' },
+  { key: 'risk', label: 'Reliability' },
 ];
 const weightPct = (k: keyof typeof DEFAULT_WEIGHTS) => Math.round(DEFAULT_WEIGHTS[k] * 100);
 
