@@ -41,6 +41,114 @@ const log = (...args: unknown[]) => console.error('[extract]', ...args);
 
 const SUPPORTED_CURRENCIES = ['SAR', 'AED', 'USD', 'EUR', 'GBP', 'QAR', 'KWD'] as const;
 
+// ── Layout-aware PDF text reconstruction ──
+// A PDF's text layer has NO notion of "rows" — it is a stream of positioned glyph
+// runs. Many procurement PDFs (and every right-to-left Arabic table) emit a table
+// COLUMN-BY-COLUMN, so unpdf's flat `mergePages` text reads "all item codes, then
+// all descriptions, then all prices" and the row structure — which code goes with
+// which qty and price — is unrecoverable. We instead read each run's (x,y) from
+// pdf.js and rebuild the page: cluster runs into rows by their baseline Y, then
+// order each row left→right by X. Numbers that flat text glues together
+// ("10000قطعة0.0510.36") come back apart because each is its own positioned run.
+interface PdfGlyph {
+  str: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Rebuild one page's text from positioned glyph runs (rows by Y, cells by X).
+ * Exported for unit testing (pure — takes pdf.js text items, returns text). */
+export function reconstructPage(items: unknown[]): string {
+  const glyphs: PdfGlyph[] = [];
+  for (const raw of items) {
+    const it = raw as { str?: unknown; transform?: unknown; width?: unknown; height?: unknown };
+    if (typeof it.str !== 'string' || it.str.length === 0 || it.str === ' ') continue;
+    const tr = it.transform as number[] | undefined;
+    if (!tr || tr.length < 6) continue;
+    glyphs.push({
+      str: it.str,
+      x: tr[4],
+      y: tr[5],
+      w: typeof it.width === 'number' ? it.width : 0,
+      h: Math.abs(tr[3]) || (typeof it.height === 'number' ? it.height : 10),
+    });
+  }
+  if (!glyphs.length) return '';
+
+  const hs = glyphs.map((g) => g.h).filter((h) => h > 0).sort((a, b) => a - b);
+  const medianH = hs[Math.floor(hs.length / 2)] || 10;
+
+  // Row tolerance ≈ half the line spacing, so intra-row baseline jitter groups but
+  // adjacent rows stay apart. Derive line spacing from the gaps between baselines.
+  const ys = [...new Set(glyphs.map((g) => Math.round(g.y)))].sort((a, b) => b - a);
+  const gaps: number[] = [];
+  for (let i = 1; i < ys.length; i++) gaps.push(ys[i - 1] - ys[i]);
+  const bigGaps = gaps.filter((g) => g > medianH * 0.9).sort((a, b) => a - b);
+  const lineSpacing = bigGaps.length ? bigGaps[Math.floor(bigGaps.length / 2)] : medianH * 1.4;
+  const rowTol = Math.max(medianH * 0.7, Math.min(lineSpacing * 0.5, medianH * 1.6));
+
+  // Greedy clustering: attach each run (top→bottom) to the nearest row within tol.
+  const sorted = [...glyphs].sort((a, b) => b.y - a.y || a.x - b.x);
+  const rows: { y: number; sum: number; items: PdfGlyph[] }[] = [];
+  for (const g of sorted) {
+    let best: (typeof rows)[number] | null = null;
+    let bestD = Infinity;
+    for (const r of rows) {
+      const d = Math.abs(r.y - g.y);
+      if (d < bestD) {
+        bestD = d;
+        best = r;
+      }
+    }
+    if (best && bestD <= rowTol) {
+      best.items.push(g);
+      best.sum += g.y;
+      best.y = best.sum / best.items.length;
+    } else {
+      rows.push({ y: g.y, sum: g.y, items: [g] });
+    }
+  }
+  rows.sort((a, b) => b.y - a.y);
+
+  const thresh = medianH * 0.28; // glyphs of one word sit within this gap
+  const bigGap = medianH * 1.6; // a clear column boundary
+  const lines = rows.map((r) => {
+    const cells = r.items.sort((a, b) => a.x - b.x);
+    let line = '';
+    let prevEnd: number | null = null;
+    for (const c of cells) {
+      if (prevEnd != null) {
+        const gap = c.x - prevEnd;
+        // Space for a real cell gap OR an overlap of two DISTINCT cells; glue only
+        // near-contiguous runs (|gap| ≤ thresh) — the glyphs of a single word.
+        if (gap > bigGap) line += '   ';
+        else if (gap > thresh || gap < -thresh) line += ' ';
+      }
+      line += c.str;
+      prevEnd = c.x + c.w;
+    }
+    return line.replace(/[ \t]+/g, ' ').trim();
+  });
+  return lines.filter(Boolean).join('\n');
+}
+
+/** Layout-aware full-document text: reconstruct every page, page-separated. */
+async function extractPdfLayout(doc: {
+  numPages: number;
+  getPage: (n: number) => Promise<{ getTextContent: () => Promise<{ items: unknown[] }> }>;
+}): Promise<string> {
+  const out: string[] = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const page = await doc.getPage(p);
+    const content = await page.getTextContent();
+    const pageText = reconstructPage(content.items);
+    if (pageText.trim()) out.push(pageText);
+  }
+  return out.join('\n\n');
+}
+
 // ── Text extraction per file type ──
 export async function extractText(
   buffer: Buffer,
@@ -52,8 +160,21 @@ export async function extractText(
     if (ext === 'pdf' || mime === 'application/pdf') {
       const { extractText: extractPdf, getDocumentProxy } = await import('unpdf');
       const doc = await getDocumentProxy(new Uint8Array(buffer));
-      const { text } = await extractPdf(doc, { mergePages: true });
-      const t = text ?? '';
+      // LAYOUT-AWARE FIRST: reconstruct rows from each glyph's (x,y) so a table
+      // whose PDF content stream dumps columns separately (all codes, then all
+      // descriptions, then all prices) is put back into ONE line per row. This is
+      // what lets the LLM associate code↔qty↔price. Flat text (below) loses that.
+      let t = '';
+      try {
+        t = await extractPdfLayout(doc);
+      } catch (err) {
+        log(`layout extraction failed for "${fileName}" — falling back to flat text: ${(err as Error).message}`);
+      }
+      // Fallback: if layout produced nothing usable, use unpdf's flat merged text.
+      if (!t.trim()) {
+        const { text } = await extractPdf(doc, { mergePages: true });
+        t = text ?? '';
+      }
       return {
         text: t,
         error: t.trim() ? null : 'PDF parsed but contained no text (likely a scanned/image PDF — needs OCR).',
