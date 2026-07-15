@@ -1,7 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AlertTriangle, Languages } from 'lucide-react';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   Dialog,
   DialogContent,
@@ -14,6 +16,53 @@ import type { DocumentTranslation } from '@/lib/workspace-types';
 import { cn } from '@/lib/utils';
 
 const langLabel = (l: DocumentTranslation['language']) => (l === 'bilingual' ? 'Arabic/English' : 'Arabic');
+
+// Neutral, document-style Markdown renderer for the translated quotation: readable
+// prose + a real items TABLE (GFM), so the manager never sees raw pipes or a
+// run-on wall of text. Deliberately plain (no chat check-marks / warning cards).
+const docComponents: Components = {
+  h1: ({ children }) => <h2 className="mb-1.5 mt-4 text-base font-bold tracking-tight text-foreground">{children}</h2>,
+  h2: ({ children }) => <h3 className="mb-1.5 mt-4 text-sm font-bold tracking-tight text-foreground">{children}</h3>,
+  h3: ({ children }) => <h4 className="mb-1 mt-3 text-sm font-semibold text-foreground">{children}</h4>,
+  p: ({ children }) => <p className="my-1.5 text-sm leading-relaxed text-foreground/90">{children}</p>,
+  ul: ({ children }) => <ul className="my-1.5 list-disc space-y-1 pl-5 text-sm text-foreground/90">{children}</ul>,
+  ol: ({ children }) => <ol className="my-1.5 list-decimal space-y-1 pl-5 text-sm text-foreground/90">{children}</ol>,
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+  em: ({ children }) => <em className="italic text-foreground/90">{children}</em>,
+  hr: () => <hr className="my-3 border-border" />,
+  a: ({ children, href }) => (
+    <a href={href} target="_blank" rel="noreferrer" className="font-medium text-primary underline underline-offset-2">
+      {children}
+    </a>
+  ),
+  // The items table — scannable, aligned, horizontally scrollable on narrow screens.
+  table: ({ children }) => (
+    <div className="my-3 overflow-x-auto rounded-lg border border-border">
+      <table className="w-full border-collapse text-left text-xs tabular-nums">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => (
+    <thead className="bg-muted/60 text-[10.5px] uppercase tracking-wide text-muted-foreground">{children}</thead>
+  ),
+  tbody: ({ children }) => <tbody className="divide-y divide-border">{children}</tbody>,
+  tr: ({ children }) => <tr>{children}</tr>,
+  th: ({ children }) => <th className="whitespace-nowrap px-3 py-2 font-semibold">{children}</th>,
+  td: ({ children }) => <td className="px-3 py-2 align-top text-foreground/90">{children}</td>,
+  code: ({ children }) => <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground">{children}</code>,
+};
+
+function TranslatedMarkdown({ content }: { content: string }) {
+  const tree = useMemo(
+    () => (
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={docComponents}>
+        {content}
+      </ReactMarkdown>
+    ),
+    [content],
+  );
+  return <div className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{tree}</div>;
+}
 
 /**
  * A "Translated from Arabic · View" badge that opens the full-document translation.
@@ -91,12 +140,18 @@ export function TranslationBadge({
           </div>
         )}
 
-        <pre
-          dir={view === 'original' ? 'rtl' : 'ltr'}
-          className="max-h-[55vh] overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/20 p-4 font-sans text-sm leading-relaxed text-foreground"
-        >
-          {view === 'en' ? translation.englishText : translation.originalText}
-        </pre>
+        {view === 'en' ? (
+          <div className="max-h-[55vh] overflow-auto rounded-lg border border-border bg-muted/20 p-4">
+            <TranslatedMarkdown content={translation.englishText} />
+          </div>
+        ) : (
+          <pre
+            dir="rtl"
+            className="max-h-[55vh] overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/20 p-4 font-sans text-sm leading-relaxed text-foreground"
+          >
+            {translation.originalText}
+          </pre>
+        )}
 
         {translation.truncated && view === 'en' && (
           <p className="text-[11px] text-muted-foreground">
