@@ -1369,6 +1369,19 @@ function normalizePr(parsed: unknown): LlmPr | null {
   };
 }
 
+// Clean a requisition item description: collapse whitespace and drop a trailing
+// ORPHAN short number leaked from an ADJACENT code/ref/qty cell during table
+// reconstruction — e.g. "… And 8 Control Modules 97." where "97" is a fragment of
+// the ref "125007 97". Requires a ≥3-letter word before the stray number so genuine
+// trailing model/size numbers are far less likely to be touched.
+function cleanPrItemDescription(desc: string): string {
+  return desc
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/([A-Za-z]{3,})\s+\d{1,4}\.?$/, '$1')
+    .trim();
+}
+
 function mapPr(
   data: LlmPr,
   fileName: string,
@@ -1377,7 +1390,7 @@ function mapPr(
   const mapped: PrItem[] = (data.items ?? [])
     .map((it) => ({
       itemCode: it.itemCode?.trim() || null,
-      description: (it.description ?? '').trim(),
+      description: cleanPrItemDescription(it.description ?? ''),
       descriptionArabic: it.descriptionArabic?.trim() || null,
       quantity: num(it.quantity),
       unit: it.unit?.trim() || null,

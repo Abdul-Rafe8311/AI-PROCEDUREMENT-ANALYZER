@@ -24,7 +24,7 @@ import { scoreSuppliers } from './analysis-engine';
 import { type FxRates, getFxRates, sarPerUnit, toSar, toUsd } from './fx-rates';
 import {
   buildApprovalFields,
-  derivePrSubject,
+  resolvePrDescription,
   suggestOrigins,
   suggestTechnicalComments,
   suggestWarranties,
@@ -222,11 +222,10 @@ function ApprovalDocument({
 
   const pr = analysis.purchaseRequisition;
   const prNumber = pr?.requestNo ?? qs.find((q) => q.prNumber)?.prNumber ?? '';
-  // What's being procured: the PR header subject if present, else a short summary
-  // derived from the common item type across the line items, else blank.
-  const prSubject =
-    pr?.description?.trim() ||
-    derivePrSubject(model.rows.filter((r) => r.kind === 'product').map((r) => r.label));
+  // What's being procured: the PR header "Description"/"Subject" field when present,
+  // else DERIVED from the item table (single-item PRs carry the subject in the item
+  // description — e.g. PR 12601707's conversion kit). Blank only if truly absent.
+  const prSubject = resolvePrDescription(pr);
   // PDF creation date — auto-fills BOTH the TA Date field and the "Generated on"
   // note (and footer), per the company form (TA Date = the date the form was
   // produced for approval).

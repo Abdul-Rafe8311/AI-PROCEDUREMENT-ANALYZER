@@ -459,6 +459,30 @@ export function derivePrSubject(names: string[]): string {
 }
 
 /**
+ * Resolve the PR Description shown on the Technical Approval Form, handling the two
+ * real layouts:
+ *   (a) an explicit header "PR Description"/"Subject" field (e.g. PR 12601612 →
+ *       "Anchors for production department."), used verbatim; else
+ *   (b) DERIVE it from the item table — a SINGLE-item PR (e.g. the 12601707
+ *       conversion kit) uses that item's own description; a MULTI-item PR uses a
+ *       short dominant-noun summary ("Anchors") when there is one, else the first
+ *       item's description.
+ * Returns '' only when the requisition genuinely carries no description anywhere.
+ */
+export function resolvePrDescription(
+  pr: { description?: string | null; items: Pick<PrItem, 'description'>[] } | null | undefined,
+): string {
+  const explicit = pr?.description?.trim();
+  if (explicit) return explicit;
+  const descs = (pr?.items ?? [])
+    .map((it) => it.description?.trim())
+    .filter((d): d is string => !!d);
+  if (!descs.length) return '';
+  if (descs.length === 1) return descs[0];
+  return derivePrSubject(descs) || descs[0];
+}
+
+/**
  * Build AI-SUGGESTED Technical Comment verdicts per supplier, based ONLY on how
  * the supplier's quoted items compare to the PR items by DESCRIPTION. These are
  * editable starting points — the AI never claims anything it can't see (supplier
