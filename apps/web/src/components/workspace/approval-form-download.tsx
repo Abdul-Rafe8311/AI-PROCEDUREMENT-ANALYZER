@@ -263,7 +263,7 @@ export function ApprovalFormDownload({
     setLoading(true);
     try {
       const signatureRoles = roles.filter((r) => r.enabled).map((r) => r.label.trim()).filter(Boolean);
-      const { generateApprovalFormPdf } = await import('@/lib/approval-form-pdf');
+      const { generateApprovalFormPdf } = await import('@/lib/approval-form-acroform');
       const blob = await generateApprovalFormPdf(analysis, {
         signatureRoles,
         technicalComments: comments,

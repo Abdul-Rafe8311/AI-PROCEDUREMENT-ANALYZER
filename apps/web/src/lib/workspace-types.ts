@@ -473,9 +473,10 @@ export const deliveryNormalizedHint = (
 export const DEFAULT_SIGNATURE_ROLES = [
   'Planning Engineer',
   'Planning Team Leader',
-  'PM Section Head Response',
-  'Mech. Manager Response',
-  'VP Operations Response',
+  'PM Section Head',
+  'GEN. Serv. Section Head / E&I Manager',
+  'Prod./Mech. Manager',
+  'VP Operations',
 ];
 
 /**
