@@ -200,6 +200,7 @@ function RowView({
             currency={cell?.currency ?? 'USD'}
             unitPriceUsd={cell?.unitPriceUsd ?? null}
             specDiff={cell?.matchState === 'quoted_spec_diff'}
+            specDiffNote={cell?.specDiffNote ?? null}
             isLow={isLow}
             mode={mode}
           />
@@ -215,6 +216,7 @@ function SupplierCells({
   currency,
   unitPriceUsd,
   specDiff,
+  specDiffNote,
   isLow,
   mode,
 }: {
@@ -223,6 +225,7 @@ function SupplierCells({
   currency: string;
   unitPriceUsd: number | null;
   specDiff: boolean;
+  specDiffNote?: string | null;
   isLow: boolean;
   mode: CurrencyMode;
 }) {
@@ -236,7 +239,9 @@ function SupplierCells({
           <>
             <MoneyDual amount={unitPrice} currency={currency} usd={unitPriceUsd} mode={mode} precise />
             {specDiff && (
-              <span className="mt-0.5 block text-[10px] font-medium italic text-warning">spec differs</span>
+              <span className="mt-0.5 block text-[10px] font-medium italic text-warning">
+                spec differs{specDiffNote ? `: ${specDiffNote}` : ''}
+              </span>
             )}
           </>
         ) : (

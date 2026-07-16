@@ -37,6 +37,8 @@ export interface SupplierCell {
   unitPriceUsd: number | null;
   /** PR-item match state for this cell (PR rows only) — 'quoted_spec_diff' flags a grade/spec difference */
   matchState?: PrItemMatchState | null;
+  /** short note on WHAT differs, when matchState is 'quoted_spec_diff' (else null) */
+  specDiffNote?: string | null;
 }
 
 export interface ComparisonRow {
@@ -118,6 +120,7 @@ function prRows(
         currency: li.currency,
         unitPriceUsd: cellUsd(li.unitPrice, li.currency, fx),
         matchState: pm?.state ?? null,
+        specDiffNote: pm?.note ?? null,
       };
     });
     return {

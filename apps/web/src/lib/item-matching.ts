@@ -189,6 +189,52 @@ function specConflict(name: string, prText: string): boolean {
 }
 
 /**
+ * True when the supplier line is DESCRIPTIVE prose that disagrees with the PR
+ * wording — i.e. it has several meaningful WORDS (not numbers/codes) that the PR
+ * item does not. Used to decide whether a WEAK (quantity/order) match is a clean
+ * lineup or a "spec differs" one: an opaque part code ("REVA-W.10-200", "ALF.2")
+ * has ~no such words and stays clean; a free-text line like "V DIA 10MM H=70MM
+ * AISI 310 CAPPED ACC DRWG" has many → flag it for the reviewer.
+ */
+function descriptiveMismatch(name: string, prText: string): boolean {
+  const prTokens = wordTokens(prText);
+  let n = 0;
+  for (const t of wordTokens(name)) {
+    if (t.length < 3 || /\d/.test(t)) continue; // skip tiny tokens and numbers/codes
+    if (!prTokens.has(t)) n++;
+  }
+  return n >= 3;
+}
+
+/** Pretty-print a grade signature: "253ma" → "253 MA", "ss310" → "SS 310". */
+function prettyGrade(g: string): string {
+  const m = g.match(/^(ss)?(\d{2,4})([a-z]{1,3})?$/);
+  if (!m) return g.toUpperCase();
+  return [m[1] ? m[1].toUpperCase() : '', m[2], m[3] ? m[3].toUpperCase() : ''].filter(Boolean).join(' ');
+}
+
+/**
+ * A SHORT, honest note on WHAT differs between a quoted line and its PR item, shown
+ * next to the "spec differs" flag so the reviewer sees it at a glance. Never claims
+ * a perfect match — it names the specific discrepancy:
+ *   • a stated GRADE that disagrees ("grade differs: quoted SS 310 vs PR 253 MA");
+ *   • a same-family long code whose DIMENSION disagrees ("dimension differs — verify size");
+ *   • otherwise a free-text / quantity match where the same item is worded
+ *     differently ("size/drawing described differently").
+ */
+export function specDiffNote(name: string, prText: string): string {
+  const g1 = gradeOf(name);
+  const g2 = gradeOf(prText);
+  if (g1 && g2 && g1 !== g2) return `grade differs: quoted ${prettyGrade(g1)} vs PR ${prettyGrade(g2)}`;
+
+  const a = longSpecCode(name);
+  const b = longSpecCode(prText);
+  if (a && b && a !== b) return 'dimension differs — verify size';
+
+  return 'size/drawing described differently';
+}
+
+/**
  * Match ONE supplier's quoted product items against the PR items, producing a
  * three-state verdict PER PR ITEM (so nothing is double-counted). Charge lines
  * (freight/shipping/insurance/handling) are not requisition items and are excluded.
@@ -280,6 +326,38 @@ export function matchSupplierItems(
     lineUsed[c.li] = true;
   }
 
+  // Pass 1.75 — QUANTITY fallback: a FREE-TEXT line with no code and no dimension
+  // to match on (e.g. Krosaki's "V DIA 10MM H=70MM AISI 310 CAPPED ACC DRWG") can
+  // still be placed when its QUANTITY uniquely identifies a still-free PR row. Only
+  // fires when the qty is unambiguous (exactly one free PR row has it), so it never
+  // mis-assigns; among tied lines the best description wins. This is what stops a
+  // genuinely-quoted item from falling through to "Not quoted". A quantity-only
+  // match means the wording differs from the PR → flagged "spec differs" below.
+  const freeRowQtyCount = new Map<number, number>();
+  prItems.forEach((pr, j) => {
+    if (prLine[j] == null && pr.quantity != null) {
+      freeRowQtyCount.set(pr.quantity, (freeRowQtyCount.get(pr.quantity) ?? 0) + 1);
+    }
+  });
+  const qtyCands: { li: number; pr: number; sc: number }[] = [];
+  products.forEach((li, i) => {
+    if (lineUsed[i] || li.quantity == null) return;
+    prItems.forEach((pr, j) => {
+      if (prLine[j] != null || pr.quantity == null) return;
+      if (pr.quantity === li.quantity && freeRowQtyCount.get(pr.quantity) === 1) {
+        qtyCands.push({ li: i, pr: j, sc: simOf(li, pr) });
+      }
+    });
+  });
+  qtyCands.sort((a, b) => b.sc - a.sc);
+  for (const c of qtyCands) {
+    if (lineUsed[c.li] || prLine[c.pr] != null) continue;
+    prLine[c.pr] = c.li;
+    prBy[c.pr] = 'quantity';
+    prScore[c.pr] = Math.round(simOf(products[c.li], prItems[c.pr]) * 100) / 100;
+    lineUsed[c.li] = true;
+  }
+
   // Pass 2 — LINE ORDER (last resort, still no quantity gate): any lines the
   // description and dimension passes couldn't place fill remaining rows in order.
   const freeRows = prItems.map((_, j) => j).filter((j) => prLine[j] == null);
@@ -296,14 +374,23 @@ export function matchSupplierItems(
   const prItemMatches: PrItemMatch[] = prItems.map((pr, j) => {
     const li = prLine[j];
     if (li == null) {
-      return { prIndex: j, state: 'not_quoted' as PrItemMatchState, supplierItem: null, score: 0, mappedBy: null };
+      return { prIndex: j, state: 'not_quoted' as PrItemMatchState, supplierItem: null, score: 0, mappedBy: null, note: null };
     }
     const line = products[li];
-    // A mapped line is a clean match unless a real grade/spec conflict is detectable
-    // (an item-code hit is a definitive same-item signal that overrides).
-    const conflict = !itemCodeHit(line.name, pr.itemCode) && specConflict(line.name, prItemText(pr));
+    const prText = prItemText(pr);
+    // An item-code hit is a definitive same-item signal → always a clean match.
+    // Otherwise a mapped line is "spec differs" when either a real grade/spec
+    // CONFLICT is detected, OR it was placed by a WEAK signal (quantity/order — no
+    // code, dimension or description agreed) AND it is descriptive prose that
+    // disagrees with the PR wording (a free-text line, not an opaque part code).
+    // Part-number quotes that line up by quantity/order stay CLEAN.
+    const codeHit = itemCodeHit(line.name, pr.itemCode);
+    const weak = prBy[j] === 'quantity' || prBy[j] === 'order';
+    const conflict =
+      !codeHit && (specConflict(line.name, prText) || (weak && descriptiveMismatch(line.name, prText)));
     const state: PrItemMatchState = conflict ? 'quoted_spec_diff' : 'quoted_match';
-    return { prIndex: j, state, supplierItem: line, score: prScore[j], mappedBy: prBy[j] };
+    const note = conflict ? specDiffNote(line.name, prText) : null;
+    return { prIndex: j, state, supplierItem: line, score: prScore[j], mappedBy: prBy[j], note };
   });
 
   const extraLines = products.filter((_, i) => !lineUsed[i]);

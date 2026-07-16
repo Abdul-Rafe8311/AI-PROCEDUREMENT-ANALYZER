@@ -407,7 +407,9 @@ function ApprovalDocument({
                             {cell?.description ?? (notQuoted ? 'Not Quoted' : '')}
                           </Text>
                           {cell?.matchState === 'quoted_spec_diff' && (
-                            <Text style={s.specDiffTag}>spec differs</Text>
+                            <Text style={s.specDiffTag}>
+                              spec differs{cell.specDiffNote ? `: ${cell.specDiffNote}` : ''}
+                            </Text>
                           )}
                         </View>
                         <Text style={[s.cellBox, { width: subQtyW, textAlign: 'center', borderRightWidth: 1, borderRightColor: C.border }]}>

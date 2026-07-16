@@ -152,12 +152,13 @@ test('PR 12601612 · Krosaki & Refratechnik: 5/5 items QUOTED (0 not quoted); ch
     // Part-number quotes line up by line ORDER (description inconclusive) and, having
     // no conflicting grade, show as CLEAN matches (not "spec differs").
     assert.equal(sm.specDiffCount, 0, `${name} part-number quotes should be clean matches`);
-    // Part-number quotes are placed by their embedded DIMENSION (or line order as a
-    // last resort) — never by description (bare codes carry no descriptive words).
-    // The precise per-code dimension mapping is pinned in refratechnik-matching.test.ts.
+    // Part-number quotes are placed by their embedded DIMENSION, by exact QUANTITY
+    // (distinct PR quantities line up bare codes), or by line order as a last resort
+    // — never by description (bare codes carry no descriptive words). The precise
+    // per-code dimension mapping is pinned in refratechnik-matching.test.ts.
     assert.ok(
-      sm.prItems.every((p) => p.mappedBy === 'dimension' || p.mappedBy === 'order'),
-      `${name} mapped by dimension/order, not description`,
+      sm.prItems.every((p) => p.mappedBy === 'dimension' || p.mappedBy === 'quantity' || p.mappedBy === 'order'),
+      `${name} mapped by dimension/quantity/order, not description`,
     );
   }
 });

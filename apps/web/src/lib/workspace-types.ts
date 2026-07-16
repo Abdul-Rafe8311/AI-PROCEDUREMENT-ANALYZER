@@ -194,9 +194,13 @@ export interface PrItemMatch {
   /** 0..1 description similarity of the mapped line (0 when not_quoted) */
   score: number;
   /** how the line was mapped: by description/spec; by embedded DIMENSION code
-   *  (part-number quotes like "REVA-W.10-200" → the 200(140) PR row); or by line
-   *  ORDER only as a last resort. Quantity is never used to gate a match. */
-  mappedBy: 'description' | 'dimension' | 'order' | null;
+   *  (part-number quotes like "REVA-W.10-200" → the 200(140) PR row); by QUANTITY
+   *  (a free line whose qty uniquely matches the PR row — for free-text lines with
+   *  no dimension code); or by line ORDER as a last resort. */
+  mappedBy: 'description' | 'dimension' | 'quantity' | 'order' | null;
+  /** short human note on WHAT differs, when state is 'quoted_spec_diff' (e.g.
+   *  "grade 253 MA vs PR 253 C", "size/drawing described differently"); else null. */
+  note?: string | null;
 }
 
 /** One supplier's full technical-approval picture against the PR (PR-item-centric). */
