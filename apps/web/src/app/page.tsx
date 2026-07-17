@@ -176,9 +176,15 @@ function SiteNav() {
         </div>
         <div className="flex items-center gap-2">
           <ThemeToggle />
-          <Link href="/workspace" className={cn(btnPrimary, 'px-4 py-2')}>
+          <Link
+            href="/login"
+            className="hidden text-sm font-medium text-muted-foreground transition hover:text-foreground sm:inline"
+          >
+            Sign in
+          </Link>
+          <Link href="/signup" className={cn(btnPrimary, 'px-4 py-2')}>
             <Upload className="h-4 w-4" />
-            Upload Quotations
+            Get started
           </Link>
         </div>
       </nav>
@@ -213,9 +219,9 @@ function Hero() {
         </p>
 
         <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-          <Link href="/workspace" className={btnPrimary}>
+          <Link href="/signup" className={btnPrimary}>
             <Upload className="h-4 w-4" />
-            Upload Quotations
+            Get started free
           </Link>
           <a href="#demo" className={btnSecondary}>
             View Demo Analysis
@@ -632,16 +638,15 @@ function FinalCta() {
           Stop comparing quotations by hand
         </h2>
         <p className="mx-auto mt-3 max-w-xl text-pretty text-primary-foreground/80">
-          Upload your supplier quotations and get an AI-backed recommendation in minutes — no account
-          needed.
+          Create a free account and get an AI-backed supplier recommendation in minutes.
         </p>
         <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <Link
-            href="/workspace"
+            href="/signup"
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-card px-6 py-3 text-sm font-semibold text-primary shadow-sm transition hover:bg-card/90"
           >
             <Upload className="h-4 w-4" />
-            Upload Quotations
+            Get started free
           </Link>
           <a
             href="#demo"

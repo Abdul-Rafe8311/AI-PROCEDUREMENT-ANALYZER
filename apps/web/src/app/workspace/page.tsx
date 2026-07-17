@@ -10,6 +10,10 @@ import { PrSummary } from '@/components/workspace/pr-summary';
 import { AnalysisResults } from '@/components/workspace/analysis-results';
 import { ExtractionDebug } from '@/components/workspace/extraction-debug';
 import { ChatPanel } from '@/components/workspace/chat-panel';
+import { UserMenu } from '@/components/auth/user-menu';
+import { HistoryMenu } from '@/components/auth/history-menu';
+import { useAuth } from '@/lib/auth-context';
+import { type HistoryItem, insertAnalysisRow, loadUserHistory } from '@/lib/analysis-history';
 import { isSupabaseConfigured, STORAGE_BUCKET, supabase } from '@/lib/supabase';
 import {
   applyFxRates,
@@ -54,7 +58,10 @@ function deepSearchFailureMessage(failure: SearchFailure): string {
 }
 
 export default function WorkspacePage() {
+  const { user } = useAuth();
   const [files, setFiles] = useState<File[]>([]);
+  // The signed-in user's saved sessions (newest first) for the history switcher.
+  const [history, setHistory] = useState<HistoryItem[]>([]);
   // The company's own Purchase Requisition (optional second document type).
   const [prFile, setPrFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -166,47 +173,42 @@ export default function WorkspacePage() {
     };
   }, [docs]);
 
-  // Restore a previous session on load/refresh: the saved analysis (comparison
-  // results), chat history, and any charts. Scoped to restoring existing state —
-  // it never re-runs extraction, scoring, or the LLM.
-  useEffect(() => {
+  // Restore ONE saved session by id: the analysis (comparison results), chat
+  // history, and any charts. Restoring existing state only — it never re-runs
+  // extraction, scoring, or the LLM. Under Row-Level Security a user can only load
+  // a row they own, so this can't surface another user's analysis.
+  const restoreSession = useCallback(async (lastId: string) => {
     if (!isSupabaseConfigured || !supabase) return;
-    const lastId =
-      typeof window !== 'undefined' ? window.localStorage.getItem(LAST_ANALYSIS_KEY) : null;
-    if (!lastId) return;
-    let cancelled = false;
+    setRestoring(true);
+    try {
+      const { data: row, error: aErr } = await supabase
+        .from('analyses')
+        .select('result')
+        .eq('id', lastId)
+        .maybeSingle();
+      if (aErr) return; // transient (or not owned) — keep the pointer, retry next load
+      const result = (row?.result ?? null) as AnalysisResult | null;
+      // Restore if there are quotations OR a company PR (a PR-only session).
+      if (!result || (!result.quotations?.length && !result.purchaseRequisition)) {
+        if (typeof window !== 'undefined') window.localStorage.removeItem(LAST_ANALYSIS_KEY);
+        return;
+      }
+      // Upgrade an older persisted analysis to the current shape (rebuilds the
+      // PR-item match so a pre-refactor session can't crash the new UI).
+      setAnalysis(normalizeRestoredAnalysis(result));
+      setAnalysisId(lastId);
+      if (typeof window !== 'undefined') window.localStorage.setItem(LAST_ANALYSIS_KEY, lastId);
 
-    (async () => {
-      setRestoring(true);
-      try {
-        const { data: row, error: aErr } = await supabase!
-          .from('analyses')
-          .select('result')
-          .eq('id', lastId)
-          .maybeSingle();
-        if (aErr) return; // transient — keep the pointer and retry next load
-        const result = (row?.result ?? null) as AnalysisResult | null;
-        // Restore if there are quotations OR a company PR (a PR-only session).
-        if (!result || (!result.quotations?.length && !result.purchaseRequisition)) {
-          window.localStorage.removeItem(LAST_ANALYSIS_KEY); // genuinely gone
-          return;
-        }
-        if (cancelled) return;
-        // Upgrade an older persisted analysis to the current shape (rebuilds the
-        // PR-item match so a pre-refactor session can't crash the new UI).
-        setAnalysis(normalizeRestoredAnalysis(result));
-        setAnalysisId(lastId);
-
-        // Chat history incl. any charts. select('*') tolerates DBs without the
-        // chart column (the chart just won't restore there).
-        const { data: msgs } = await supabase!
-          .from('messages')
-          .select('*')
-          .eq('analysis_id', lastId)
-          .order('created_at', { ascending: true });
-        if (!cancelled && Array.isArray(msgs) && msgs.length) {
-          setMessages(
-            msgs.map((m: Record<string, unknown>) => {
+      // Chat history incl. any charts. select('*') tolerates DBs without the
+      // chart column (the chart just won't restore there).
+      const { data: msgs } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('analysis_id', lastId)
+        .order('created_at', { ascending: true });
+      setMessages(
+        Array.isArray(msgs)
+          ? msgs.map((m: Record<string, unknown>) => {
               const chart = m.chart as ChartDirective | null | undefined;
               const valid =
                 !!chart && CHART_METRICS.includes(chart.metric as (typeof CHART_METRICS)[number]);
@@ -219,44 +221,66 @@ export default function WorkspacePage() {
                   ? { chart: { metric: chart!.metric, ...(chart!.title ? { title: chart!.title } : {}) } }
                   : {}),
               } as ChatMessage;
-            }),
-          );
-        }
+            })
+          : [],
+      );
 
-        // Restore uploaded PDFs so deep-search chat keeps working after reload;
-        // the existing status poll picks up their (already-indexed) state.
-        const { data: docRows } = await supabase!
-          .from('documents')
-          .select('id, file_name')
-          .eq('analysis_id', lastId);
-        if (!cancelled && Array.isArray(docRows)) {
-          const pdfs = docRows.filter((d) => /\.pdf$/i.test(String(d.file_name)));
-          if (pdfs.length) {
-            setDocs(
-              pdfs.map((d) => ({
-                documentId: String(d.id),
-                fileName: String(d.file_name),
-                status: 'pending' as IndexStatus,
-                error: null,
-                chunkCount: 0,
-                indexedChunks: 0,
-                startedAt: Date.now(),
-              })),
-            );
-          }
-        }
-      } catch {
-        /* ignore — just start on the upload screen */
-      } finally {
-        if (!cancelled) setRestoring(false);
-      }
+      // Restore uploaded PDFs so deep-search chat keeps working after reload;
+      // the existing status poll picks up their (already-indexed) state.
+      const { data: docRows } = await supabase
+        .from('documents')
+        .select('id, file_name')
+        .eq('analysis_id', lastId);
+      const pdfs = Array.isArray(docRows)
+        ? docRows.filter((d) => /\.pdf$/i.test(String(d.file_name)))
+        : [];
+      setDocs(
+        pdfs.map((d) => ({
+          documentId: String(d.id),
+          fileName: String(d.file_name),
+          status: 'pending' as IndexStatus,
+          error: null,
+          chunkCount: 0,
+          indexedChunks: 0,
+          startedAt: Date.now(),
+        })),
+      );
+    } catch {
+      /* ignore — just start on the upload screen */
+    } finally {
+      setRestoring(false);
+    }
+  }, []);
+
+  // Reload the signed-in user's history list (newest first).
+  const refreshHistory = useCallback(async () => {
+    if (!user) {
+      setHistory([]);
+      return;
+    }
+    setHistory(await loadUserHistory(user.id));
+  }, [user]);
+
+  // On entering the workspace as a signed-in user, load THEIR history and restore
+  // their most recent session (item 8). Falls back to the last session opened on
+  // this device when the ownership migration hasn't been applied yet.
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return;
+    let cancelled = false;
+    (async () => {
+      const items = user ? await loadUserHistory(user.id) : [];
+      if (cancelled) return;
+      setHistory(items);
+      const lastId =
+        typeof window !== 'undefined' ? window.localStorage.getItem(LAST_ANALYSIS_KEY) : null;
+      const target = items[0]?.id ?? lastId;
+      if (target && !cancelled) await restoreSession(target);
     })();
-
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [user?.id]);
 
   const addFiles = useCallback((incoming: File[]) => {
     setFiles((prev) => {
@@ -287,8 +311,10 @@ export default function WorkspacePage() {
         .filter(Boolean)
         .join(', ')
         .slice(0, 120);
-      const { error: aErr } = await supabase.from('analyses').insert({ id, title });
-      if (aErr) throw aErr;
+      // Own the analysis when signed in (Phase 2). insertAnalysisRow falls back to
+      // an ownerless insert if the DB predates the user_id column, so uploads never
+      // break before the ownership migration is applied.
+      await insertAnalysisRow(id, title, user?.id ?? null);
 
       const docs: { documentId: string; fileName: string; fileUrl: string; isPdf: boolean }[] = [];
       for (const file of files) {
@@ -352,8 +378,10 @@ export default function WorkspacePage() {
       setMessages([]);
       if (persisted) {
         void persistResult(persisted.id, data as AnalysisResult);
-        // Remember this session so a reload restores it (see the restore effect).
+        // Remember this session so a reload restores it (see the restore effect),
+        // and surface it in the user's history switcher.
         if (typeof window !== 'undefined') window.localStorage.setItem(LAST_ANALYSIS_KEY, persisted.id);
+        void refreshHistory();
         // Kick off background deep-search indexing for PDF documents.
         const pdfs = persisted.docs.filter((d) => d.isPdf);
         if (pdfs.length) {
@@ -585,14 +613,16 @@ export default function WorkspacePage() {
             <span className="text-base font-semibold tracking-tight">AI Procurement Copilot</span>
           </div>
           <div className="flex items-center gap-2">
+            <HistoryMenu items={history} currentId={analysisId} onOpen={restoreSession} />
             <ThemeToggle />
             <Link
               href="/"
-              className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition hover:text-foreground"
+              className="hidden items-center gap-1.5 text-sm font-medium text-muted-foreground transition hover:text-foreground sm:inline-flex"
             >
               <ArrowLeft className="h-4 w-4" />
               Home
             </Link>
+            <UserMenu />
           </div>
         </div>
       </header>
@@ -603,8 +633,8 @@ export default function WorkspacePage() {
             Analyze supplier quotations
           </h1>
           <p className="mx-auto mt-2 max-w-xl text-pretty text-muted-foreground">
-            Upload your quotations and get an AI comparison, recommendation, and risk check — no
-            account required.
+            Upload your quotations and get an AI comparison, recommendation, and risk check. Your
+            analyses are saved to your account.
           </p>
         </div>
 
