@@ -89,7 +89,7 @@ export default function SignupPage() {
             required
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Farid Ahmed"
+            placeholder="Your full name"
           />
         </div>
         <div className="space-y-1.5">
