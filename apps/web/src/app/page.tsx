@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import {
   AlertTriangle,
@@ -19,7 +20,35 @@ import {
   Upload,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { SITE_NAME } from '@/lib/site';
 import { ResizableNavbar } from '@/components/resizable-navbar';
+
+// The only public, indexable page. Uses the layout's `default` title verbatim
+// (rather than the "%s · …" template) so the homepage keeps the full brand title.
+const HOME_TITLE = 'AI Procurement Copilot — Supplier Quotation Analysis';
+const HOME_DESCRIPTION =
+  'Compare supplier quotations side by side: upload quotes and your purchase requisition, then get deterministic scoring, normalized currencies, flagged risks, and a ready-to-sign technical approval form.';
+
+export const metadata: Metadata = {
+  title: { absolute: HOME_TITLE },
+  description: HOME_DESCRIPTION,
+  alternates: { canonical: '/' },
+  // A page-level openGraph object replaces the layout's outright, so siteName and
+  // locale are repeated here rather than inherited.
+  openGraph: {
+    type: 'website',
+    url: '/',
+    siteName: SITE_NAME,
+    locale: 'en_US',
+    title: HOME_TITLE,
+    description: HOME_DESCRIPTION,
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: HOME_TITLE,
+    description: HOME_DESCRIPTION,
+  },
+};
 
 /* ─────────────────────────────────────────────
    Shared button styles (no auth UI on this page)

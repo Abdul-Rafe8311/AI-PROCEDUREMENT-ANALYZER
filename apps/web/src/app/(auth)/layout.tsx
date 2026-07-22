@@ -1,6 +1,18 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
+
+// Account screens are client components, so the group layout carries their
+// metadata. They are account-only, not marketing pages — keep them unindexed
+// (mirrors the robots.txt disallow; public pages stay indexable).
+export const metadata: Metadata = {
+  // Neutral title: this layout covers sign-in, sign-up and password reset.
+  title: 'Account',
+  description:
+    'Sign in or create an AI Procurement Copilot account to access your saved analyses.',
+  robots: { index: false, follow: false },
+};
 
 // Shared chrome for the sign-in / sign-up / password-reset screens: brand header
 // and a centered card column. Individual pages render their own title + form.

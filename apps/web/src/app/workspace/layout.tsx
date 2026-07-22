@@ -9,6 +9,9 @@ export const metadata: Metadata = {
   description:
     'Upload supplier quotations (and your purchase requisition) to get an automatic comparison, technical-approval matching, risk flags, and a recommendation.',
   alternates: { canonical: '/workspace' },
+  // Auth-gated: a crawler only ever sees the redirect gate, so keep it out of the
+  // index (mirrors the robots.txt disallow — this does not affect public pages).
+  robots: { index: false, follow: false },
 };
 
 export default function WorkspaceLayout({ children }: { children: React.ReactNode }) {
