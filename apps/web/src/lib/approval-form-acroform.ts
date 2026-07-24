@@ -174,7 +174,7 @@ export async function generateApprovalFormPdf(
       backgroundColor: FIELD_BG,
       borderWidth: 0,
     });
-    tf.setFontSize(opts.size ?? 6.5);
+    tf.setFontSize(opts.size ?? 8);
     tf.updateAppearances(f);
   };
   const checkbox = (base: string, x: number, yTop: number, size: number) => {
@@ -202,37 +202,37 @@ export async function generateApprovalFormPdf(
     page.drawText(str, { x, y: yTop - h / 2 - size * 0.35, size, font: f, color });
   };
 
-  // Wrap text to fit maxW: break on spaces AND hard-break any single token that is
-  // itself wider than maxW (long part codes / identifiers such as "404602703004")
-  // so nothing is ever clipped away. Returns the lines; join with "\n" for a
-  // multiline field value.
-  const wrapLines = (s: string, f: PDFFont, size: number, maxW: number): string[] => {
+  // Wrap on WHITESPACE ONLY — never inside a word. A part code, drawing number or
+  // any identifier ("TWS.10(60)-200(140)-40-310") therefore always stays intact on
+  // one line; if it is wider than the column it simply owns its line (and fitSize()
+  // below shrinks that cell's font so it still fits, rather than splitting it).
+  const wrapWords = (s: string, f: PDFFont, size: number, maxW: number): string[] => {
     const width = (t: string) => f.widthOfTextAtSize(t, size);
     const lines: string[] = [];
     for (const para of String(s ?? '').split('\n')) {
-      const startLen = lines.length;
+      const words = para.split(/\s+/).filter(Boolean);
+      if (!words.length) { lines.push(''); continue; }
       let line = '';
-      for (const word of para.split(/\s+/).filter(Boolean)) {
-        let w = word;
-        // Peel fitting prefixes off an over-wide token until the remainder fits.
-        while (width(w) > maxW && w.length > 1) {
-          if (line) { lines.push(line); line = ''; }
-          let lo = 1, hi = w.length, fit = 1;
-          while (lo <= hi) {
-            const mid = (lo + hi) >> 1;
-            if (width(w.slice(0, mid)) <= maxW) { fit = mid; lo = mid + 1; } else hi = mid - 1;
-          }
-          lines.push(w.slice(0, fit));
-          w = w.slice(fit);
-        }
+      for (const w of words) {
         if (!line) line = w;
         else if (width(`${line} ${w}`) <= maxW) line = `${line} ${w}`;
         else { lines.push(line); line = w; }
       }
-      if (line) lines.push(line);
-      if (lines.length === startLen) lines.push(''); // preserve a blank paragraph
+      lines.push(line);
     }
     return lines.length ? lines : [''];
+  };
+
+  // Largest font size ≤ target at which the WIDEST single token fits maxW, floored
+  // at `min`. This is how a long identifier is kept whole without ever being split:
+  // the cell's font shrinks just enough for its widest word to fit the column.
+  const fitSize = (s: string, f: PDFFont, target: number, min: number, maxW: number): number => {
+    let widest = 0;
+    for (const t of String(s ?? '').split(/\s+/)) {
+      if (t) widest = Math.max(widest, f.widthOfTextAtSize(t, target));
+    }
+    if (widest <= maxW || widest === 0) return target;
+    return Math.max(min, Math.floor(target * (maxW / widest) * 10) / 10);
   };
 
   const newPage = () => {
@@ -261,7 +261,7 @@ export async function generateApprovalFormPdf(
     box(x, cursor, metaW, metaH);
     const lw = bold.widthOfTextAtSize(c.label, 7) + 4;
     text(c.label, x + 3, cursor - 4, 7, bold);
-    field(c.base, x + lw, cursor - 1, metaW - lw - 2, metaH - 2, c.value, { size: 7 });
+    field(c.base, x + lw, cursor - 1, metaW - lw - 2, metaH - 2, c.value, { size: 8 });
   });
   cursor -= metaH;
 
@@ -271,58 +271,74 @@ export async function generateApprovalFormPdf(
   const prLabel = 'PR Description:';
   const plw = bold.widthOfTextAtSize(prLabel, 7.5) + 5;
   text(prLabel, M + 3, cursor - 5, 7.5, bold);
-  field('pr_description', M + plw, cursor - 1, CONTENT_W - plw - 3, prH - 2, prSubject, { size: 7, multiline: true });
+  field('pr_description', M + plw, cursor - 1, CONTENT_W - plw - 3, prH - 2, prSubject, { size: 8, multiline: true });
   cursor -= prH + 6;
 
-  // ── Grid geometry — smaller type + a wider PR-description column so long part
-  //     codes and descriptions WRAP instead of clipping; supplier columns are
-  //     narrower to compensate and keep the grid on the page. ──
-  const idxW = 15;
-  const qtyLW = 28;
-  const uomW = 22;
-  const descLW = 172;
+  // ── Grid geometry — legible ~8pt data type + a WIDE PR-description column.
+  //     Wrapping is whitespace-only, so identifiers never split; a cell whose widest
+  //     token can't fit its column shrinks its OWN font (fitSize) down to a floor
+  //     instead. The description sub-column takes the lion's share of each supplier
+  //     column (qty/price are short) so codes fit at the largest possible size. ──
+  const idxW = 16;
+  const qtyLW = 30;
+  const uomW = 24;
+  const descLW = 202;
   const leftW = idxW + descLW + qtyLW + uomW;
   const supW = (CONTENT_W - leftW) / nSup;
-  const subDescW = supW * 0.46;
+  const subDescW = supW * 0.52;
   const subQtyW = supW * 0.2;
   const subPriceW = supW - subDescW - subQtyW;
-  const cellSize = 5.5; // supplier cell description / unit price
-  const leftDescSize = 6; // PR item description (left column)
-  const lineH = 8; // vertical space per wrapped line (comfortable for ≤6pt type)
+  const cellTarget = 8; // target data-cell size (per-cell auto-fit shrinks if needed)
+  const cellMin = 4.5; // floor when a long identifier must fit a narrow column
+  const leftTarget = 8.5; // PR item description (left column) — wide enough for ~8pt
+  const lineFor = (size: number) => size * 1.28; // vertical space per wrapped line
 
   // ── Grid header band (two rows: supplier name/ref, then sub-columns) ──
-  const headH1 = 14;
-  const headH2 = 12;
+  // Supplier names are wrapped on whitespace (so "Supply Wave Trading Establishment"
+  // stacks over two lines instead of clipping); headH1 grows to fit the tallest name.
+  const nameSize = 8;
+  const supNameLines = suppliers.map((s) => wrapWords(s.supplier, bold, nameSize, supW - 4));
+  const headH1 = Math.max(16, Math.max(...supNameLines.map((l) => l.length)) * lineFor(nameSize) + 4);
+  const headH2 = 13;
   const headTop = cursor;
   headBox(M, headTop, idxW, headH1 + headH2);
-  centerText('#', M + 4, headTop, headH1 + headH2, 7, bold);
+  centerText('#', M + 5, headTop, headH1 + headH2, 8, bold);
   headBox(M + idxW, headTop, descLW, headH1 + headH2);
-  centerText(model.hasPr ? 'PR Item Description' : 'Item Description', M + idxW + 3, headTop, headH1 + headH2, 7, bold, INK, descLW - 6);
+  centerText(model.hasPr ? 'PR Item Description' : 'Item Description', M + idxW + 4, headTop, headH1 + headH2, 8.5, bold, INK, descLW - 8);
   headBox(M + idxW + descLW, headTop, qtyLW, headH1 + headH2);
-  centerText('Qty', M + idxW + descLW + 6, headTop, headH1 + headH2, 7, bold);
+  centerText('Qty', M + idxW + descLW + 7, headTop, headH1 + headH2, 8, bold);
   headBox(M + idxW + descLW + qtyLW, headTop, uomW, headH1 + headH2);
-  centerText('UOM', M + idxW + descLW + qtyLW + 3, headTop, headH1 + headH2, 7, bold);
+  centerText('UOM', M + idxW + descLW + qtyLW + 4, headTop, headH1 + headH2, 8, bold);
 
-  suppliers.forEach((sup, i) => {
+  // Auto-fit ONE sub-header size so all three labels fit their (narrow) columns —
+  // driven by the tightest, "Unit Price". Sized to fit, so no ellipsis is needed.
+  const subHeadSize = Math.min(
+    fitSize('Description', bold, 7, 4.5, subDescW - 4),
+    fitSize('Unit Price', bold, 7, 4.5, subPriceW - 4),
+  );
+  suppliers.forEach((_sup, i) => {
     const x = M + leftW + i * supW;
     headBox(x, headTop, supW, headH1);
-    field(`sup_name.${i}`, x + 1, headTop - 0.5, supW - 2, headH1 - 1, sup.supplier, { size: 7, f: bold });
-    // sub-columns (legible, vertically centered)
+    field(`sup_name.${i}`, x + 1, headTop - 0.5, supW - 2, headH1 - 1, supNameLines[i].join('\n'), { size: nameSize, multiline: true, f: bold });
+    // sub-columns (legible, vertically centered; sized to fit so nothing ellipsizes)
     const subTop = headTop - headH1;
     headBox(x, subTop, subDescW, headH2);
-    centerText('Description', x + 2, subTop, headH2, 6, bold, MUTED, subDescW - 4);
+    centerText('Description', x + 2, subTop, headH2, subHeadSize, bold, MUTED);
     headBox(x + subDescW, subTop, subQtyW, headH2);
-    centerText('Qty', x + subDescW + 2, subTop, headH2, 6, bold, MUTED, subQtyW - 3);
+    centerText('Qty', x + subDescW + 2, subTop, headH2, subHeadSize, bold, MUTED);
     headBox(x + subDescW + subQtyW, subTop, subPriceW, headH2);
-    centerText('Unit Price', x + subDescW + subQtyW + 2, subTop, headH2, 6, bold, MUTED, subPriceW - 3);
+    centerText('Unit Price', x + subDescW + subQtyW + 2, subTop, headH2, subHeadSize, bold, MUTED);
   });
   cursor -= headH1 + headH2;
 
-  // ── Item rows — each row grows to fit its tallest wrapped cell, so long part
-  //     codes / descriptions wrap over multiple lines and are NEVER truncated. ──
+  // ── Item rows — each cell picks the largest font (≤ target) at which its widest
+  //     identifier fits, then wraps on whitespace only; the row grows to fit the
+  //     tallest cell. Identifiers are never split, and short cells stay at ~8pt. ──
   for (const r of model.rows) {
     const prLabelText = `${r.label}${r.kind === 'charge' ? `  [${r.category.toUpperCase()}]` : ''}`;
-    const leftLines = wrapLines(prLabelText, font, leftDescSize, descLW - 6);
+    const leftSize = fitSize(prLabelText, font, leftTarget, cellMin, descLW - 6);
+    const leftLines = wrapWords(prLabelText, font, leftSize, descLW - 6);
+    let maxCellH = leftLines.length * lineFor(leftSize);
     // Pre-compute each supplier cell so the row height covers the tallest column.
     const perSup = suppliers.map((_sup, i) => {
       const cell = r.cells[i] ?? null;
@@ -331,42 +347,47 @@ export async function generateApprovalFormPdf(
       const specNote = cell?.matchState === 'quoted_spec_diff'
         ? `\nspec differs${cell.specDiffNote ? `: ${cell.specDiffNote}` : ''}`
         : '';
+      const descFull = descVal + specNote;
       let priceVal = '';
       if (cell && cell.unitPrice != null) {
         const sar = fx ? toSar(cell.unitPrice, cell.currency, fx) : null;
         const usd = fx ? toUsd(cell.unitPrice, cell.currency, fx) : null;
         priceVal = sar != null && usd != null ? `SAR ${money2(sar)} / USD ${money2(usd)}` : `${cell.currency} ${money2(cell.unitPrice)}`;
       }
-      const descLinesArr = wrapLines(descVal + specNote, font, cellSize, subDescW - 6);
-      const priceLineCount = wrapLines(priceVal, font, cellSize, subPriceW - 6).length;
-      // Store the description hard-wrapped (so a part code can never clip); keep the
-      // price value un-broken so its "SAR … / USD …" text stays intact (the field is
-      // multiline and re-wraps it to the same line count we measured here).
-      return { cell, descText: descLinesArr.join('\n'), lines: Math.max(descLinesArr.length, priceLineCount), priceVal };
+      const dSize = fitSize(descFull, font, cellTarget, cellMin, subDescW - 6);
+      const dLines = wrapWords(descFull, font, dSize, subDescW - 6);
+      const pSize = fitSize(priceVal, font, cellTarget, cellMin, subPriceW - 6);
+      const pLines = wrapWords(priceVal, font, pSize, subPriceW - 6);
+      maxCellH = Math.max(maxCellH, dLines.length * lineFor(dSize), pLines.length * lineFor(pSize));
+      // Store the description pre-wrapped on whitespace (no mid-token breaks); the
+      // price stays un-split so its "SAR … / USD …" text is intact (the multiline
+      // field re-wraps it to the same lines we measured).
+      return { cell, descText: dLines.join('\n'), dSize, priceVal, pSize };
     });
-    const maxLines = Math.max(leftLines.length, ...perSup.map((p) => p.lines), 2);
-    const rowH = maxLines * lineH + 5;
+    const rowH = Math.max(18, maxCellH + 6);
     ensure(rowH);
     const yTop = cursor;
 
     box(M, yTop, idxW, rowH);
-    if (r.kind !== 'charge') centerText(String(r.index), M + 4, yTop, rowH, 6.5, font);
+    if (r.kind !== 'charge') centerText(String(r.index), M + 5, yTop, rowH, 8, font);
     box(M + idxW, yTop, descLW, rowH);
-    field(`pr_item_desc`, M + idxW, yTop, descLW, rowH, leftLines.join('\n'), { size: leftDescSize, multiline: true });
+    field(`pr_item_desc`, M + idxW, yTop, descLW, rowH, leftLines.join('\n'), { size: leftSize, multiline: true });
     box(M + idxW + descLW, yTop, qtyLW, rowH);
-    field(`pr_item_qty`, M + idxW + descLW, yTop, qtyLW, rowH, plain(r.qty), { size: 6.5, align: TextAlignment.Center });
+    const prQtyStr = plain(r.qty);
+    field(`pr_item_qty`, M + idxW + descLW, yTop, qtyLW, rowH, prQtyStr, { size: fitSize(prQtyStr, font, 8, 5.5, qtyLW - 4), align: TextAlignment.Center });
     box(M + idxW + descLW + qtyLW, yTop, uomW, rowH);
-    field(`pr_item_uom`, M + idxW + descLW + qtyLW, yTop, uomW, rowH, r.uom ?? '', { size: 6.5, align: TextAlignment.Center });
+    field(`pr_item_uom`, M + idxW + descLW + qtyLW, yTop, uomW, rowH, r.uom ?? '', { size: 8, align: TextAlignment.Center });
 
     suppliers.forEach((_sup, i) => {
       const x = M + leftW + i * supW;
       const p = perSup[i];
       box(x, yTop, subDescW, rowH);
-      field(`cell_desc.${r.index}.${i}`, x, yTop, subDescW, rowH, p.descText, { size: cellSize, multiline: true });
+      field(`cell_desc.${r.index}.${i}`, x, yTop, subDescW, rowH, p.descText, { size: p.dSize, multiline: true });
       box(x + subDescW, yTop, subQtyW, rowH);
-      field(`cell_qty.${r.index}.${i}`, x + subDescW, yTop, subQtyW, rowH, p.cell ? plain(p.cell.qty) : '', { size: 6, align: TextAlignment.Center });
+      const qtyStr = p.cell ? plain(p.cell.qty) : '';
+      field(`cell_qty.${r.index}.${i}`, x + subDescW, yTop, subQtyW, rowH, qtyStr, { size: fitSize(qtyStr, font, 8, 5, subQtyW - 4), align: TextAlignment.Center });
       box(x + subDescW + subQtyW, yTop, subPriceW, rowH);
-      field(`cell_price.${r.index}.${i}`, x + subDescW + subQtyW, yTop, subPriceW, rowH, p.priceVal, { size: cellSize, multiline: true, align: TextAlignment.Right });
+      field(`cell_price.${r.index}.${i}`, x + subDescW + subQtyW, yTop, subPriceW, rowH, p.priceVal, { size: p.pSize, multiline: true, align: TextAlignment.Right });
     });
     cursor -= rowH;
   }
@@ -376,18 +397,19 @@ export async function generateApprovalFormPdf(
   // narrower supplier columns never clip a total, delivery term, or warranty. The
   // label is vertically centered (was clipped at the row's bottom border before).
   const termRow = (label: string, valueFor: (q: ExtractedQuotation) => string, opts: { multiline?: boolean } = {}) => {
-    const size = 6;
     const values = suppliers.map((sup) => valueFor(qById.get(sup.quotationId)!));
-    const maxLines = Math.max(1, ...values.map((v) => wrapLines(v, font, size, supW - 6).length));
-    const h = Math.max(opts.multiline ? 18 : 14, maxLines * lineH + 4);
+    // Auto-fit each value so a long term (e.g. dual-currency total) never splits.
+    const sizes = values.map((v) => fitSize(v, font, 8, cellMin, supW - 6));
+    const maxCellH = Math.max(...values.map((v, i) => wrapWords(v, font, sizes[i], supW - 6).length * lineFor(sizes[i])));
+    const h = Math.max(opts.multiline ? 18 : 15, maxCellH + 4);
     ensure(h);
     const yTop = cursor;
     box(M, yTop, leftW, h, HEAD_BG);
-    centerText(label, M + 3, yTop, h, 6.5, bold, INK, leftW - 6);
-    suppliers.forEach((sup, i) => {
+    centerText(label, M + 4, yTop, h, 8, bold, INK, leftW - 8);
+    suppliers.forEach((_sup, i) => {
       const x = M + leftW + i * supW;
       box(x, yTop, supW, h);
-      field(`term.${label}.${i}`, x, yTop, supW, h, values[i], { size, multiline: true });
+      field(`term.${label}.${i}`, x, yTop, supW, h, values[i], { size: sizes[i], multiline: true });
     });
     cursor -= h;
   };
@@ -418,14 +440,14 @@ export async function generateApprovalFormPdf(
 
   // Technical Comments — AI-suggested (editable). Grows to fit the longest comment.
   {
-    const size = 6;
     const values = suppliers.map((sup) => comments[sup.quotationId]?.text ?? '');
-    const maxLines = Math.max(2, ...values.map((v) => wrapLines(v, font, size, supW - 6).length));
-    const h = Math.max(24, maxLines * lineH + 4);
+    const size = 7.5;
+    const maxCellH = Math.max(2 * lineFor(size), ...values.map((v) => wrapWords(v, font, size, supW - 6).length * lineFor(size)));
+    const h = Math.max(24, maxCellH + 4);
     ensure(h);
     const yTop = cursor;
     box(M, yTop, leftW, h, HEAD_BG);
-    centerText('Technical Comments', M + 3, yTop, h, 6.5, bold);
+    centerText('Technical Comments', M + 4, yTop, h, 8, bold);
     suppliers.forEach((sup, i) => {
       const x = M + leftW + i * supW;
       box(x, yTop, supW, h);
@@ -511,7 +533,7 @@ export async function generateApprovalFormPdf(
       }),
     }),
   );
-  acro.dict.set(PDFName.of('DA'), PDFString.of('0 g /Helvetica 6 Tf'));
+  acro.dict.set(PDFName.of('DA'), PDFString.of('0 g /Helvetica 8 Tf'));
 
   const bytes = await doc.save();
   // Copy into a fresh ArrayBuffer-backed view so the Blob part type is unambiguous

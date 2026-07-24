@@ -142,7 +142,16 @@ function itemCodeHit(name: string, code: string | null): boolean {
  * identical anchor. Returns null when the text states no recognizable grade.
  */
 function gradeOf(str: string): string | null {
-  const s = str.toLowerCase().replace(/\s+/g, ' ');
+  const s = str
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    // Stainless-steel designations are equivalent: AISI 310 = SUS 310 = SS 310 =
+    // SS310 = UNS S31000 (the "310" grade). Unify them to "ss 310" so the SAME
+    // material lines up (e.g. a supplier's "AISI 310" ↔ the PR's "SS 310") and a
+    // genuinely different grade still separates.
+    .replace(/\b(?:aisi|sus)[\s.-]*(\d{3})\b/g, 'ss $1')
+    .replace(/\buns[\s.-]*s\s*(\d{3})\d{2}\b/g, 'ss $1')
+    .replace(/\bss\s*(\d{2,4})\b/g, 'ss $1');
   // Prefer an explicit "grade <x>" phrase.
   let m = s.match(/grade[\s:.-]*((?:ss\s*)?\d{2,4}(?:\s*[a-z]{1,3})?)/);
   if (m?.[1]) return m[1].replace(/[^a-z0-9]/g, '');

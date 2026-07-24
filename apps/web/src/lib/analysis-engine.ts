@@ -343,16 +343,41 @@ export function buildAnalysis(fileNames: string[]): AnalysisResult {
 }
 
 /**
+ * Guarantee every quotation carries a UNIQUE `id`. Everything downstream — PR-match
+ * cells, per-supplier technical comments, warranties and origins — joins suppliers
+ * by `id` through a `Record`/`Map` keyed on it. A duplicate id there is silently
+ * last-write-wins: two supplier columns collapse onto ONE supplier's data (the
+ * cause of the technical-comment on column 0 showing column 4's supplier). Extraction
+ * ids (`q_<file>_<i>`) are normally unique, but a re-extraction, a restored/merged
+ * session, or a hand-assembled set can collide — so we de-duplicate defensively here,
+ * once, before any id-keyed join is built.
+ */
+export function ensureUniqueQuotationIds(quotations: ExtractedQuotation[]): ExtractedQuotation[] {
+  const seen = new Set<string>();
+  return quotations.map((q, i) => {
+    const base = q.id || `q_${i}`;
+    let id = base;
+    let n = 2;
+    while (seen.has(id)) id = `${base}__${n++}`;
+    seen.add(id);
+    return id === q.id ? q : { ...q, id };
+  });
+}
+
+/**
  * Assemble a full AnalysisResult (matching + risks + recommendation) from
  * quotations. When a company Purchase Requisition is supplied, each supplier's
  * line items are matched against it and the mismatches / not-quoted items feed
  * into risk detection (an unmatched item is a real technical risk).
  */
 export function assembleAnalysis(
-  quotations: ExtractedQuotation[],
+  rawQuotations: ExtractedQuotation[],
   simulated: boolean,
   purchaseRequisition: PurchaseRequisition | null = null,
 ): AnalysisResult {
+  // De-duplicate ids up front so every id-keyed join below (matching, comments,
+  // warranties, origins) addresses exactly one supplier — see the note above.
+  const quotations = ensureUniqueQuotationIds(rawQuotations);
   const prMatch: PrMatchResult | null =
     purchaseRequisition && purchaseRequisition.items.length && quotations.length
       ? matchQuotationsToPr(quotations, purchaseRequisition)
@@ -379,11 +404,12 @@ export function assembleAnalysis(
  */
 export function normalizeRestoredAnalysis(result: AnalysisResult): AnalysisResult {
   const pr = result.purchaseRequisition;
+  // De-duplicate ids so a restored/merged session can't collapse two supplier
+  // columns onto one (see ensureUniqueQuotationIds) — then recompute the match.
+  const quotations = result.quotations?.length ? ensureUniqueQuotationIds(result.quotations) : result.quotations;
   const prMatch =
-    pr && pr.items.length && result.quotations?.length
-      ? matchQuotationsToPr(result.quotations, pr)
-      : null;
-  return { ...result, prMatch };
+    pr && pr.items.length && quotations?.length ? matchQuotationsToPr(quotations, pr) : null;
+  return { ...result, quotations, prMatch };
 }
 
 export function buildRecommendation(
