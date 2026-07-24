@@ -10,6 +10,7 @@ import { PrSummary } from '@/components/workspace/pr-summary';
 import { AnalysisResults } from '@/components/workspace/analysis-results';
 import { ExtractionDebug } from '@/components/workspace/extraction-debug';
 import { ChatPanel } from '@/components/workspace/chat-panel';
+import { type DeepDoc, DeepSearchStatus } from '@/components/workspace/deep-search-status';
 import { UserMenu } from '@/components/auth/user-menu';
 import { HistoryMenu } from '@/components/auth/history-menu';
 import { useAuth } from '@/lib/auth-context';
@@ -26,11 +27,9 @@ import {
 } from '@/lib/analysis-engine';
 import { useFxRates } from '@/lib/use-fx-rates';
 import {
-  type DocStatus,
   type IndexStatus,
   type SearchFailure,
   answerFromChunks,
-  fetchStatus,
   searchDocument,
   startIndexing,
 } from '@/lib/rag-client';
@@ -40,6 +39,61 @@ import { type AnalysisResult, CHART_METRICS, type ChartDirective, type ChatMessa
 const LAST_ANALYSIS_KEY = 'workspace:lastAnalysisId';
 // The human's chosen supplier, persisted per supplier-set so it survives reload.
 const SELECTION_KEY = 'workspace:selection:v1';
+
+// The deep-search index status lives on the Supabase `documents` row (written by
+// the RAG indexer): index_status, chunk_count, indexed_chunks, index_error. We read
+// it straight from Supabase — the source of truth — so the indicator works even
+// without the optional Render status endpoint (NEXT_PUBLIC_API_URL). The DB uses
+// pending/processing/ready/error (older rows: indexing/failed); normalize both.
+function normalizeIndexStatus(s: unknown): IndexStatus {
+  switch (String(s ?? '').toLowerCase()) {
+    case 'ready':
+      return 'ready';
+    case 'processing':
+    case 'indexing':
+      return 'indexing';
+    case 'error':
+    case 'failed':
+      return 'failed';
+    case 'pending':
+      return 'pending';
+    default:
+      return 'unknown';
+  }
+}
+
+interface DocIndexInfo {
+  status: IndexStatus;
+  error: string | null;
+  chunkCount: number;
+  indexedChunks: number;
+}
+
+// Read the per-document index status for a set of document ids from Supabase.
+// Returns an empty map (never throws) when Supabase isn't configured or the read
+// fails, so polling/restoring degrades quietly to the last known state.
+async function readDocIndexStatus(ids: string[]): Promise<Map<string, DocIndexInfo>> {
+  const out = new Map<string, DocIndexInfo>();
+  if (!isSupabaseConfigured || !supabase || !ids.length) return out;
+  try {
+    const { data, error } = await supabase
+      .from('documents')
+      .select('id, index_status, index_error, chunk_count, indexed_chunks')
+      .in('id', ids);
+    if (error || !Array.isArray(data)) return out;
+    for (const d of data as Record<string, unknown>[]) {
+      out.set(String(d.id), {
+        status: normalizeIndexStatus(d.index_status),
+        error: (d.index_error as string | null) ?? null,
+        chunkCount: Number(d.chunk_count ?? 0),
+        indexedChunks: Number(d.indexed_chunks ?? 0),
+      });
+    }
+  } catch {
+    /* ignore — keep last known state */
+  }
+  return out;
+}
 
 // Turn a typed retrieval failure into an honest, specific chat message — never a
 // vague "temporarily unavailable". Each branch names the actual cause.
@@ -125,21 +179,13 @@ export default function WorkspacePage() {
     }
   }
 
-  // Per-document deep-search index status (RAG).
-  interface DocEntry {
-    documentId: string;
-    fileName: string;
-    status: IndexStatus;
-    error: string | null;
-    chunkCount: number;
-    indexedChunks: number;
-    startedAt: number; // when we began tracking (for the "stuck pending" hint)
-  }
-  const [docs, setDocs] = useState<DocEntry[]>([]);
+  // Per-document deep-search index status (RAG). DeepDoc mirrors the Supabase
+  // `documents` row's index_status / chunk_count / indexed_chunks / index_error.
+  const [docs, setDocs] = useState<DeepDoc[]>([]);
   const deepSearchReady = docs.some((d) => d.status === 'ready');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Poll index status while any document is still pending/indexing.
+  // Poll the Supabase index status while any document is still pending/indexing.
   useEffect(() => {
     const active = docs.some((d) => d.status === 'pending' || d.status === 'indexing');
     if (!active) {
@@ -148,20 +194,13 @@ export default function WorkspacePage() {
     }
     const ids = docs.map((d) => d.documentId);
     const tick = async () => {
-      const statuses = await fetchStatus(ids);
-      if (!statuses.length) return;
-      const byId = new Map<string, DocStatus>(statuses.map((s) => [s.documentId, s]));
+      const byId = await readDocIndexStatus(ids);
+      if (!byId.size) return;
       setDocs((prev) =>
         prev.map((d) => {
           const s = byId.get(d.documentId);
           return s
-            ? {
-                ...d,
-                status: s.status,
-                error: s.error,
-                chunkCount: s.chunkCount,
-                indexedChunks: s.indexedChunks,
-              }
+            ? { ...d, status: s.status, error: s.error, chunkCount: s.chunkCount, indexedChunks: s.indexedChunks }
             : d;
         }),
       );
@@ -225,11 +264,12 @@ export default function WorkspacePage() {
           : [],
       );
 
-      // Restore uploaded PDFs so deep-search chat keeps working after reload;
-      // the existing status poll picks up their (already-indexed) state.
+      // Restore uploaded PDFs so deep-search chat keeps working after reload,
+      // reading their ACTUAL index status/chunk counts from the documents row (not
+      // a hardcoded "pending"); the poll then keeps any still-indexing rows fresh.
       const { data: docRows } = await supabase
         .from('documents')
-        .select('id, file_name')
+        .select('id, file_name, index_status, index_error, chunk_count, indexed_chunks')
         .eq('analysis_id', lastId);
       const pdfs = Array.isArray(docRows)
         ? docRows.filter((d) => /\.pdf$/i.test(String(d.file_name)))
@@ -238,10 +278,10 @@ export default function WorkspacePage() {
         pdfs.map((d) => ({
           documentId: String(d.id),
           fileName: String(d.file_name),
-          status: 'pending' as IndexStatus,
-          error: null,
-          chunkCount: 0,
-          indexedChunks: 0,
+          status: normalizeIndexStatus(d.index_status),
+          error: (d.index_error as string | null) ?? null,
+          chunkCount: Number(d.chunk_count ?? 0),
+          indexedChunks: Number(d.indexed_chunks ?? 0),
           startedAt: Date.now(),
         })),
       );
@@ -720,99 +760,6 @@ export default function WorkspacePage() {
         </div>
 
       </main>
-    </div>
-  );
-}
-
-interface DeepDoc {
-  documentId: string;
-  fileName: string;
-  status: IndexStatus;
-  error: string | null;
-  chunkCount: number;
-  indexedChunks: number;
-  startedAt: number;
-}
-
-function DeepSearchStatus({ docs }: { docs: DeepDoc[] }) {
-  // Self-tick so the "Starting shortly…" hint appears even if status polling
-  // returns nothing (e.g. backend waking up).
-  const [, setNow] = useState(Date.now());
-  useEffect(() => {
-    const active = docs.some((d) => d.status === 'pending' || d.status === 'indexing');
-    if (!active) return;
-    const t = setInterval(() => setNow(Date.now()), 2000);
-    return () => clearInterval(t);
-  }, [docs]);
-
-  const dot: Record<IndexStatus, string> = {
-    pending: 'bg-muted-foreground/50',
-    indexing: 'bg-primary animate-pulse',
-    ready: 'bg-success',
-    failed: 'bg-warning',
-    unknown: 'bg-muted-foreground/50',
-  };
-
-  const describe = (d: DeepDoc): { label: string; cls: string } => {
-    switch (d.status) {
-      case 'indexing': {
-        const pct =
-          d.chunkCount > 0
-            ? Math.min(100, Math.round((d.indexedChunks / d.chunkCount) * 100))
-            : null;
-        return {
-          cls: 'text-primary',
-          label: `Indexing for deep search…${pct != null ? ` ${pct}%` : ''}`,
-        };
-      }
-      case 'ready':
-        return { cls: 'text-success', label: 'Ready for deep search' };
-      case 'failed':
-        return { cls: 'text-warning', label: 'Deep search unavailable' };
-      case 'pending':
-      default: {
-        const stuck = Date.now() - d.startedAt > 30_000;
-        return {
-          cls: 'text-muted-foreground',
-          label: stuck ? 'Starting shortly…' : 'Queued for deep search',
-        };
-      }
-    }
-  };
-
-  return (
-    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
-      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Deep document search
-      </div>
-      <ul className="space-y-2">
-        {docs.map((d) => {
-          const { label, cls } = describe(d);
-          const pct =
-            d.status === 'indexing' && d.chunkCount > 0
-              ? Math.min(100, Math.round((d.indexedChunks / d.chunkCount) * 100))
-              : null;
-          return (
-            <li key={d.documentId} className="text-sm">
-              <div className="flex items-center gap-2">
-                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot[d.status]}`} />
-                <span className="truncate font-medium">{d.fileName}</span>
-                <span className={`shrink-0 ${cls}`}>· {label}</span>
-                {d.status === 'failed' && d.error && (
-                  <span className="truncate text-xs text-muted-foreground" title={d.error}>
-                    — {d.error}
-                  </span>
-                )}
-              </div>
-              {pct != null && (
-                <div className="ml-3.5 mt-1 h-1 w-full max-w-xs overflow-hidden rounded-full bg-muted">
-                  <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
-                </div>
-              )}
-            </li>
-          );
-        })}
-      </ul>
     </div>
   );
 }

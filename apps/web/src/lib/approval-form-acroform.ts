@@ -13,7 +13,7 @@
 // (Replaces the previous flat @react-pdf/renderer form, which drew static text with
 // no fields to type into.)
 
-import { PDFDocument, StandardFonts, TextAlignment, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFString, StandardFonts, TextAlignment, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
 import { scoreSuppliers } from './analysis-engine';
 import { type FxRates, getFxRates, sarPerUnit, toSar, toUsd } from './fx-rates';
 import {
@@ -182,6 +182,59 @@ export async function generateApprovalFormPdf(
     cb.addToPage(page, { x, y: yTop - size, width: size, height: size, borderWidth: 1, borderColor: LINE });
   };
 
+  // Draw a label vertically CENTERED in a box of height h whose TOP edge is yTop.
+  // (The old call sites positioned labels a full font-size too low, so row labels
+  // and the Description/Qty/Unit-Price sub-headers were clipped by the bottom
+  // border.) maxW ellipsizes — used only for non-data labels/headers, NEVER for the
+  // data cells, which wrap via wrapLines() so an identifier is never cut off.
+  const centerText = (
+    s: string,
+    x: number,
+    yTop: number,
+    h: number,
+    size: number,
+    f: PDFFont,
+    color = INK,
+    maxW?: number,
+  ) => {
+    let str = s;
+    if (maxW) while (str.length > 1 && f.widthOfTextAtSize(str, size) > maxW) str = str.slice(0, -2) + '…';
+    page.drawText(str, { x, y: yTop - h / 2 - size * 0.35, size, font: f, color });
+  };
+
+  // Wrap text to fit maxW: break on spaces AND hard-break any single token that is
+  // itself wider than maxW (long part codes / identifiers such as "404602703004")
+  // so nothing is ever clipped away. Returns the lines; join with "\n" for a
+  // multiline field value.
+  const wrapLines = (s: string, f: PDFFont, size: number, maxW: number): string[] => {
+    const width = (t: string) => f.widthOfTextAtSize(t, size);
+    const lines: string[] = [];
+    for (const para of String(s ?? '').split('\n')) {
+      const startLen = lines.length;
+      let line = '';
+      for (const word of para.split(/\s+/).filter(Boolean)) {
+        let w = word;
+        // Peel fitting prefixes off an over-wide token until the remainder fits.
+        while (width(w) > maxW && w.length > 1) {
+          if (line) { lines.push(line); line = ''; }
+          let lo = 1, hi = w.length, fit = 1;
+          while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (width(w.slice(0, mid)) <= maxW) { fit = mid; lo = mid + 1; } else hi = mid - 1;
+          }
+          lines.push(w.slice(0, fit));
+          w = w.slice(fit);
+        }
+        if (!line) line = w;
+        else if (width(`${line} ${w}`) <= maxW) line = `${line} ${w}`;
+        else { lines.push(line); line = w; }
+      }
+      if (line) lines.push(line);
+      if (lines.length === startLen) lines.push(''); // preserve a blank paragraph
+    }
+    return lines.length ? lines : [''];
+  };
+
   const newPage = () => {
     page = doc.addPage([PAGE_W, PAGE_H]);
     cursor = PAGE_H - M;
@@ -221,53 +274,85 @@ export async function generateApprovalFormPdf(
   field('pr_description', M + plw, cursor - 1, CONTENT_W - plw - 3, prH - 2, prSubject, { size: 7, multiline: true });
   cursor -= prH + 6;
 
-  // ── Grid geometry ──
+  // ── Grid geometry — smaller type + a wider PR-description column so long part
+  //     codes and descriptions WRAP instead of clipping; supplier columns are
+  //     narrower to compensate and keep the grid on the page. ──
   const idxW = 15;
-  const qtyLW = 30;
-  const uomW = 24;
-  const descLW = 150;
+  const qtyLW = 28;
+  const uomW = 22;
+  const descLW = 172;
   const leftW = idxW + descLW + qtyLW + uomW;
   const supW = (CONTENT_W - leftW) / nSup;
   const subDescW = supW * 0.46;
   const subQtyW = supW * 0.2;
   const subPriceW = supW - subDescW - subQtyW;
+  const cellSize = 5.5; // supplier cell description / unit price
+  const leftDescSize = 6; // PR item description (left column)
+  const lineH = 8; // vertical space per wrapped line (comfortable for ≤6pt type)
 
   // ── Grid header band (two rows: supplier name/ref, then sub-columns) ──
-  const headH1 = 13;
-  const headH2 = 11;
-  headBox(M, cursor, idxW, headH1 + headH2);
-  text('#', M + 4, cursor - 9, 7, bold);
-  headBox(M + idxW, cursor, descLW, headH1 + headH2);
-  text(model.hasPr ? 'PR Item Description' : 'Item Description', M + idxW + 3, cursor - 9, 7, bold);
-  headBox(M + idxW + descLW, cursor, qtyLW, headH1 + headH2);
-  text('Qty', M + idxW + descLW + 6, cursor - 9, 7, bold);
-  headBox(M + idxW + descLW + qtyLW, cursor, uomW, headH1 + headH2);
-  text('UOM', M + idxW + descLW + qtyLW + 3, cursor - 9, 7, bold);
+  const headH1 = 14;
+  const headH2 = 12;
+  const headTop = cursor;
+  headBox(M, headTop, idxW, headH1 + headH2);
+  centerText('#', M + 4, headTop, headH1 + headH2, 7, bold);
+  headBox(M + idxW, headTop, descLW, headH1 + headH2);
+  centerText(model.hasPr ? 'PR Item Description' : 'Item Description', M + idxW + 3, headTop, headH1 + headH2, 7, bold, INK, descLW - 6);
+  headBox(M + idxW + descLW, headTop, qtyLW, headH1 + headH2);
+  centerText('Qty', M + idxW + descLW + 6, headTop, headH1 + headH2, 7, bold);
+  headBox(M + idxW + descLW + qtyLW, headTop, uomW, headH1 + headH2);
+  centerText('UOM', M + idxW + descLW + qtyLW + 3, headTop, headH1 + headH2, 7, bold);
 
   suppliers.forEach((sup, i) => {
     const x = M + leftW + i * supW;
-    headBox(x, cursor, supW, headH1);
-    field(`sup_name.${i}`, x + 1, cursor - 0.5, supW - 2, headH1 - 1, sup.supplier, { size: 7, f: bold });
-    // sub-columns
-    headBox(x, cursor - headH1, subDescW, headH2);
-    text('Description', x + 2, cursor - headH1 - 8, 5.5, bold, MUTED);
-    headBox(x + subDescW, cursor - headH1, subQtyW, headH2);
-    text('Qty', x + subDescW + 2, cursor - headH1 - 8, 5.5, bold, MUTED);
-    headBox(x + subDescW + subQtyW, cursor - headH1, subPriceW, headH2);
-    text('Unit Price', x + subDescW + subQtyW + 2, cursor - headH1 - 8, 5.5, bold, MUTED);
+    headBox(x, headTop, supW, headH1);
+    field(`sup_name.${i}`, x + 1, headTop - 0.5, supW - 2, headH1 - 1, sup.supplier, { size: 7, f: bold });
+    // sub-columns (legible, vertically centered)
+    const subTop = headTop - headH1;
+    headBox(x, subTop, subDescW, headH2);
+    centerText('Description', x + 2, subTop, headH2, 6, bold, MUTED, subDescW - 4);
+    headBox(x + subDescW, subTop, subQtyW, headH2);
+    centerText('Qty', x + subDescW + 2, subTop, headH2, 6, bold, MUTED, subQtyW - 3);
+    headBox(x + subDescW + subQtyW, subTop, subPriceW, headH2);
+    centerText('Unit Price', x + subDescW + subQtyW + 2, subTop, headH2, 6, bold, MUTED, subPriceW - 3);
   });
   cursor -= headH1 + headH2;
 
-  // ── Item rows ──
-  const rowH = 20;
+  // ── Item rows — each row grows to fit its tallest wrapped cell, so long part
+  //     codes / descriptions wrap over multiple lines and are NEVER truncated. ──
   for (const r of model.rows) {
+    const prLabelText = `${r.label}${r.kind === 'charge' ? `  [${r.category.toUpperCase()}]` : ''}`;
+    const leftLines = wrapLines(prLabelText, font, leftDescSize, descLW - 6);
+    // Pre-compute each supplier cell so the row height covers the tallest column.
+    const perSup = suppliers.map((_sup, i) => {
+      const cell = r.cells[i] ?? null;
+      const notQuoted = !cell && r.kind !== 'charge';
+      const descVal = cell?.description ?? (notQuoted ? 'Not Quoted' : '');
+      const specNote = cell?.matchState === 'quoted_spec_diff'
+        ? `\nspec differs${cell.specDiffNote ? `: ${cell.specDiffNote}` : ''}`
+        : '';
+      let priceVal = '';
+      if (cell && cell.unitPrice != null) {
+        const sar = fx ? toSar(cell.unitPrice, cell.currency, fx) : null;
+        const usd = fx ? toUsd(cell.unitPrice, cell.currency, fx) : null;
+        priceVal = sar != null && usd != null ? `SAR ${money2(sar)} / USD ${money2(usd)}` : `${cell.currency} ${money2(cell.unitPrice)}`;
+      }
+      const descLinesArr = wrapLines(descVal + specNote, font, cellSize, subDescW - 6);
+      const priceLineCount = wrapLines(priceVal, font, cellSize, subPriceW - 6).length;
+      // Store the description hard-wrapped (so a part code can never clip); keep the
+      // price value un-broken so its "SAR … / USD …" text stays intact (the field is
+      // multiline and re-wraps it to the same line count we measured here).
+      return { cell, descText: descLinesArr.join('\n'), lines: Math.max(descLinesArr.length, priceLineCount), priceVal };
+    });
+    const maxLines = Math.max(leftLines.length, ...perSup.map((p) => p.lines), 2);
+    const rowH = maxLines * lineH + 5;
     ensure(rowH);
     const yTop = cursor;
+
     box(M, yTop, idxW, rowH);
-    text(r.kind === 'charge' ? '' : String(r.index), M + 4, yTop - rowH / 2 - 2, 6.5, font);
+    if (r.kind !== 'charge') centerText(String(r.index), M + 4, yTop, rowH, 6.5, font);
     box(M + idxW, yTop, descLW, rowH);
-    const prLabelText = `${r.label}${r.kind === 'charge' ? `  [${r.category.toUpperCase()}]` : ''}`;
-    field(`pr_item_desc`, M + idxW, yTop, descLW, rowH, prLabelText, { size: 6, multiline: true });
+    field(`pr_item_desc`, M + idxW, yTop, descLW, rowH, leftLines.join('\n'), { size: leftDescSize, multiline: true });
     box(M + idxW + descLW, yTop, qtyLW, rowH);
     field(`pr_item_qty`, M + idxW + descLW, yTop, qtyLW, rowH, plain(r.qty), { size: 6.5, align: TextAlignment.Center });
     box(M + idxW + descLW + qtyLW, yTop, uomW, rowH);
@@ -275,40 +360,34 @@ export async function generateApprovalFormPdf(
 
     suppliers.forEach((_sup, i) => {
       const x = M + leftW + i * supW;
-      const cell = r.cells[i] ?? null;
-      const notQuoted = !cell && r.kind !== 'charge';
+      const p = perSup[i];
       box(x, yTop, subDescW, rowH);
-      const descVal = cell?.description ?? (notQuoted ? 'Not Quoted' : '');
-      const specNote = cell?.matchState === 'quoted_spec_diff'
-        ? `\nspec differs${cell.specDiffNote ? `: ${cell.specDiffNote}` : ''}`
-        : '';
-      field(`cell_desc.${r.index}.${i}`, x, yTop, subDescW, rowH, descVal + specNote, { size: 5.6, multiline: true });
+      field(`cell_desc.${r.index}.${i}`, x, yTop, subDescW, rowH, p.descText, { size: cellSize, multiline: true });
       box(x + subDescW, yTop, subQtyW, rowH);
-      field(`cell_qty.${r.index}.${i}`, x + subDescW, yTop, subQtyW, rowH, cell ? plain(cell.qty) : '', { size: 6, align: TextAlignment.Center });
+      field(`cell_qty.${r.index}.${i}`, x + subDescW, yTop, subQtyW, rowH, p.cell ? plain(p.cell.qty) : '', { size: 6, align: TextAlignment.Center });
       box(x + subDescW + subQtyW, yTop, subPriceW, rowH);
-      let priceVal = '';
-      if (cell && cell.unitPrice != null) {
-        const sar = fx ? toSar(cell.unitPrice, cell.currency, fx) : null;
-        const usd = fx ? toUsd(cell.unitPrice, cell.currency, fx) : null;
-        priceVal = sar != null && usd != null ? `SAR ${money2(sar)} / USD ${money2(usd)}` : `${cell.currency} ${money2(cell.unitPrice)}`;
-      }
-      field(`cell_price.${r.index}.${i}`, x + subDescW + subQtyW, yTop, subPriceW, rowH, priceVal, { size: 5.6, multiline: true, align: TextAlignment.Right });
+      field(`cell_price.${r.index}.${i}`, x + subDescW + subQtyW, yTop, subPriceW, rowH, p.priceVal, { size: cellSize, multiline: true, align: TextAlignment.Right });
     });
     cursor -= rowH;
   }
 
   // ── Totals + terms rows (label on the left block, one field per supplier) ──
+  // Every value field is multiline and the row grows to fit the tallest value, so
+  // narrower supplier columns never clip a total, delivery term, or warranty. The
+  // label is vertically centered (was clipped at the row's bottom border before).
   const termRow = (label: string, valueFor: (q: ExtractedQuotation) => string, opts: { multiline?: boolean } = {}) => {
-    const h = opts.multiline ? 22 : 15;
+    const size = 6;
+    const values = suppliers.map((sup) => valueFor(qById.get(sup.quotationId)!));
+    const maxLines = Math.max(1, ...values.map((v) => wrapLines(v, font, size, supW - 6).length));
+    const h = Math.max(opts.multiline ? 18 : 14, maxLines * lineH + 4);
     ensure(h);
     const yTop = cursor;
     box(M, yTop, leftW, h, HEAD_BG);
-    text(label, M + 3, yTop - h / 2 - 2, 6.5, bold);
+    centerText(label, M + 3, yTop, h, 6.5, bold, INK, leftW - 6);
     suppliers.forEach((sup, i) => {
       const x = M + leftW + i * supW;
       box(x, yTop, supW, h);
-      const q = qById.get(sup.quotationId)!;
-      field(`term.${label}.${i}`, x, yTop, supW, h, valueFor(q), { size: 6, multiline: opts.multiline });
+      field(`term.${label}.${i}`, x, yTop, supW, h, values[i], { size, multiline: true });
     });
     cursor -= h;
   };
@@ -337,18 +416,21 @@ export async function generateApprovalFormPdf(
   if (showOrigin) termRow('Country of Origin', (q) => fieldText(origins, q.id));
   if (showWarranty) termRow('Warranty', (q) => fieldText(warranties, q.id), { multiline: true });
 
-  // Technical Comments — AI-suggested (editable).
+  // Technical Comments — AI-suggested (editable). Grows to fit the longest comment.
   {
-    const h = 24;
+    const size = 6;
+    const values = suppliers.map((sup) => comments[sup.quotationId]?.text ?? '');
+    const maxLines = Math.max(2, ...values.map((v) => wrapLines(v, font, size, supW - 6).length));
+    const h = Math.max(24, maxLines * lineH + 4);
     ensure(h);
     const yTop = cursor;
     box(M, yTop, leftW, h, HEAD_BG);
-    text('Technical Comments', M + 3, yTop - h / 2 - 2, 6.5, bold);
+    centerText('Technical Comments', M + 3, yTop, h, 6.5, bold);
     suppliers.forEach((sup, i) => {
       const x = M + leftW + i * supW;
       box(x, yTop, supW, h);
       const c = comments[sup.quotationId];
-      field(`tech_comment.${i}`, x, yTop, supW, h, c?.text ?? '', { size: 6, multiline: true, f: c?.aiSuggested ? oblique : font });
+      field(`tech_comment.${i}`, x, yTop, supW, h, c?.text ?? '', { size, multiline: true, f: c?.aiSuggested ? oblique : font });
     });
     cursor -= h + 6;
   }
@@ -411,6 +493,25 @@ export async function generateApprovalFormPdf(
     const w = font.widthOfTextAtSize(fxLine, 6);
     p.drawText(fxLine, { x: PAGE_W - M - w, y: 14, size: 6, font, color: MUTED });
   }
+
+  // Register the standard fonts in the AcroForm Default Resources (/DR) + a default
+  // appearance (/DA). WITHOUT this, viewers that re-render field text (macOS
+  // Preview / PDFKit in particular) cannot resolve the font each field's /DA names,
+  // so they fall back to a ~12pt default — which overflowed the narrow cells and
+  // truncated part codes ("404602703004" → "404602"). With /DR present they honour
+  // the fixed 5.5–7pt sizes and the baked, wrapped layout.
+  const acro = form.acroForm;
+  acro.dict.set(
+    PDFName.of('DR'),
+    doc.context.obj({
+      Font: doc.context.obj({
+        Helvetica: font.ref,
+        'Helvetica-Bold': bold.ref,
+        'Helvetica-Oblique': oblique.ref,
+      }),
+    }),
+  );
+  acro.dict.set(PDFName.of('DA'), PDFString.of('0 g /Helvetica 6 Tf'));
 
   const bytes = await doc.save();
   // Copy into a fresh ArrayBuffer-backed view so the Blob part type is unambiguous
