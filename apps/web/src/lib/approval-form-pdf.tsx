@@ -74,6 +74,10 @@ export interface ApprovalFormOptions {
   /** reviewer edits to the comparison table (description / qty / unit price per cell).
    *  The form prints `edited ?? extracted` — see item-review.ts. */
   itemReview?: ItemReview;
+  /** Overlay editable AcroForm fields on the rendered layout. OFF by default: the
+   *  form is a flat, printable document and all editing happens in the Customize
+   *  form modal beforehand. Kept so a fillable build stays one option away. */
+  fillable?: boolean;
 }
 
 // Page geometry lives in the shared layout module so the pdf-lib field overlay

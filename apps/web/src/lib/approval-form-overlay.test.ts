@@ -1,7 +1,12 @@
-// The Technical Approval Form is the buyer's react-pdf LAYOUT with editable
-// AcroForm fields overlaid by pdf-lib. These tests pin both halves of that deal:
-// the layout must be the 2-page reference form, and the overlay must add fields
-// WITHOUT moving, resizing or dropping a single piece of printed text.
+// The Technical Approval Form is the buyer's react-pdf LAYOUT, printed FLAT: no
+// form fields, no widgets, nothing clickable. Reviewer editing happens in the
+// Customize form modal before the PDF exists, so the printed values are already
+// the ones they signed off.
+//
+// The fillable overlay is kept behind `fillable: true` and still exercised here,
+// so the option stays working if a fillable build is ever wanted again. Those
+// tests pin the other half of the deal: the overlay adds fields WITHOUT moving,
+// resizing or dropping a single piece of printed text.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -67,9 +72,17 @@ async function renderOnly(): Promise<Uint8Array> {
   const { generateApprovalFormPdf } = await import('./approval-form-pdf');
   return new Uint8Array(await (await generateApprovalFormPdf(freshAnalysis(), { fx })).arrayBuffer());
 }
-async function renderWithFields(): Promise<Uint8Array> {
+/** What the app ships: the flat, printable form. */
+async function renderFlat(): Promise<Uint8Array> {
   const { generateApprovalFormPdf } = await import('./approval-form');
   return new Uint8Array(await (await generateApprovalFormPdf(freshAnalysis(), { fx })).arrayBuffer());
+}
+/** The opt-in fillable build. */
+async function renderWithFields(): Promise<Uint8Array> {
+  const { generateApprovalFormPdf } = await import('./approval-form');
+  return new Uint8Array(
+    await (await generateApprovalFormPdf(freshAnalysis(), { fx, fillable: true })).arrayBuffer(),
+  );
 }
 
 /** Every printed text run, as "page|x|y|width|text" — the layout's fingerprint. */
@@ -80,9 +93,9 @@ async function textFingerprint(bytes: Uint8Array): Promise<string[]> {
 }
 
 test('TA FORM: the react-pdf reference layout — 2 pages, one supplier block each', async () => {
-  const doc = await PDFDocument.load(await renderWithFields());
+  const doc = await PDFDocument.load(await renderFlat());
   assert.equal(doc.getPageCount(), 2, 'the reference form is two pages for five suppliers');
-  const fp = await textFingerprint(await renderWithFields());
+  const fp = await textFingerprint(await renderFlat());
   const page1 = fp.filter((f) => f.startsWith('0|')).join('\n');
   const page2 = fp.filter((f) => f.startsWith('1|')).join('\n');
   assert.match(page1, /Suppliers 1[–-]4 of 5/, 'page 1 carries suppliers 1-4');
@@ -172,4 +185,61 @@ test('TA FORM: no green best/lowest-value highlighting anywhere', async () => {
   assert.ok(colours.length > 20, `content streams were scanned (found ${colours.length} colour ops)`);
   const green = colours.filter(([r, g, b]) => g > r + 0.08 && g > b + 0.08).map(([r, g, b]) => `rgb(${r}, ${g}, ${b})`);
   assert.deepEqual(green, [], `green fills found: ${green.join(', ')}`);
+});
+
+// ── the shipped output is FLAT ──────────────────────────────────────────────
+// Every value the reviewer could edit is settled in the Customize form modal, so
+// the PDF carries no form apparatus at all: no AcroForm, no widgets, nothing a
+// viewer will outline in blue or let anyone type into.
+
+test('TA FLAT: the shipped PDF has NO AcroForm and NO annotations of any kind', async () => {
+  const doc = await PDFDocument.load(await renderFlat());
+  // What `pdfinfo` reads for "Form:" — absent means "none".
+  assert.equal(doc.catalog.get(PDFName.of('AcroForm')), undefined, 'no AcroForm in the catalog');
+  assert.equal(doc.getForm().getFields().length, 0, 'no form fields');
+  for (const [i, page] of doc.getPages().entries()) {
+    const annots = page.node.Annots();
+    assert.ok(!annots || annots.size() === 0, `page ${i + 1} carries no annotations/widgets`);
+  }
+  assert.equal(doc.getPageCount(), 2);
+});
+
+test('TA FLAT: dropping the fields does not move a single piece of printed text', async () => {
+  const flat = await textFingerprint(await renderFlat());
+  const plain = await textFingerprint(await renderOnly());
+  assert.deepEqual(flat, plain, 'the flat form is exactly the rendered layout');
+  // …and the same text the fillable build printed underneath its widgets.
+  const fillable = await textFingerprint(await renderWithFields());
+  assert.deepEqual(flat, fillable, 'position, size and content are unchanged either way');
+});
+
+test('TA FLAT: signature blocks are printed elements, ready to sign by hand', async () => {
+  const fp = (await textFingerprint(await renderFlat())).join('\n');
+  for (const label of ['Approved', 'Denied', 'Signature:', 'Date:']) {
+    assert.ok(fp.includes(label), `"${label}" is printed on the form`);
+  }
+  assert.match(fp, /Final Recommendation:/, 'Final Recommendation is printed, unchanged');
+});
+
+test('TA FLAT: the printed values are the reviewer’s, not the raw extraction', async () => {
+  const { generateApprovalFormPdf } = await import('./approval-form');
+  const { buildComparisonModel } = await import('./pr-comparison');
+  const { buildItemReview, cellKey } = await import('./item-review');
+
+  const analysis = freshAnalysis();
+  const model = buildComparisonModel(analysis.quotations, pr, analysis.prMatch, { prOnly: true, fx });
+  const review = buildItemReview(model, analysis.quotations);
+  const krosakiId = analysis.quotations.find((q) => q.supplierName.startsWith('KROSAKI'))!.id;
+  const key = cellKey('i1', krosakiId);
+  assert.equal(review[key].qty.original, '10,000');
+
+  const edited = { ...review, [key]: { ...review[key], qty: { ...review[key].qty, edited: '4,321' } } };
+  const bytes = new Uint8Array(
+    await (await generateApprovalFormPdf(analysis, { fx, itemReview: edited })).arrayBuffer(),
+  );
+  const { measureRuns } = await import('./approval-form-overlay');
+  const text = (await measureRuns(Uint8Array.from(bytes))).map((r) => r.str).join('|');
+  assert.ok(text.includes('4,321'), 'the reviewer’s quantity is what gets printed');
+  // The untouched suppliers still print their extracted quantity.
+  assert.ok(text.includes('10,000'), 'untouched cells fall back to the extracted value');
 });
