@@ -8,7 +8,8 @@
 // the leftmost reference columns; then EACH supplier has their own column-group
 // showing THEIR own quoted description, qty and unit price side by side for that
 // same PR item row. 5+ suppliers wrap into stacked blocks; each keeps its own
-// currency; lowest unit price per row is highlighted.
+// currency. Values are shown as PLAIN TEXT — the form deliberately does NOT
+// highlight a best/lowest value; the human reviewer decides.
 //
 // Technical Comments are AI-SUGGESTED, never silently asserted: a suggestion is
 // rendered visually distinct (indigo, italic, "AI SUGGESTED — REVIEW" tag) until
@@ -49,8 +50,6 @@ const C = {
   line: '#334155',
   border: '#cbd5e1',
   head: '#e2e8f0',
-  win: '#dcfce7',
-  winInk: '#166534',
   specDiff: '#b45309', // amber-700 — factual "spec differs" grade-mismatch flag
   aiBg: '#eef2ff',
   aiBorder: '#6366f1', // indigo — AI-suggested (system-generated) content only
@@ -90,13 +89,11 @@ function MoneyDual({
   amount,
   currency,
   fx,
-  highlight,
   showOriginal,
 }: {
   amount: number | null | undefined;
   currency: string;
   fx: FxRates | null;
-  highlight?: boolean;
   /** also show the ORIGINAL-currency amount above SAR (used on the total rows,
    *  matching the company form's "EUR 36,388 / SAR 155,013"). No-op for SAR. */
   showOriginal?: boolean;
@@ -113,7 +110,7 @@ function MoneyDual({
       {showOriginal && cur !== 'SAR' && (
         <Text style={{ color: C.body, textAlign: 'right' }}>{`${cur} ${money2(amount)}`}</Text>
       )}
-      <Text style={{ fontFamily: 'Helvetica-Bold', color: highlight ? C.winInk : C.ink, textAlign: 'right' }}>
+      <Text style={{ fontFamily: 'Helvetica-Bold', color: C.ink, textAlign: 'right' }}>
         {`SAR ${money2(sar)}`}
       </Text>
       <Text style={{ color: C.muted, textAlign: 'right', fontSize: 5.5 }}>{`USD ${money2(usd)}`}</Text>
@@ -207,19 +204,6 @@ function ApprovalDocument({
   const ai = aiRecommendation(analysis, fx);
   const supplierCurrencies = qs.map((q) => q.currency);
 
-  // Lowest SAR unit price in a row (only when ≥2 present cells genuinely differ)
-  // — drives the green highlight, computed at the LIVE rate so it agrees with the
-  // SAR values printed in the cells. No rate → no highlight.
-  const lowestSarOf = (r: ComparisonRow): number | null => {
-    if (!fx) return null;
-    const sars = r.cells
-      .map((c) => (c && c.unitPrice != null ? toSar(c.unitPrice, c.currency, fx) : null))
-      .filter((v): v is number => v != null);
-    if (sars.length < 2) return null;
-    const min = Math.min(...sars);
-    return min === Math.max(...sars) ? null : min;
-  };
-
   const pr = analysis.purchaseRequisition;
   const prNumber = pr?.requestNo ?? qs.find((q) => q.prNumber)?.prNumber ?? '';
   // What's being procured: the PR header "Description"/"Subject" field when present,
@@ -258,7 +242,6 @@ function ApprovalDocument({
     ref: { color: C.muted, fontSize: fs - 0.5 },
     subLabel: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs - 0.5 },
     labelRow: { fontFamily: 'Helvetica-Bold', color: C.ink },
-    winCell: { backgroundColor: C.win, color: C.winInk, fontFamily: 'Helvetica-Bold' },
     notQuoted: { color: C.faint, fontFamily: 'Helvetica-Oblique' },
     specDiffTag: { fontSize: fs - 1.5, fontFamily: 'Helvetica-Oblique', color: C.specDiff, marginTop: 1 },
     aiBox: { marginTop: 6, borderWidth: 1, borderColor: C.aiBorder, backgroundColor: C.aiBg, borderRadius: 3, paddingVertical: 5, paddingHorizontal: 7 },
@@ -376,10 +359,6 @@ function ApprovalDocument({
 
               {/* Item rows */}
               {model.rows.map((r) => {
-                // Freight / transport is a non-comparable charge row — never
-                // highlight a "lowest" freight value (Farid's request). Only real
-                // item rows get best-in-column highlighting.
-                const lowSar = r.kind === 'charge' ? null : lowestSarOf(r);
                 return (
                 <View key={`${r.kind}-${r.index}-${r.label}`} style={s.rowFlex} wrap={false}>
                   <Text style={[s.cellBox, { width: idxW, borderLeftWidth: 1, borderLeftColor: C.border, textAlign: 'center' }]}>
@@ -393,8 +372,6 @@ function ApprovalDocument({
                   <Text style={[s.cellBox, { width: uomW, textAlign: 'center' }]}>{r.uom ?? ''}</Text>
                   {group.map((sup) => {
                     const cell = r.cells[sup.colIndex] ?? null;
-                    const cellSar = cell && fx ? toSar(cell.unitPrice, cell.currency, fx) : null;
-                    const isLow = cellSar != null && lowSar != null && cellSar === lowSar;
                     // A requisition/product row with no cell means the supplier truly
                     // did not quote it → "Not Quoted" (never a silent blank). Charge
                     // rows simply omit the charge, so they stay blank.
@@ -414,9 +391,9 @@ function ApprovalDocument({
                         <Text style={[s.cellBox, { width: subQtyW, textAlign: 'center', borderRightWidth: 1, borderRightColor: C.border }]}>
                           {cell ? plain(cell.qty) : ''}
                         </Text>
-                        <View style={[s.cellBox, { width: subPriceW, alignItems: 'flex-end' }, ...(isLow ? [s.winCell] : [])]}>
+                        <View style={[s.cellBox, { width: subPriceW, alignItems: 'flex-end' }]}>
                           {cell ? (
-                            <MoneyDual amount={cell.unitPrice} currency={cell.currency} fx={fx} highlight={isLow} />
+                            <MoneyDual amount={cell.unitPrice} currency={cell.currency} fx={fx} />
                           ) : (
                             <Text> </Text>
                           )}
