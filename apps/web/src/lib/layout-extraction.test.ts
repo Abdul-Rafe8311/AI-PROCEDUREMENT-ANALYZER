@@ -62,3 +62,56 @@ test('reconstructPage: glued numeric cells come back apart as separate tokens', 
     assert.ok(new RegExp(`(^|\\s)${tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`).test(line), `"${tok}" not a standalone token in: "${line}"`);
   }
 });
+
+// ── REGRESSION: a tight item table inside loose prose ────────────────────────
+// Krosaki's real quotation (OFR26-0040) sets its item rows 9.5pt apart inside a
+// letter whose paragraphs sit 19pt apart. The row tolerance was derived from the
+// MEDIAN baseline gap — 19 — and half of that is 9.5, exactly the table's pitch,
+// so every pair of item rows collapsed into one line and two distinct products
+// became a single item:
+//   "V DIA 10MM H=70MM AISI 310 CAPPED ACC DRWG TWS.10(60)-200(140)-45-253MA-C"
+// PR row 2 then had nothing to match and printed "Not quoted". The tolerance must
+// key off the TIGHTEST row pitch in the document, not the average one.
+test('reconstructPage: a dense table inside loose prose keeps one line per row', () => {
+  const items: ReturnType<typeof item>[] = [];
+  const h = 7.2; // the real glyph height in that quotation
+
+  // Loose prose above the table — 19pt apart, and the bulk of the page's text.
+  const prose = [
+    'We have the pleasure to submit to you our best possible offer for the supply',
+    'of the requested refractory materials for your kiln maintenance programme.',
+    'Please find our commercial terms and the itemised pricing set out below.',
+    'All prices are quoted in Euro and remain valid for fifteen days from issue.',
+  ];
+  prose.forEach((p, i) => items.push(item(p, 21, 600 - i * 19, 420, h)));
+
+  // The item table — rows only 9.5pt apart, each split across sub-point baselines
+  // exactly as the real PDF emits them (POS number, description, then figures).
+  const TABLE = [
+    { pos: '1', desc: 'TWS.10(60)-200(140)-45-253MA-C', qty: '10,000', price: '2.42 €' },
+    { pos: '2', desc: 'V DIA 10MM H=70MM AISI 310 CAPPED ACC DRWG', qty: '2,000', price: '0.95 €' },
+    { pos: '3', desc: 'TWS.10(60)-250(140)-45-253MA-C', qty: '1,500', price: '2.93 €' },
+    { pos: '4', desc: 'TWS.10(60)-170(80)-45-253MA-C', qty: '300', price: '2.24 €' },
+    { pos: '5', desc: 'TWS.10(60)-180(100)-45-253MA-C', qty: '700', price: '2.33 €' },
+  ];
+  const tableY = (r: number) => 460 - r * 9.5;
+  TABLE.forEach((row, r) => {
+    items.push(item(row.pos, 39, tableY(r) + 0.5, 5, h));
+    items.push(item(row.desc, 71, tableY(r), 190, h));
+    items.push(item(row.qty, 292, tableY(r) - 0.5, 26, h));
+    items.push(item(row.price, 436, tableY(r) - 0.5, 24, h));
+  });
+
+  const lines = reconstructPage(items).split('\n');
+
+  // Every product sits on its OWN line, with its own quantity and price.
+  for (const row of TABLE) {
+    const hits = lines.filter((l) => l.includes(row.desc));
+    assert.equal(hits.length, 1, `"${row.desc}" appears on exactly one line`);
+    assert.ok(hits[0].includes(row.qty), `its own qty ${row.qty}: ${hits[0]}`);
+    assert.ok(hits[0].includes(row.price), `its own price ${row.price}: ${hits[0]}`);
+  }
+  // …and never merged with the neighbouring product.
+  const merged = lines.find((l) => l.includes('AISI 310') && l.includes('TWS.10(60)-200(140)'));
+  assert.equal(merged, undefined, `rows 1 and 2 must not merge, got: ${merged}`);
+});

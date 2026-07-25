@@ -80,14 +80,26 @@ export function reconstructPage(items: unknown[]): string {
   const hs = glyphs.map((g) => g.h).filter((h) => h > 0).sort((a, b) => a - b);
   const medianH = hs[Math.floor(hs.length / 2)] || 10;
 
-  // Row tolerance ≈ half the line spacing, so intra-row baseline jitter groups but
-  // adjacent rows stay apart. Derive line spacing from the gaps between baselines.
-  const ys = [...new Set(glyphs.map((g) => Math.round(g.y)))].sort((a, b) => b - a);
+  // Row tolerance: how far apart two runs' baselines may sit and still be the SAME
+  // visual row. Within a row the jitter is sub-point (a quotation table sets the
+  // POS number, the description and the figures on baselines 0.5pt apart); between
+  // rows it is the row pitch.
+  //
+  // This must key off the TIGHTEST row pitch in the document, not the average one.
+  // A supplier letter mixes a dense item table with loose prose: Krosaki's table
+  // rows sit 9.5pt apart while its paragraphs sit 19pt apart. Taking the MEDIAN gap
+  // yielded 19, half of which is 9.5 — exactly the table's pitch — so every pair of
+  // item rows collapsed into one line and two products became one ("V DIA 10MM
+  // H=70MM AISI 310 CAPPED ACC DRWG TWS.10(60)-200(140)-45-253MA-C"). A low
+  // percentile finds the tightest pitch while staying immune to a stray outlier.
+  const ys = [...new Set(glyphs.map((g) => Math.round(g.y * 2) / 2))].sort((a, b) => b - a);
   const gaps: number[] = [];
   for (let i = 1; i < ys.length; i++) gaps.push(ys[i - 1] - ys[i]);
-  const bigGaps = gaps.filter((g) => g > medianH * 0.9).sort((a, b) => a - b);
-  const lineSpacing = bigGaps.length ? bigGaps[Math.floor(bigGaps.length / 2)] : medianH * 1.4;
-  const rowTol = Math.max(medianH * 0.7, Math.min(lineSpacing * 0.5, medianH * 1.6));
+  // Gaps big enough to be a row pitch rather than same-row baseline jitter.
+  const pitches = gaps.filter((g) => g > medianH * 0.35).sort((a, b) => a - b);
+  const pitch = pitches.length ? pitches[Math.floor(pitches.length * 0.1)] : medianH * 1.4;
+  // Comfortably under the tightest pitch, and never more than a glyph height.
+  const rowTol = Math.min(pitch * 0.45, medianH * 0.8);
 
   // Greedy clustering: attach each run (top→bottom) to the nearest row within tol.
   const sorted = [...glyphs].sort((a, b) => b.y - a.y || a.x - b.x);

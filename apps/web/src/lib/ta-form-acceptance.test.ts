@@ -258,3 +258,65 @@ test('MATCHING: a PR qty different from the supplier qty NEVER causes "Not Quote
     assert.equal(sm.notQuotedCount, 0, `${sm.supplier} has zero not-quoted`);
   }
 });
+
+// ── Krosaki PR row 2 — the AISI 310 V-anchor ────────────────────────────────
+// Krosaki's real quotation (OFR26-0040) line 2 reads
+// "V DIA 10MM H=70MM AISI 310 CAPPED ACC DRWG", qty 2,000 @ EUR 0.95. It is the
+// PR's row-2 "SS 310 ANCHOR TYPE: V, SIZE: 10 X 70 MM." under a different house
+// style — AISI 310 and SS 310 are the same material — so it must map to row 2 and
+// row 2 must NOT read "Not Quoted".
+test('KROSAKI row 2: the AISI 310 V-anchor maps to the PR SS 310 V-anchor', () => {
+  const kro = quotationsFromLlmSuppliers(
+    [{
+      supplierName: 'Krosaki MEA Ltd.', reference: 'OFR26-0040', prNumber: '12601612', currency: 'EUR',
+      totalAmount: 36388, vatAmount: null, totalWithoutVat: 32798, totalsByCurrency: null,
+      deliveryTime: '4 weeks after official order', deliveryTerms: 'EXW Onnaing', countryOfOrigin: 'France',
+      paymentTerms: 'CAD', warranty: null, validUntil: null,
+      lineItems: [
+        { name: 'TWS.10(60)-200(140)-45-253MA-C', quantity: 10000, unitPrice: 2.42, totalPrice: 24200, category: 'product', uom: 'EA', availableInDays: null },
+        { name: 'V DIA 10MM H=70MM AISI 310 CAPPED ACC DRWG', quantity: 2000, unitPrice: 0.95, totalPrice: 1900, category: 'product', uom: 'EA', availableInDays: null },
+        { name: 'TWS.10(60)-250(140)-45-253MA-C', quantity: 1500, unitPrice: 2.93, totalPrice: 4395, category: 'product', uom: 'EA', availableInDays: null },
+        { name: 'TWS.10(60)-170(80)-45-253MA-C', quantity: 300, unitPrice: 2.24, totalPrice: 672, category: 'product', uom: 'EA', availableInDays: null },
+        { name: 'TWS.10(60)-180(100)-45-253MA-C', quantity: 700, unitPrice: 2.33, totalPrice: 1631, category: 'product', uom: 'EA', availableInDays: null },
+        freight('TRANSPORT PRICE CIF JEDDAH', 3590),
+      ],
+    }],
+    'OFR26-0040.pdf',
+    { currency: 'EUR', confidence: 0.9 },
+  );
+  const match = matchQuotationsToPr(kro, pr);
+  const sm = match.bySupplier[0];
+  const row2 = sm.prItems[1];
+  assert.notEqual(row2.state, 'not_quoted', 'PR row 2 is quoted by Krosaki');
+  assert.ok(/AISI 310/.test(row2.supplierItem!.name), `row 2 gets the V-anchor: ${row2.supplierItem?.name}`);
+  assert.equal(row2.supplierItem!.quantity, 2000);
+  assert.equal(row2.supplierItem!.unitPrice, 0.95);
+  assert.equal(sm.notQuotedCount, 0, 'Krosaki quotes all five PR rows');
+  // Each PR row gets its OWN line — nothing merged, nothing doubled up.
+  const names = sm.prItems.map((p) => p.supplierItem!.name);
+  assert.equal(new Set(names).size, 5, `five distinct lines, got ${JSON.stringify(names)}`);
+  for (const n of names) assert.ok(!/AISI 310.*TWS\.|TWS\..*AISI 310/.test(n), `no merged line: ${n}`);
+});
+
+test('"Not Quoted" stays truthful — a genuinely missing line still reports it', () => {
+  // Same supplier with its V-anchor line REMOVED: row 2 must report not_quoted.
+  const missing = quotationsFromLlmSuppliers(
+    [{
+      supplierName: 'Krosaki MEA Ltd.', reference: 'OFR26-0040', prNumber: '12601612', currency: 'EUR',
+      totalAmount: null, vatAmount: null, totalWithoutVat: null, totalsByCurrency: null,
+      deliveryTime: '4 weeks', deliveryTerms: 'EXW', countryOfOrigin: 'France',
+      paymentTerms: 'CAD', warranty: null, validUntil: null,
+      lineItems: [
+        { name: 'TWS.10(60)-200(140)-45-253MA-C', quantity: 10000, unitPrice: 2.42, totalPrice: 24200, category: 'product', uom: 'EA', availableInDays: null },
+        { name: 'TWS.10(60)-250(140)-45-253MA-C', quantity: 1500, unitPrice: 2.93, totalPrice: 4395, category: 'product', uom: 'EA', availableInDays: null },
+        { name: 'TWS.10(60)-170(80)-45-253MA-C', quantity: 300, unitPrice: 2.24, totalPrice: 672, category: 'product', uom: 'EA', availableInDays: null },
+        { name: 'TWS.10(60)-180(100)-45-253MA-C', quantity: 700, unitPrice: 2.33, totalPrice: 1631, category: 'product', uom: 'EA', availableInDays: null },
+      ],
+    }],
+    'OFR26-0040.pdf',
+    { currency: 'EUR', confidence: 0.9 },
+  );
+  const sm = matchQuotationsToPr(missing, pr).bySupplier[0];
+  assert.equal(sm.prItems[1].state, 'not_quoted', 'a genuinely absent line still reads Not Quoted');
+  assert.equal(sm.notQuotedCount, 1);
+});
