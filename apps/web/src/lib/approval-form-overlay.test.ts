@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
-import { PDFCheckBox, PDFDocument, PDFName, PDFTextField } from 'pdf-lib';
+import { PDFCheckBox, PDFDocument, type PDFFont, PDFName, PDFTextField, StandardFonts } from 'pdf-lib';
 import { purchaseRequisitionFromLlm, quotationsFromLlmSuppliers, type LlmSupplier } from './extraction-server';
 import { applyFxRates, assembleAnalysis } from './analysis-engine';
 import type { FxRates } from './fx-rates';
@@ -172,4 +172,128 @@ test('TA FORM: no green best/lowest-value highlighting anywhere', async () => {
   assert.ok(colours.length > 20, `content streams were scanned (found ${colours.length} colour ops)`);
   const green = colours.filter(([r, g, b]) => g > r + 0.08 && g > b + 0.08).map(([r, g, b]) => `rgb(${r}, ${g}, ${b})`);
   assert.deepEqual(green, [], `green fills found: ${green.join(', ')}`);
+});
+
+// ── field SIZE: a widget must show its whole value, with room to type ────────
+// The reported bugs: "10,000" rendered as "10,00" and "France" as "Franc" — the
+// widget was cut to the width of the text already printed under it, leaving no
+// room for the several points a viewer insets before it draws field text.
+
+test('TA FIELDS: every widget is wide enough for its value plus the viewer inset', async () => {
+  const doc = await PDFDocument.load(await renderWithFields());
+  const fonts: Record<string, PDFFont> = {
+    Helvetica: await doc.embedFont(StandardFonts.Helvetica),
+    'Helvetica-Bold': await doc.embedFont(StandardFonts.HelveticaBold),
+    'Helvetica-Oblique': await doc.embedFont(StandardFonts.HelveticaOblique),
+  };
+  const VIEWER_INSET = 10; // what Acrobat / Preview reserve inside the box
+  const tight: string[] = [];
+  for (const f of doc.getForm().getFields()) {
+    if (!(f instanceof PDFTextField)) continue;
+    const value = f.getText() ?? '';
+    if (!value.trim()) continue;
+    const widget = f.acroField.getWidgets()[0];
+    const rect = widget.getRectangle();
+    const da = String(widget.dict.get(PDFName.of('DA')) ?? f.acroField.getDefaultAppearance() ?? '');
+    const m = /\/([^\s/]+)\s+(\d*\.?\d+)\s+Tf/.exec(da);
+    const size = m ? Number(m[2]) : 6.5;
+    const font = fonts[m?.[1] ?? ''] ?? fonts.Helvetica;
+    for (const line of value.split('\n')) {
+      const needed = font.widthOfTextAtSize(line, size) + VIEWER_INSET;
+      if (needed <= rect.width + 0.5) continue;
+      // A multiline cell re-wraps inside its box by design, so a single printed line
+      // need not fit end to end — nothing is lost, it flows onto the next line.
+      if (f.isMultiline()) continue;
+      tight.push(`${f.getName()}: "${line}" needs ${needed.toFixed(1)}pt, box is ${rect.width.toFixed(1)}pt`);
+    }
+  }
+  assert.deepEqual(tight, [], `widgets too narrow for their own value:\n${tight.join('\n')}`);
+});
+
+test('TA FIELDS: the reported cells — Qty "10,000" and Country of Origin "France" — fit', async () => {
+  const doc = await PDFDocument.load(await renderWithFields());
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  const fields = doc.getForm().getFields().filter((f): f is PDFTextField => f instanceof PDFTextField);
+  const check = (predicate: (v: string) => boolean, what: string) => {
+    const hits = fields.filter((f) => predicate(f.getText() ?? ''));
+    assert.ok(hits.length, `${what} is a field`);
+    for (const f of hits) {
+      const rect = f.acroField.getWidgets()[0].getRectangle();
+      const needed = helv.widthOfTextAtSize(f.getText() ?? '', 6.5) + 10;
+      assert.ok(
+        rect.width + 0.01 >= needed,
+        `${f.getName()} (${what}): ${rect.width.toFixed(2)}pt < ${needed.toFixed(2)}pt`,
+      );
+    }
+  };
+  check((v) => v === '10,000', 'Qty 10,000');
+  check((v) => v === 'France', 'Country of Origin France');
+});
+
+test('TA FIELDS: multi-line cells are multiline and roomy; short cells stay single-line', async () => {
+  const doc = await PDFDocument.load(await renderWithFields());
+  const fields = doc.getForm().getFields().filter((f): f is PDFTextField => f instanceof PDFTextField);
+  const wrapped = fields.filter((f) => (f.getText() ?? '').includes('\n'));
+  assert.ok(wrapped.length > 3, `wrapped cells exist, got ${wrapped.length}`);
+  for (const f of wrapped) {
+    assert.equal(f.isMultiline(), true, `${f.getName()} wraps, so it must be multiline`);
+    const rect = f.acroField.getWidgets()[0].getRectangle();
+    // At least two lines of room; past that the field scrolls, because growing
+    // further would mean covering the next row's printed text.
+    assert.ok(rect.height >= 2 * 6.5, `${f.getName()}: only ${rect.height.toFixed(1)}pt tall`);
+  }
+  // The roomiest cells got the generous box the spec asks for.
+  const roomy = wrapped.filter((f) => f.acroField.getWidgets()[0].getRectangle().height >= 3 * 6.5);
+  assert.ok(roomy.length >= wrapped.length / 2, `most wrapped cells get 3+ lines of room (${roomy.length}/${wrapped.length})`);
+  // A single-line numeric cell must NOT be multiline — the viewer centres it
+  // vertically, which is what keeps it sitting on the printed figure.
+  const qty = fields.find((f) => f.getName().startsWith('p1.cell_qty.') && (f.getText() ?? '') === '10,000');
+  assert.ok(qty, 'a Qty field exists');
+  assert.equal(qty!.isMultiline(), false);
+});
+
+test('TA FIELDS: no widget covers another cell’s printed text', async () => {
+  const bytes = await renderWithFields();
+  const doc = await PDFDocument.load(bytes);
+  const { measureRuns } = await import('./approval-form-overlay');
+  const runs = await measureRuns(Uint8Array.from(bytes));
+  const pages = doc.getPages();
+  const clashes: string[] = [];
+  const boxes = doc.getForm().getFields().flatMap((f) =>
+    f instanceof PDFTextField
+      ? [{ rect: f.acroField.getWidgets()[0].getRectangle(), lines: new Set((f.getText() ?? '').split('\n')) }]
+      : [],
+  );
+  /** Some field puts this exact text back on top of the same spot. */
+  const redrawn = (r: { x: number; y: number; w: number; str: string }) =>
+    boxes.some(
+      (b) =>
+        b.lines.has(r.str) &&
+        r.x + 0.5 >= b.rect.x - 3 &&
+        r.x + r.w <= b.rect.x + b.rect.width + 3 &&
+        r.y + 0.5 >= b.rect.y - 3 &&
+        r.y <= b.rect.y + b.rect.height + 3,
+    );
+  for (const f of doc.getForm().getFields()) {
+    if (!(f instanceof PDFTextField)) continue;
+    const widget = f.acroField.getWidgets()[0];
+    const rect = widget.getRectangle();
+    const own = new Set((f.getText() ?? '').split('\n'));
+    const page = pages.findIndex((p) => {
+      const a = p.node.Annots();
+      if (!a) return false;
+      for (let k = 0; k < a.size(); k++) if (a.lookup(k) === widget.dict) return true;
+      return false;
+    });
+    for (const r of runs) {
+      if (r.page !== page || own.has(r.str)) continue;
+      // A run's ink box overlapping the widget means the widget would hide it.
+      const overlapX = r.x + r.w > rect.x + 0.5 && r.x < rect.x + rect.width - 0.5;
+      const overlapY = r.y + r.size * 0.7 > rect.y + 0.5 && r.y < rect.y + rect.height - 0.5;
+      if (overlapX && overlapY && !redrawn(r)) {
+        clashes.push(`${f.getName()} covers ${JSON.stringify(r.str.slice(0, 30))}`);
+      }
+    }
+  }
+  assert.deepEqual(clashes.slice(0, 8), [], `widgets covering other cells' text:\n${clashes.slice(0, 8).join('\n')}`);
 });
