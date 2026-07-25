@@ -263,9 +263,9 @@ export function ApprovalFormDownload({
     setLoading(true);
     try {
       const signatureRoles = roles.filter((r) => r.enabled).map((r) => r.label.trim()).filter(Boolean);
-      // react-pdf renders the LAYOUT (the buyer's reference form). The layout is
-      // never rebuilt with pdf-lib drawing primitives.
-      const { generateApprovalFormPdf } = await import('@/lib/approval-form-pdf');
+      // react-pdf renders the LAYOUT (the buyer's reference form); the overlay then
+      // loads those bytes and lays editable AcroForm fields over the measured cells.
+      const { generateApprovalFormPdf } = await import('@/lib/approval-form');
       const blob = await generateApprovalFormPdf(analysis, {
         signatureRoles,
         technicalComments: comments,

@@ -30,7 +30,8 @@ import {
   suggestTechnicalComments,
   suggestWarranties,
 } from './item-matching';
-import { buildComparisonModel, type ComparisonRow, supplierGroups } from './pr-comparison';
+import { buildComparisonModel, supplierGroups } from './pr-comparison';
+import * as LAYOUT from './approval-form-layout';
 import {
   type AnalysisResult,
   type ApprovalFieldValue,
@@ -71,8 +72,9 @@ export interface ApprovalFormOptions {
   selectedSupplier?: string | null;
 }
 
-const SUP_PER_GROUP = 4; // suppliers per stacked block (Suppliers 1–4, then 5 wraps) — matches the company template
-const USABLE = 797; // landscape A4 usable width (pt)
+// Page geometry lives in the shared layout module so the pdf-lib field overlay
+// places its widgets on exactly the columns this renderer draws.
+const { SUP_PER_GROUP, USABLE, PAGE_PAD_X, PAGE_PAD_Y, FS, IDX_W, PR_DESC_W, QTY_L_W, UOM_W, LEFT_W } = LAYOUT;
 
 const plain = (n: number | null | undefined) =>
   n == null || !Number.isFinite(n) ? '' : n.toLocaleString('en-US');
@@ -221,10 +223,10 @@ function ApprovalDocument({
 
   const indexed = model.suppliers.map((s, i) => ({ ...s, colIndex: i }));
   const groups = supplierGroups(indexed, SUP_PER_GROUP);
-  const fs = 6.5;
+  const fs = FS;
 
   const s = StyleSheet.create({
-    page: { paddingVertical: 14, paddingHorizontal: 16, fontSize: fs, color: C.body, fontFamily: 'Helvetica' },
+    page: { paddingVertical: PAGE_PAD_Y, paddingHorizontal: PAGE_PAD_X, fontSize: fs, color: C.body, fontFamily: 'Helvetica' },
     title: { textAlign: 'center', fontSize: 11.5, fontFamily: 'Helvetica-Bold', color: C.ink, letterSpacing: 0.5, marginBottom: 3 },
     subNote: { textAlign: 'center', fontSize: fs - 0.5, color: C.muted, marginBottom: 4 },
     metaRow: { flexDirection: 'row', borderWidth: 1, borderColor: C.line },
@@ -261,11 +263,11 @@ function ApprovalDocument({
   const perRow = Math.min(signatureRoles.length || 1, 4);
   const signW = (USABLE - (perRow - 1) * 6) / perRow;
 
-  const idxW = 14;
-  const prDescW = 118;
-  const qtyLW = 22;
-  const uomW = 24;
-  const leftW = idxW + prDescW + qtyLW + uomW;
+  const idxW = IDX_W;
+  const prDescW = PR_DESC_W;
+  const qtyLW = QTY_L_W;
+  const uomW = UOM_W;
+  const leftW = LEFT_W;
 
   return (
     <Document title="Technical Approval Form" author="AI Procurement Copilot">
@@ -321,10 +323,7 @@ function ApprovalDocument({
 
         {groups.map((group, gi) => {
           const n = group.length;
-          const supW = Math.max(150, (USABLE - leftW) / n);
-          const subQtyW = 24;
-          const subDescW = Math.max(70, Math.round(supW * 0.5));
-          const subPriceW = supW - subDescW - subQtyW;
+          const { supW, desc: subDescW, qty: subQtyW, price: subPriceW } = LAYOUT.supplierSubCols(n);
 
           return (
             <View key={gi} wrap={false}>
