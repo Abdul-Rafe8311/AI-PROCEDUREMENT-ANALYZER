@@ -186,14 +186,21 @@ test('TA PAGINATION: the continuation page carries REAL editable fields with uni
   const names = form.getFields().map((f) => f.getName());
   assert.equal(new Set(names).size, names.length, 'every field name is unique');
 
-  const last = doc.getPageCount();
-  const onLast = form.getFields().filter((f) => pages.get(f.getName()) === last);
-  assert.ok(onLast.length > 10, `page ${last} carries fields, got ${onLast.length}`);
-  const editable = onLast.filter((f) => f instanceof PDFTextField && !f.isReadOnly());
+  // The 5th supplier's block starts on a page of its own, after page 1.
+  const supFive = form.getFields().find((f) => f.getName().startsWith('sup_name.4.'))!;
+  const supFivePage = pages.get(supFive.getName())!;
+  assert.ok(supFivePage > 1, `supplier 5 starts on page ${supFivePage}, not page 1`);
+
+  const onPage = form.getFields().filter((f) => pages.get(f.getName()) === supFivePage);
+  assert.ok(onPage.length > 10, `page ${supFivePage} carries fields, got ${onPage.length}`);
+  const editable = onPage.filter((f) => f instanceof PDFTextField && !f.isReadOnly());
   assert.ok(editable.length > 5, 'continuation-page text fields are editable');
-  // The 5th supplier's own grid cells live there, not on page 1.
-  assert.ok(onLast.some((f) => /^cell_desc\..*\.s4\./.test(f.getName())), 'supplier-5 item cells are on its page');
-  assert.ok(onLast.some((f) => /^term\.Total Price without VAT\.s4\./.test(f.getName())), 'supplier-5 terms repeat on its page');
+  // Its own grid cells live there, not on page 1.
+  assert.ok(onPage.some((f) => /^cell_desc\..*\.s4\./.test(f.getName())), 'supplier-5 item cells are on its page');
+  // Its term rows repeat within its own block (same page or its continuation).
+  const terms = form.getFields().filter((f) => /^term\.Total Price without VAT\.s4\./.test(f.getName()));
+  assert.equal(terms.length, 1, 'supplier-5 total row exists exactly once');
+  assert.ok(pages.get(terms[0].getName())! >= supFivePage, 'supplier-5 terms follow its header');
 });
 
 test('TA PAGINATION: every supplier page repeats the term rows for the suppliers it shows', async () => {
@@ -239,7 +246,21 @@ test('TA TEXT: no identifier is split — a wrapped line never breaks inside a t
   );
 });
 
-test('TA TEXT: every field value FITS its widget — no line is clipped at the cell border', async () => {
+// The generated form pads every cell by PAD_X/PAD_Y and sets its own leading; these
+// two tests pin that contract so a layout change can never silently clip a value.
+const PAD_X = 8;
+const PAD_Y = 6;
+const LEAD_RATIO = 1.35;
+
+/** Font + size a field's text is actually drawn at, read back off its /DA. */
+function fieldType(f: PDFTextField, fonts: Record<string, PDFFont>) {
+  const widget = f.acroField.getWidgets()[0];
+  const da = String(widget.dict.get(PDFName.of('DA')) ?? f.acroField.getDefaultAppearance() ?? '');
+  const m = /\/([^\s/]+)\s+(\d*\.?\d+)\s+Tf/.exec(da);
+  return { size: m ? Number(m[2]) : 8.5, font: fonts[m?.[1] ?? ''] ?? fonts.Helvetica, rect: widget.getRectangle() };
+}
+
+test('TA TEXT: every field value FITS its widget — cell padding is never eaten by the text', async () => {
   const { doc, form } = await generateAndLoad(fiveSupplierAnalysis());
   const fonts: Record<string, PDFFont> = {
     Helvetica: await doc.embedFont(StandardFonts.Helvetica),
@@ -251,41 +272,50 @@ test('TA TEXT: every field value FITS its widget — no line is clipped at the c
     if (!(f instanceof PDFTextField)) continue;
     const value = f.getText() ?? '';
     if (!value.trim()) continue;
-    const widget = f.acroField.getWidgets()[0];
-    const rect = widget.getRectangle();
-    const da = String(widget.dict.get(PDFName.of('DA')) ?? f.acroField.getDefaultAppearance() ?? '');
-    const m = /\/([^\s/]+)\s+(\d*\.?\d+)\s+Tf/.exec(da);
-    const size = m ? Number(m[2]) : 8;
-    const font = fonts[m?.[1] ?? ''] ?? fonts.Helvetica;
+    const { size, font, rect } = fieldType(f, fonts);
     for (const line of value.split('\n')) {
       const w = font.widthOfTextAtSize(line, size);
-      // A viewer that re-lays out field text insets a few points on each side;
-      // the generator keeps that slack, so a line must be comfortably narrower.
-      if (w > rect.width - 6) offenders.push(`${f.getName()} (${w.toFixed(1)}pt in ${rect.width.toFixed(1)}pt): ${JSON.stringify(line)}`);
+      // Text must fit INSIDE the padding on both sides — never touch a border.
+      if (w > rect.width - 2 * PAD_X + 0.5) {
+        offenders.push(`${f.getName()} (${w.toFixed(1)}pt in ${rect.width.toFixed(1)}pt): ${JSON.stringify(line)}`);
+      }
     }
   }
-  assert.deepEqual(offenders, [], `values wider than their cell:\n${offenders.join('\n')}`);
+  assert.deepEqual(offenders, [], `values wider than their padded cell:\n${offenders.join('\n')}`);
 });
 
-test('TA TEXT: every field value FITS its widget VERTICALLY — no wrapped line drops out of the box', async () => {
+test('TA TEXT: every field value FITS its widget VERTICALLY at 1.35× leading', async () => {
   const { doc, form } = await generateAndLoad(fiveSupplierAnalysis());
-  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  const fonts: Record<string, PDFFont> = {
+    Helvetica: await doc.embedFont(StandardFonts.Helvetica),
+    'Helvetica-Bold': await doc.embedFont(StandardFonts.HelveticaBold),
+    'Helvetica-Oblique': await doc.embedFont(StandardFonts.HelveticaOblique),
+  };
   const offenders: string[] = [];
   for (const f of form.getFields()) {
     if (!(f instanceof PDFTextField)) continue;
     const value = f.getText() ?? '';
     if (!value.trim()) continue;
-    const widget = f.acroField.getWidgets()[0];
-    const rect = widget.getRectangle();
-    const da = String(widget.dict.get(PDFName.of('DA')) ?? '');
-    const size = Number(/\s(\d*\.?\d+)\s+Tf/.exec(da)?.[1] ?? 8);
-    const lines = value.split('\n').length;
-    // pdf-lib draws multiline text at heightAtSize(size) * 1.2 per line, starting
-    // one line-height below the top of the widget.
-    const needed = lines * helv.heightAtSize(size) * 1.2 + helv.heightAtSize(size) * 0.23;
-    if (needed > rect.height) offenders.push(`${f.getName()}: ${lines} line(s) need ${needed.toFixed(1)}pt, box is ${rect.height.toFixed(1)}pt`);
+    const { size, rect } = fieldType(f, fonts);
+    const needed = value.split('\n').length * size * LEAD_RATIO + PAD_Y;
+    if (needed > rect.height + 0.5) {
+      offenders.push(`${f.getName()}: needs ${needed.toFixed(1)}pt, box is ${rect.height.toFixed(1)}pt`);
+    }
   }
   assert.deepEqual(offenders, [], `values taller than their cell:\n${offenders.join('\n')}`);
+});
+
+test('TA TEXT: the spec-differs marker is ONE compact italic line, not a sentence', async () => {
+  const { form } = await generateAndLoad(fiveSupplierAnalysis());
+  const notes = form.getFields()
+    .filter((f) => f.getName().startsWith('cell_spec_note.'))
+    .map((f) => (f as PDFTextField).getText() ?? '');
+  assert.ok(notes.length > 0, 'spec-differs markers are still produced');
+  for (const n of notes) {
+    assert.equal(n.split('\n').length, 1, `one line: ${JSON.stringify(n)}`);
+    assert.match(n, /^spec differs/, `compact marker: ${JSON.stringify(n)}`);
+    assert.ok(n.length <= 44, `short enough to sit on one line: ${JSON.stringify(n)}`);
+  }
 });
 
 test('TA NEUTRAL: no green (best-value) highlighting anywhere on the form', async () => {
