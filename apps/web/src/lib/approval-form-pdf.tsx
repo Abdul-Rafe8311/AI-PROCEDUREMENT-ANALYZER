@@ -31,6 +31,7 @@ import {
   suggestWarranties,
 } from './item-matching';
 import { buildComparisonModel, supplierGroups } from './pr-comparison';
+import { applyItemReview, type ItemReview } from './item-review';
 import * as LAYOUT from './approval-form-layout';
 import {
   type AnalysisResult,
@@ -70,6 +71,9 @@ export interface ApprovalFormOptions {
   fx?: FxRates | null;
   /** the human's chosen supplier — printed as the Final Recommendation (never AI-written) */
   selectedSupplier?: string | null;
+  /** reviewer edits to the comparison table (description / qty / unit price per cell).
+   *  The form prints `edited ?? extracted` — see item-review.ts. */
+  itemReview?: ItemReview;
 }
 
 // Page geometry lives in the shared layout module so the pdf-lib field overlay
@@ -184,6 +188,7 @@ function ApprovalDocument({
   origins,
   fx,
   selectedSupplier,
+  itemReview,
 }: {
   analysis: AnalysisResult;
   signatureRoles: string[];
@@ -192,6 +197,7 @@ function ApprovalDocument({
   origins: Record<string, ApprovalFieldValue>;
   fx: FxRates | null;
   selectedSupplier: string | null;
+  itemReview?: ItemReview;
 }) {
   const qs = analysis.quotations;
   const qById = new Map(qs.map((q) => [q.id, q]));
@@ -202,7 +208,18 @@ function ApprovalDocument({
   const showOrigin = qs.some((q) => origins[q.id]?.enabled);
   // prOnly: rows come ONLY from the PR document — the TA form NEVER builds rows
   // from supplier descriptions (no supplier-union fallback, no 23-row explosion).
-  const model = buildComparisonModel(qs, analysis.purchaseRequisition, analysis.prMatch, { prOnly: true, fx });
+  // Extracted grid, then the reviewer's edits folded on top: what the buyer signed
+  // off in the dialog is what the form prints.
+  const reviewed = applyItemReview(
+    buildComparisonModel(qs, analysis.purchaseRequisition, analysis.prMatch, { prOnly: true, fx }),
+    itemReview,
+    fx,
+  );
+  const model = reviewed.model;
+  // Total Price without VAT: the reviewer's own arithmetic wins over the extracted
+  // total for any supplier they edited, so the printed total always agrees with the
+  // printed lines (freight included). Untouched suppliers keep their stated total.
+  const totalOf = (q: ExtractedQuotation) => reviewed.totals[q.id] ?? q.totalCost;
   const ai = aiRecommendation(analysis, fx);
   const supplierCurrencies = qs.map((q) => q.currency);
 
@@ -381,7 +398,7 @@ function ApprovalDocument({
                           <Text style={notQuoted ? s.notQuoted : undefined}>
                             {cell?.description ?? (notQuoted ? 'Not Quoted' : '')}
                           </Text>
-                          {cell?.matchState === 'quoted_spec_diff' && (
+                          {cell?.matchState === 'quoted_spec_diff' && !cell.specDiffCleared && (
                             <Text style={s.specDiffTag}>
                               spec differs{cell.specDiffNote ? `: ${cell.specDiffNote}` : ''}
                             </Text>
@@ -412,7 +429,7 @@ function ApprovalDocument({
                   const q = qById.get(sup.quotationId)!;
                   return (
                     <View key={sup.quotationId} style={{ width: supW, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3, alignItems: 'flex-end' }}>
-                      <MoneyDual amount={q.totalCost} currency={q.currency} fx={fx} showOriginal />
+                      <MoneyDual amount={totalOf(q)} currency={q.currency} fx={fx} showOriginal />
                     </View>
                   );
                 })}
@@ -630,7 +647,8 @@ export async function generateApprovalFormPdf(
 ): Promise<Blob> {
   const roles = options?.signatureRoles?.length ? options.signatureRoles : DEFAULT_SIGNATURE_ROLES;
   const comments =
-    options?.technicalComments ?? suggestTechnicalComments(analysis.prMatch, analysis.purchaseRequisition);
+    options?.technicalComments ??
+    suggestTechnicalComments(analysis.prMatch, analysis.purchaseRequisition, analysis.quotations);
   // Warranty / Country of Origin: use the caller's per-supplier values (toggles +
   // human edits) when provided; otherwise default every supplier ON with the AI
   // pre-fill (so a direct download without opening the dialog still fills them).
@@ -650,6 +668,7 @@ export async function generateApprovalFormPdf(
       origins={origins}
       fx={fx}
       selectedSupplier={options?.selectedSupplier ?? null}
+      itemReview={options?.itemReview}
     />,
   ).toBlob();
 }

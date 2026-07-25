@@ -190,7 +190,8 @@ export async function generateApprovalFormPdf(
   const fx = options?.fx !== undefined ? options.fx : await getFxRates();
   const model = buildComparisonModel(qs, analysis.purchaseRequisition, analysis.prMatch, { prOnly: true, fx });
   const qById = new Map(qs.map((q) => [q.id, q]));
-  const comments = options?.technicalComments ?? suggestTechnicalComments(analysis.prMatch, analysis.purchaseRequisition);
+  const comments =
+    options?.technicalComments ?? suggestTechnicalComments(analysis.prMatch, analysis.purchaseRequisition, analysis.quotations);
   const warranties = options?.warranties ?? buildApprovalFields(qs, suggestWarranties(qs));
   const origins = options?.countriesOfOrigin ?? buildApprovalFields(qs, suggestOrigins(qs));
   const showWarranty = qs.some((q) => warranties[q.id]?.enabled);

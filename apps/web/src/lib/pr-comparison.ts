@@ -39,6 +39,9 @@ export interface SupplierCell {
   matchState?: PrItemMatchState | null;
   /** short note on WHAT differs, when matchState is 'quoted_spec_diff' (else null) */
   specDiffNote?: string | null;
+  // ── reviewer override (Technical Approval Form only; see item-review.ts) ──
+  /** the reviewer explicitly dismissed the "spec differs" flag for this cell */
+  specDiffCleared?: boolean;
 }
 
 export interface ComparisonRow {

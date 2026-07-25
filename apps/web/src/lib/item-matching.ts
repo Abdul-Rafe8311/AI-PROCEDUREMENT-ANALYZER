@@ -507,22 +507,39 @@ export function resolvePrDescription(
 export function suggestTechnicalComments(
   prMatch: PrMatchResult | null | undefined,
   pr: PurchaseRequisition | null | undefined,
+  quotations?: ExtractedQuotation[] | null,
 ): Record<string, TechnicalComment> {
   const out: Record<string, TechnicalComment> = {};
-  if (!prMatch || !pr) return out;
+  if (!pr) return out;
+
+  // Each supplier's verdict is derived from ITS OWN per-row match results. When the
+  // caller passes the quotations we re-derive the match here rather than trusting a
+  // stored `prMatch`: a stored result can fall out of step with the quotation list
+  // (re-extraction, an id de-duplication, a restored analysis), and the join is by
+  // array position inside that result — which is how a comment ends up printed
+  // against the wrong supplier. Matching from the quotation itself removes the join.
+  const matches: SupplierMatch[] = quotations?.length
+    ? quotations.map((q) => matchSupplierItems(q, pr.items))
+    : (prMatch?.bySupplier ?? []);
+  if (!matches.length) return out;
+
   const nums = (items: PrItemMatch[], state: PrItemMatchState) =>
     items.filter((p) => p.state === state).map((p) => p.prIndex + 1).join(',');
 
-  for (const sm of prMatch.bySupplier) {
+  for (const sm of matches) {
     const prItems = sm.prItems ?? [];
-    const specList = nums(prItems, 'quoted_spec_diff');
+    const notQuoted = prItems.filter((p) => p.state === 'not_quoted');
+    const specDiff = prItems.filter((p) => p.state === 'quoted_spec_diff');
     const missingList = nums(prItems, 'not_quoted');
+    const specList = nums(prItems, 'quoted_spec_diff');
 
     let verdict: string;
-    if (missingList) {
+    // GUARD: the "items not quoted" phrase may only appear when this supplier
+    // genuinely has not-quoted rows of its own.
+    if (notQuoted.length > 0 && missingList) {
       verdict = `Review — items not quoted: ${missingList}`;
-      if (specList) verdict += `; spec differs on items ${specList}, review grade`;
-    } else if (specList) {
+      if (specDiff.length > 0 && specList) verdict += `; spec differs on items ${specList}, review grade`;
+    } else if (specDiff.length > 0 && specList) {
       verdict = `Technically Accepted — spec differs on items ${specList}, review grade`;
     } else {
       verdict = 'Technically Accepted';
@@ -531,6 +548,7 @@ export function suggestTechnicalComments(
   }
   return out;
 }
+
 
 // The AI pre-fill VALUE (plain text) for the per-supplier Warranty field: the
 // warranty verbatim from the quote when stated, else "Not stated" — NEVER an

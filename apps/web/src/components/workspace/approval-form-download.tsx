@@ -29,6 +29,22 @@ import {
   suggestTechnicalComments,
   suggestWarranties,
 } from '@/lib/item-matching';
+import { buildComparisonModel } from '@/lib/pr-comparison';
+import { useFxRates } from '@/lib/use-fx-rates';
+import {
+  buildItemReview,
+  cellEdited,
+  cellKey,
+  editedCount,
+  isEdited,
+  type ItemReview,
+  type ItemReviewStore,
+  type ReviewedCell,
+  type ReviewedValue,
+  rowKeyOf,
+  toStore,
+  valueOf,
+} from '@/lib/item-review';
 import {
   type AnalysisResult,
   type ApprovalFieldValue,
@@ -46,6 +62,7 @@ const ROLES_KEY = 'approval:signatureRoles';
 const COMMENTS_KEY = 'approval:comments:v1';
 const WARRANTY_KEY = 'approval:warranty:v1';
 const ORIGIN_KEY = 'approval:origin:v1';
+const ITEMS_KEY = 'approval:items:v1';
 
 // A persisted per-supplier override for a toggleable field: `enabled` overrides the
 // default-ON toggle; a `text` string (incl. "") is the human's edit/clear. Absent
@@ -171,6 +188,69 @@ function useToggleableField(
   return { values, edit, toggle, reset };
 }
 
+// ── Comparison Table review ────────────────────────────────────────────────
+// Same audit-trail pattern as the Technical Comments, applied per FIELD: the
+// extracted original is kept beside the reviewer's edit, the badge says which one
+// the form will print, and "Reset to AI suggestion" restores the original.
+// Reviewer edits change the FORM only — scoring stays on the extracted values.
+function useItemReview(analysis: AnalysisResult, supKey: string) {
+  const fx = useFxRates();
+  // The grid exactly as the form builds it: anchored to the PR's line items.
+  const model = useMemo(
+    () =>
+      buildComparisonModel(analysis.quotations, analysis.purchaseRequisition, analysis.prMatch, {
+        prOnly: true,
+        fx,
+      }),
+    [analysis, fx],
+  );
+  const [review, setReview] = useState<ItemReview>(() =>
+    buildItemReview(model, analysis.quotations, loadFieldStore(ITEMS_KEY, supKey) as ItemReviewStore),
+  );
+  // Re-seed when the analysed suppliers change (or on reload) — overlay persisted edits.
+  useEffect(() => {
+    setReview(buildItemReview(model, analysis.quotations, loadFieldStore(ITEMS_KEY, supKey) as ItemReviewStore));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supKey, model]);
+
+  const commit = (next: ItemReview) => {
+    setReview(next);
+    saveFieldStore(ITEMS_KEY, supKey, toStore(next) as FieldStore);
+  };
+  const patch = (key: string, fn: (c: ReviewedCell) => ReviewedCell) => {
+    const cur = review[key];
+    if (!cur) return;
+    commit({ ...review, [key]: fn(cur) });
+  };
+
+  return {
+    fx,
+    model,
+    review,
+    /** A human edit to one field — the original is kept for the audit trail. */
+    edit: (key: string, field: 'description' | 'qty' | 'unitPrice', text: string) =>
+      patch(key, (c) => ({ ...c, [field]: { ...c[field], edited: text } })),
+    /** Restore one field to the extracted value. */
+    reset: (key: string, field: 'description' | 'qty' | 'unitPrice') =>
+      patch(key, (c) => ({ ...c, [field]: { ...c[field], edited: null } })),
+    /** Restore every field of a cell (and re-arm its spec-differs flag). */
+    resetCell: (key: string) =>
+      patch(key, (c) => ({
+        ...c,
+        description: { ...c.description, edited: null },
+        qty: { ...c.qty, edited: null },
+        unitPrice: { ...c.unitPrice, edited: null },
+        specDiffCleared: false,
+        added: false,
+      })),
+    /** Explicitly dismiss / restore the matcher's spec-differs flag. */
+    setSpecDiffCleared: (key: string, cleared: boolean) => patch(key, (c) => ({ ...c, specDiffCleared: cleared })),
+    /** Deliberately turn a "Not Quoted" row into a quoted one (never implicit). */
+    addQuotedLine: (key: string, add: boolean) => patch(key, (c) => ({ ...c, added: add })),
+  };
+}
+type ItemReviewApi = ReturnType<typeof useItemReview>;
+
 // AI suggestion for each supplier, with any persisted HUMAN edit overlaid (a human
 // edit becomes a plain, non-AI comment).
 function buildComments(
@@ -209,7 +289,7 @@ export function ApprovalFormDownload({
 
   const supKey = analysis.quotations.map((q) => q.id).join('|');
   const suggestions = useMemo(
-    () => suggestTechnicalComments(analysis.prMatch, analysis.purchaseRequisition),
+    () => suggestTechnicalComments(analysis.prMatch, analysis.purchaseRequisition, analysis.quotations),
     [analysis],
   );
   const [comments, setComments] = useState<Record<string, TechnicalComment>>(() =>
@@ -221,6 +301,10 @@ export function ApprovalFormDownload({
   const originAi = useMemo(() => suggestOrigins(analysis.quotations), [analysis]);
   const warranty = useToggleableField(analysis, warrantyAi, WARRANTY_KEY, supKey);
   const origin = useToggleableField(analysis, originAi, ORIGIN_KEY, supKey);
+
+  // The comparison table itself — every description / qty / unit price the form
+  // prints is reviewable before it goes into the PDF.
+  const items = useItemReview(analysis, supKey);
 
   useEffect(() => setRoles(loadRoles()), []);
   // Re-seed when the analysed suppliers change (or on reload) — overlay persisted edits.
@@ -272,6 +356,9 @@ export function ApprovalFormDownload({
         warranties: warranty.values,
         countriesOfOrigin: origin.values,
         selectedSupplier,
+        // The reviewer's corrections to the grid — the form prints these, falling
+        // back to the extracted value wherever they left a field untouched.
+        itemReview: items.review,
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -294,6 +381,7 @@ export function ApprovalFormDownload({
       <div className="flex items-center gap-2">
         <CustomizeFormDialog
           analysis={analysis}
+          items={items}
           comments={comments}
           suggestions={suggestions}
           onEdit={editComment}
@@ -339,6 +427,230 @@ interface ToggleableField {
 // Origin). Same edit/reset/AI-label behaviour as Technical Comments, plus a
 // per-supplier show/hide switch. Turning a supplier OFF hides the field on the
 // generated form (it does NOT delete the underlying extracted value).
+// One reviewable field, styled exactly like a Technical Comment: the badge says
+// whether the form will print the AI/extracted value or the reviewer's, and
+// "Reset to AI suggestion" puts the original back.
+function ReviewField({
+  label,
+  value,
+  suffix,
+  placeholder,
+  onEdit,
+  onReset,
+}: {
+  label: string;
+  value: ReviewedValue;
+  /** e.g. the supplier's own currency next to the unit price */
+  suffix?: string;
+  placeholder?: string;
+  onEdit: (text: string) => void;
+  onReset: () => void;
+}) {
+  const edited = isEdited(value);
+  const hasOriginal = value.original.trim() !== '';
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-medium text-muted-foreground">
+          {label}
+          {suffix ? <span className="ml-1 font-semibold text-foreground">{suffix}</span> : null}
+        </span>
+        {edited ? (
+          <span className="rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-semibold text-success">
+            Your value
+          </span>
+        ) : hasOriginal ? (
+          <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
+            <Sparkles className="h-3 w-3" /> AI suggested — please review
+          </span>
+        ) : null}
+      </div>
+      <input
+        type="text"
+        value={valueOf(value)}
+        onChange={(e) => onEdit(e.target.value)}
+        placeholder={placeholder}
+        className={cn(
+          'w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary',
+          !edited && hasOriginal && 'italic text-primary',
+        )}
+      />
+      {edited && hasOriginal && (
+        <div className="mt-1 flex items-center justify-between gap-2">
+          <span className="truncate text-[11px] text-muted-foreground" title={value.original}>
+            Extracted: {value.original}
+          </span>
+          <button
+            type="button"
+            onClick={onReset}
+            className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          >
+            <RotateCcw className="h-3 w-3" /> Reset to AI suggestion
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The comparison grid the form prints, made editable one PR item row at a time.
+function ComparisonTableSection({ items }: { items: ItemReviewApi }) {
+  const { model, review, fx } = items;
+  if (!model.suppliers.length || !model.rows.length) return null;
+  const edits = editedCount(review);
+
+  return (
+    <section className="mt-1">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">Comparison Table</h3>
+        {edits > 0 && (
+          <span className="rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-semibold text-success">
+            {edits} cell{edits === 1 ? '' : 's'} edited
+          </span>
+        )}
+      </div>
+      <p className="mb-2 text-[11px] text-muted-foreground">
+        Correct what the form prints — the item description, quantity and unit price each supplier quoted. The unit
+        price is edited in the supplier&apos;s own quoted currency; SAR / USD on the form are recalculated from it at the
+        live rate{fx ? '' : ' (unavailable right now — amounts stay in the original currency)'}. Totals recompute from
+        your figures. Scoring and the recommendation are unaffected — they always use the extracted values.
+      </p>
+      <ul className="space-y-2">
+        {model.rows.map((row) => {
+          const rowKey = rowKeyOf(row);
+          const touched = model.suppliers.filter((s) => cellEdited(review[cellKey(rowKey, s.quotationId)] ?? ({} as ReviewedCell))).length;
+          return (
+            <li key={rowKey} className="rounded-lg border border-border">
+              <details>
+                <summary className="cursor-pointer list-none px-3 py-2 text-sm">
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="min-w-0">
+                      <span className="font-semibold">
+                        {row.kind === 'charge' ? row.label : `${row.index}. ${row.label}`}
+                      </span>
+                      {row.qty != null && (
+                        <span className="ml-1 text-[11px] text-muted-foreground">
+                          · PR qty {row.qty.toLocaleString('en-US')} {row.uom ?? ''}
+                        </span>
+                      )}
+                    </span>
+                    {touched > 0 && (
+                      <span className="shrink-0 rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-semibold text-success">
+                        {touched} edited
+                      </span>
+                    )}
+                  </span>
+                </summary>
+                <ul className="space-y-3 border-t border-border p-3">
+                  {model.suppliers.map((sup) => {
+                    const key = cellKey(rowKey, sup.quotationId);
+                    const c = review[key];
+                    if (!c) return null;
+                    const notQuoted = !c.quoted && !c.added;
+                    return (
+                      <li key={sup.quotationId} className="rounded-lg border border-border p-3">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <span className="text-sm font-semibold">{sup.supplier}</span>
+                          <div className="flex items-center gap-2">
+                            {/* The matcher's finding survives an edit — only an explicit clear removes it. */}
+                            {c.specDiff && (
+                              <button
+                                type="button"
+                                onClick={() => items.setSpecDiffCleared(key, !c.specDiffCleared)}
+                                title={
+                                  c.specDiffCleared
+                                    ? 'Hidden on the form — click to show the spec-differs flag again'
+                                    : `Shown on the form${c.specDiffNote ? `: ${c.specDiffNote}` : ''} — click to clear it`
+                                }
+                                className={cn(
+                                  'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition',
+                                  c.specDiffCleared
+                                    ? 'border-border text-muted-foreground hover:bg-muted'
+                                    : 'border-warning/40 bg-warning/10 text-warning hover:bg-warning/15',
+                                )}
+                              >
+                                {c.specDiffCleared ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                                spec differs
+                              </button>
+                            )}
+                            {cellEdited(c) && (
+                              <button
+                                type="button"
+                                onClick={() => items.resetCell(key)}
+                                className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                              >
+                                <RotateCcw className="h-3 w-3" /> Reset row
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {notQuoted ? (
+                          // Editing must never silently turn "Not Quoted" into a quote.
+                          <div className="flex items-center justify-between gap-2 rounded-md border border-dashed border-border bg-muted/30 px-2.5 py-2">
+                            <span className="text-[11px] italic text-muted-foreground">
+                              Not Quoted — this supplier did not quote this item.
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => items.addQuotedLine(key, true)}
+                              className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                            >
+                              <Plus className="h-3 w-3" /> Add a quoted line
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="space-y-2.5">
+                            <ReviewField
+                              label="Item description"
+                              value={c.description}
+                              placeholder="the supplier's own quoted description"
+                              onEdit={(t) => items.edit(key, 'description', t)}
+                              onReset={() => items.reset(key, 'description')}
+                            />
+                            <div className="grid grid-cols-2 gap-2.5">
+                              <ReviewField
+                                label="Quantity"
+                                value={c.qty}
+                                placeholder="e.g. 10,000"
+                                onEdit={(t) => items.edit(key, 'qty', t)}
+                                onReset={() => items.reset(key, 'qty')}
+                              />
+                              <ReviewField
+                                label="Unit price"
+                                suffix={c.currency}
+                                value={c.unitPrice}
+                                placeholder="e.g. 2.42"
+                                onEdit={(t) => items.edit(key, 'unitPrice', t)}
+                                onReset={() => items.reset(key, 'unitPrice')}
+                              />
+                            </div>
+                            {c.added && !c.quoted && (
+                              <div className="flex items-center justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => items.addQuotedLine(key, false)}
+                                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                                >
+                                  <Trash2 className="h-3 w-3" /> Back to &ldquo;Not Quoted&rdquo;
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </details>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 function ToggleableFieldSection({
   title,
   hint,
@@ -437,6 +749,7 @@ function ToggleableFieldSection({
 
 function CustomizeFormDialog({
   analysis,
+  items,
   comments,
   suggestions,
   onEdit,
@@ -452,6 +765,7 @@ function CustomizeFormDialog({
   hasSuggestions,
 }: {
   analysis: AnalysisResult;
+  items: ItemReviewApi;
   comments: Record<string, TechnicalComment>;
   suggestions: Record<string, TechnicalComment>;
   onEdit: (id: string, text: string) => void;
@@ -506,8 +820,11 @@ function CustomizeFormDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {/* ── Comparison Table (edit the line-item data the form prints) ── */}
+        <ComparisonTableSection items={items} />
+
         {/* ── Technical Comments ── */}
-        <section className="mt-1">
+        <section className="mt-6">
           <h3 className="mb-2 text-sm font-semibold">Technical Comments</h3>
           {analysis.quotations.length ? (
             <ul className="space-y-3">
