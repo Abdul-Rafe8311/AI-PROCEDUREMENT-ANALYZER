@@ -6,8 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PDFCheckBox, PDFDocument, PDFTextField } from 'pdf-lib';
-import { extractText, getDocumentProxy } from 'unpdf';
+import { PDFCheckBox, PDFDocument, PDFFont, PDFName, PDFTextField, StandardFonts } from 'pdf-lib';
 import { purchaseRequisitionFromLlm, quotationsFromLlmSuppliers, type LlmSupplier } from './extraction-server';
 import { assembleAnalysis } from './analysis-engine';
 import { generateApprovalFormPdf } from './approval-form-acroform';
@@ -25,7 +24,7 @@ const fx: FxRates = {
 const pr = purchaseRequisitionFromLlm(
   {
     requestNo: '12601612',
-    description: 'Anchors for production department.',
+    description: 'Anchors for Kiln department',
     items: [
       { itemCode: '404602703004', description: 'Anchor, Corrugated, TWS.10(60)-200(140)-40-253, Grade 253 MA', quantity: 10000, unit: 'EA' },
       { itemCode: '404602701007', description: 'SS 310 ANCHOR TYPE: V, SIZE: 10 X 70 MM.', quantity: 2000, unit: 'EA' },
@@ -40,7 +39,8 @@ const krosaki: LlmSupplier = {
   deliveryTime: '4 weeks after official order', deliveryTerms: 'CIF JEDDAH',
   countryOfOrigin: 'France', paymentTerms: 'CAD', warranty: '12 months', validUntil: null,
   lineItems: [
-    { name: 'TWS.10(60)-200', quantity: 10000, unitPrice: 2.42, totalPrice: 24200, category: 'product', uom: 'EA', availableInDays: null },
+    // The supplier's REAL part code — 30 characters that must never be split.
+    { name: 'TWS.10(60)-200(140)-45-253MA-C', quantity: 10000, unitPrice: 2.42, totalPrice: 24200, category: 'product', uom: 'EA', availableInDays: null },
     { name: 'V DIA 10MM H=70MM AISI 310 CAPPED', quantity: 2000, unitPrice: 0.95, totalPrice: 1900, category: 'product', uom: 'EA', availableInDays: null },
     { name: 'TRANSPORT PRICE CIF JEDDAH', quantity: 1, unitPrice: null, totalPrice: 3590, category: 'freight', uom: null, availableInDays: null },
   ],
@@ -56,11 +56,38 @@ const alnajim: LlmSupplier = {
 const quotations = quotationsFromLlmSuppliers([krosaki, alnajim], 'quotes.pdf', { currency: 'SAR', confidence: 0.6 });
 const analysis: AnalysisResult = assembleAnalysis(quotations, false, pr);
 
+/** Same two suppliers cloned out to FIVE, to exercise supplier pagination. */
+function fiveSupplierAnalysis(): AnalysisResult {
+  const names = ['KROSAKI', 'AL NAJIM', 'AlFRAN', 'Supply Wave', 'Refratechnik'];
+  const suppliers = names.map<LlmSupplier>((supplierName, i) => ({
+    ...(i % 2 === 0 ? krosaki : alnajim),
+    supplierName,
+    reference: `REF-${i}`,
+  }));
+  const qs = quotationsFromLlmSuppliers(suppliers, 'quotes.pdf', { currency: 'SAR', confidence: 0.6 });
+  return assembleAnalysis(qs, false, pr);
+}
+
 async function generateAndLoad(a: AnalysisResult) {
   const blob = await generateApprovalFormPdf(a, { fx });
   const bytes = new Uint8Array(await blob.arrayBuffer());
   const doc = await PDFDocument.load(bytes);
   return { bytes, doc, form: doc.getForm() };
+}
+
+/** 1-based page number each form field's widget lives on. */
+function fieldPages(doc: PDFDocument): Map<string, number> {
+  const out = new Map<string, number>();
+  const pages = doc.getPages();
+  for (const f of doc.getForm().getFields()) {
+    const dict = f.acroField.getWidgets()[0]?.dict;
+    pages.forEach((p, i) => {
+      const annots = p.node.Annots();
+      if (!annots) return;
+      for (let k = 0; k < annots.size(); k++) if (annots.lookup(k) === dict) out.set(f.getName(), i + 1);
+    });
+  }
+  return out;
 }
 
 test('TA ACROFORM: output is a real AcroForm with interactive text fields + checkboxes (not flat text)', async () => {
@@ -90,17 +117,23 @@ test('TA ACROFORM: fields are PRE-FILLED with the extracted/generated values (ed
     return f?.getText() ?? '';
   };
   assert.ok(val('pr_number.').includes('12601612'), `PR # pre-filled: ${val('pr_number.')}`);
-  assert.ok(val('pr_description.').includes('Anchors'), `PR description pre-filled: ${val('pr_description.')}`);
   assert.ok(val('sup_name.').length > 0, 'supplier name pre-filled');
   // Unit price is normalized to SAR + USD at the live rate (dual currency).
   assert.match(val('cell_price.'), /SAR .* \/ USD /, `dual-currency unit price: ${val('cell_price.')}`);
   assert.ok(val('term.Warranty.').includes('12 months'), `warranty pre-filled: ${val('term.Warranty.')}`);
   // Technical Comment is AI-suggested and pre-filled (editable), never asserted silently.
-  assert.match(val('tech_comment.'), /AI SUGGESTED/, `AI-suggested tech comment: ${val('tech_comment.')}`);
+  assert.match(val('term.Technical Comments.'), /AI SUGGESTED/, `AI-suggested tech comment: ${val('term.Technical Comments.')}`);
+});
+
+test('TA ACROFORM: PR Description is printed VERBATIM and IN FULL (never shortened to "Anchors")', async () => {
+  const { form } = await generateAndLoad(analysis);
+  const f = form.getFields().find((x) => x.getName().startsWith('pr_description.')) as PDFTextField;
+  assert.equal((f.getText() ?? '').replace(/\n/g, ' '), 'Anchors for Kiln department');
 });
 
 test('TA ACROFORM: live FX stamp is rendered on the page', async () => {
   const { bytes } = await generateAndLoad(analysis);
+  const { extractText, getDocumentProxy } = await import('unpdf');
   const proxy = await getDocumentProxy(bytes);
   const { text } = await extractText(proxy, { mergePages: true });
   const merged = String(text);
@@ -114,4 +147,180 @@ test('TA ACROFORM: Signature/Date fields start BLANK for the team to complete by
   const sigs = fields.filter((f) => f.getName().startsWith('signature.')) as PDFTextField[];
   const dates = fields.filter((f) => f.getName().startsWith('sig_date.')) as PDFTextField[];
   for (const f of [...sigs, ...dates]) assert.equal((f.getText() ?? '').trim(), '', `${f.getName()} blank`);
+});
+
+// ── SUPPLIER PAGINATION ────────────────────────────────────────────────────
+// The bug this form was rewritten for: all five suppliers were crammed onto one
+// landscape page (15 sub-columns), so no column was wide enough for a part code
+// at any font size.
+
+test('TA PAGINATION: 5 suppliers → at most FOUR supplier columns per page, split 1-4 then 5-5', async () => {
+  const { doc, form } = await generateAndLoad(fiveSupplierAnalysis());
+  const pages = fieldPages(doc);
+  assert.ok(doc.getPageCount() >= 2, `paginated, got ${doc.getPageCount()} page(s)`);
+
+  // sup_name.<colIndex> identifies which supplier column is drawn where.
+  const perPage = new Map<number, Set<string>>();
+  for (const f of form.getFields()) {
+    const m = /^sup_name\.(\d+)\./.exec(f.getName());
+    if (!m) continue;
+    const p = pages.get(f.getName())!;
+    if (!perPage.has(p)) perPage.set(p, new Set());
+    perPage.get(p)!.add(m[1]);
+  }
+  for (const [p, cols] of perPage) {
+    assert.ok(cols.size <= 4, `page ${p} shows ${cols.size} supplier columns (max 4)`);
+  }
+  const seen = new Set([...perPage.values()].flatMap((s) => [...s]));
+  assert.deepEqual([...seen].sort(), ['0', '1', '2', '3', '4'], 'every supplier appears somewhere');
+
+  // Suppliers 1-4 and supplier 5 never share a page.
+  for (const cols of perPage.values()) {
+    if (cols.has('4')) assert.equal(cols.size, 1, 'the 5th supplier gets its own block');
+  }
+});
+
+test('TA PAGINATION: the continuation page carries REAL editable fields with unique names', async () => {
+  const { doc, form } = await generateAndLoad(fiveSupplierAnalysis());
+  const pages = fieldPages(doc);
+  const names = form.getFields().map((f) => f.getName());
+  assert.equal(new Set(names).size, names.length, 'every field name is unique');
+
+  const last = doc.getPageCount();
+  const onLast = form.getFields().filter((f) => pages.get(f.getName()) === last);
+  assert.ok(onLast.length > 10, `page ${last} carries fields, got ${onLast.length}`);
+  const editable = onLast.filter((f) => f instanceof PDFTextField && !f.isReadOnly());
+  assert.ok(editable.length > 5, 'continuation-page text fields are editable');
+  // The 5th supplier's own grid cells live there, not on page 1.
+  assert.ok(onLast.some((f) => /^cell_desc\..*\.s4\./.test(f.getName())), 'supplier-5 item cells are on its page');
+  assert.ok(onLast.some((f) => /^term\.Total Price without VAT\.s4\./.test(f.getName())), 'supplier-5 terms repeat on its page');
+});
+
+test('TA PAGINATION: every supplier page repeats the term rows for the suppliers it shows', async () => {
+  const { doc, form } = await generateAndLoad(fiveSupplierAnalysis());
+  const pages = fieldPages(doc);
+  const termsFor = (col: string) =>
+    form.getFields().filter((f) => f.getName().startsWith('term.') && f.getName().includes(`.s${col}.`));
+  for (const col of ['0', '1', '2', '3', '4']) {
+    const labels = termsFor(col).map((f) => f.getName().split('.')[1]);
+    for (const required of ['Total Price without VAT', 'Payment Terms', 'Delivery Time', 'Delivery Terms', 'Technical Comments']) {
+      assert.ok(labels.includes(required), `supplier ${col} has a "${required}" row`);
+    }
+    // …and they sit on the same page as that supplier's own header.
+    const header = form.getFields().find((f) => f.getName().startsWith(`sup_name.${col}.`))!;
+    assert.ok(pages.get(header.getName())! >= 1);
+  }
+});
+
+// ── TEXT IS NEVER MUTILATED ────────────────────────────────────────────────
+
+test('TA TEXT: no identifier is split — a wrapped line never breaks inside a token', async () => {
+  const { form } = await generateAndLoad(fiveSupplierAnalysis());
+  const codes = ['TWS.10(60)-200(140)-45-253MA-C', 'V DIA 10MM H=70MM AISI 310 CAPPED', 'TRANSPORT PRICE CIF JEDDAH'];
+  const descs = form.getFields()
+    .filter((f) => f.getName().startsWith('cell_desc.'))
+    .map((f) => (f as PDFTextField).getText() ?? '');
+  // Every wrapped line is made only of WHOLE whitespace-delimited tokens of the
+  // original value — i.e. the wrapper never cut through a part code.
+  for (const v of descs) {
+    for (const line of v.split('\n')) {
+      for (const tok of line.split(/\s+/).filter(Boolean)) {
+        assert.ok(
+          codes.concat(descs.flatMap((d) => d.split(/\s+/))).includes(tok) || /^[\w().,:/=-]+$/.test(tok),
+          `token "${tok}" looks broken`,
+        );
+      }
+    }
+  }
+  // The 30-character Krosaki code survives intact on ONE line.
+  assert.ok(
+    descs.some((d) => d.split('\n').includes('TWS.10(60)-200(140)-45-253MA-C')),
+    `Krosaki part code kept whole: ${JSON.stringify(descs.slice(0, 3))}`,
+  );
+});
+
+test('TA TEXT: every field value FITS its widget — no line is clipped at the cell border', async () => {
+  const { doc, form } = await generateAndLoad(fiveSupplierAnalysis());
+  const fonts: Record<string, PDFFont> = {
+    Helvetica: await doc.embedFont(StandardFonts.Helvetica),
+    'Helvetica-Bold': await doc.embedFont(StandardFonts.HelveticaBold),
+    'Helvetica-Oblique': await doc.embedFont(StandardFonts.HelveticaOblique),
+  };
+  const offenders: string[] = [];
+  for (const f of form.getFields()) {
+    if (!(f instanceof PDFTextField)) continue;
+    const value = f.getText() ?? '';
+    if (!value.trim()) continue;
+    const widget = f.acroField.getWidgets()[0];
+    const rect = widget.getRectangle();
+    const da = String(widget.dict.get(PDFName.of('DA')) ?? f.acroField.getDefaultAppearance() ?? '');
+    const m = /\/([^\s/]+)\s+(\d*\.?\d+)\s+Tf/.exec(da);
+    const size = m ? Number(m[2]) : 8;
+    const font = fonts[m?.[1] ?? ''] ?? fonts.Helvetica;
+    for (const line of value.split('\n')) {
+      const w = font.widthOfTextAtSize(line, size);
+      // A viewer that re-lays out field text insets a few points on each side;
+      // the generator keeps that slack, so a line must be comfortably narrower.
+      if (w > rect.width - 6) offenders.push(`${f.getName()} (${w.toFixed(1)}pt in ${rect.width.toFixed(1)}pt): ${JSON.stringify(line)}`);
+    }
+  }
+  assert.deepEqual(offenders, [], `values wider than their cell:\n${offenders.join('\n')}`);
+});
+
+test('TA TEXT: every field value FITS its widget VERTICALLY — no wrapped line drops out of the box', async () => {
+  const { doc, form } = await generateAndLoad(fiveSupplierAnalysis());
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  const offenders: string[] = [];
+  for (const f of form.getFields()) {
+    if (!(f instanceof PDFTextField)) continue;
+    const value = f.getText() ?? '';
+    if (!value.trim()) continue;
+    const widget = f.acroField.getWidgets()[0];
+    const rect = widget.getRectangle();
+    const da = String(widget.dict.get(PDFName.of('DA')) ?? '');
+    const size = Number(/\s(\d*\.?\d+)\s+Tf/.exec(da)?.[1] ?? 8);
+    const lines = value.split('\n').length;
+    // pdf-lib draws multiline text at heightAtSize(size) * 1.2 per line, starting
+    // one line-height below the top of the widget.
+    const needed = lines * helv.heightAtSize(size) * 1.2 + helv.heightAtSize(size) * 0.23;
+    if (needed > rect.height) offenders.push(`${f.getName()}: ${lines} line(s) need ${needed.toFixed(1)}pt, box is ${rect.height.toFixed(1)}pt`);
+  }
+  assert.deepEqual(offenders, [], `values taller than their cell:\n${offenders.join('\n')}`);
+});
+
+test('TA NEUTRAL: no green (best-value) highlighting anywhere on the form', async () => {
+  const { bytes } = await generateAndLoad(fiveSupplierAnalysis());
+  const { inflateSync } = await import('node:zlib');
+  // Every colour operator drawn on any page, including inside the fields'
+  // appearance streams — the whole form must stay neutral.
+  const doc = await PDFDocument.load(bytes);
+  const sources: string[] = [];
+  for (const [, obj] of doc.context.enumerateIndirectObjects()) {
+    const raw = obj as unknown as { contents?: Uint8Array; dict?: { get(n: PDFName): unknown } };
+    if (!raw?.contents) continue;
+    let buf = Buffer.from(raw.contents);
+    const filter = String(raw.dict?.get(PDFName.of('Filter')) ?? '');
+    if (filter.includes('FlateDecode')) { try { buf = Buffer.from(inflateSync(buf)); } catch { continue; } }
+    sources.push(buf.toString('latin1'));
+  }
+  const colors = sources.flatMap((src) => [...src.matchAll(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+(?:rg|RG)\b/g)]);
+  assert.ok(colors.length > 20, `content streams were scanned (found ${colors.length} colour ops)`);
+  const green = colors
+    .map((m) => [Number(m[1]), Number(m[2]), Number(m[3])] as const)
+    // "Green" = a green channel that clearly dominates both others.
+    .filter(([r, g, b]) => g > r + 0.08 && g > b + 0.08)
+    .map(([r, g, b]) => `rgb(${r}, ${g}, ${b})`);
+  assert.deepEqual(green, [], `green fills found: ${green.join(', ')}`);
+});
+
+test('TA NEUTRAL: page numbering is stamped so a multi-page form cannot be read out of order', async () => {
+  const { bytes, doc } = await generateAndLoad(fiveSupplierAnalysis());
+  const { extractText, getDocumentProxy } = await import('unpdf');
+  const proxy = await getDocumentProxy(bytes);
+  const { text } = await extractText(proxy, { mergePages: true });
+  const merged = String(text);
+  assert.ok(merged.includes(`Page 1 of ${doc.getPageCount()}`), 'page 1 stamped');
+  assert.ok(merged.includes(`Page ${doc.getPageCount()} of ${doc.getPageCount()}`), 'last page stamped');
+  assert.match(merged, /Suppliers 1-4 of 5/, 'supplier range header printed');
+  assert.match(merged, /Suppliers 5-5 of 5/, 'second supplier block header printed');
 });

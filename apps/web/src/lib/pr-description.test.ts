@@ -4,8 +4,47 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { purchaseRequisitionFromLlm } from './extraction-server';
+import { prSubjectFromText, purchaseRequisitionFromLlm } from './extraction-server';
 import { resolvePrDescription } from './item-matching';
+
+// ── Header-subject rescue: when the extractor returns no `description`, the
+// requisition's OWN subject line is read out of the document text verbatim, so the
+// TA form never falls back to the derived one-word summary ("Anchors"). ──
+
+test('PR SUBJECT: labelled header line is captured IN FULL ("Anchors for Kiln department")', () => {
+  const text = [
+    'NAJRAN CEMENT COMPANY',
+    'Approved Requisition Report',
+    'Request No.: 12601612            Date: 12/06/2026',
+    'Description: Anchors for Kiln department',
+    'Department Code: 4200',
+    '',
+    'Item Code    Description                                   UOM   Quantity',
+    '404602703004 Anchor, Corrugated, TWS.10(60)-200(140)-40-253 EA    10000',
+  ].join('\n');
+  assert.equal(prSubjectFromText(text), 'Anchors for Kiln department');
+});
+
+test('PR SUBJECT: an UNLABELLED purpose line is captured too', () => {
+  const text = ['Approved Requisition Report', 'Request No. 12601612', 'Anchors for Kiln department', '', 'Item Code  Description'].join('\n');
+  assert.equal(prSubjectFromText(text), 'Anchors for Kiln department');
+});
+
+test('PR SUBJECT: "Subject"/"Required for" labels work, trailing punctuation trimmed', () => {
+  assert.equal(prSubjectFromText('Subject : Conversion kit for rotary packer -'), 'Conversion kit for rotary packer');
+  assert.equal(prSubjectFromText('Required For: Kiln 2 shutdown spares'), 'Kiln 2 shutdown spares');
+});
+
+test('PR SUBJECT: an item row or a column header is NEVER mistaken for the subject', () => {
+  const text = [
+    'Approved Requisition Report',
+    'Description: 404602703004 Anchor Corrugated', // carries an item code → rejected
+    'Item Code   Description   UOM   Quantity',
+  ].join('\n');
+  assert.equal(prSubjectFromText(text), '');
+  assert.equal(prSubjectFromText('nothing useful here'), '');
+  assert.equal(prSubjectFromText(''), '');
+});
 
 test('PR 12601612: explicit header "PR Description" is used verbatim', () => {
   const pr = purchaseRequisitionFromLlm({

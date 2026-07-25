@@ -1343,6 +1343,37 @@ const PR_SCAN_NOTE = [
 
 // Accept the PR object directly, or wrapped as { purchaseRequisition: {...} } /
 // { pr: {...} }, and coerce to LlmPr (null when there's nothing usable).
+// ── PR subject rescue ───────────────────────────────────────────────────────
+// The requisition's own subject line ("Anchors for Kiln department") is the PR
+// Description printed on the Technical Approval Form. When the LLM misses it, the
+// form used to fall back to a DERIVED one-word summary of the item table
+// ("Anchors") — which reads as a truncation of the real phrase. This reads the
+// header line straight out of the document text instead, VERBATIM, and returns ''
+// when the requisition genuinely has no subject (nothing is ever invented).
+const PR_SUBJECT_LABEL =
+  /^[\t ]*(?:pr[\t ]+)?(?:description|subject|purpose|required[\t ]+for|requirement|reason|title)[\t ]*[:\-–][\t ]*(.+)$/i;
+// An unlabelled purpose line, e.g. "Anchors for Kiln department".
+const PR_SUBJECT_PHRASE = /^[\t ]*([A-Za-z][^\n]{4,90}?\bfor\b[^\n]{2,60}?\b(?:department|dept\.?|section|plant|line|kiln|workshop|unit|store)s?\b\.?)[\t ]*$/i;
+// Table headers / item rows must never be mistaken for the subject.
+const PR_SUBJECT_REJECT = /\d{6,}|\b(?:qty|quantity|uom|unit price|item code|material code|stock code|consumption)\b/i;
+
+export function prSubjectFromText(text: string): string {
+  // The subject sits in the header block, above the item table.
+  const head = String(text ?? '').split(/\r?\n/).slice(0, 40);
+  const clean = (s: string) => s.replace(/\s+/g, ' ').replace(/[\s:;,\-–|]+$/, '').trim();
+  for (const line of head) {
+    const m = PR_SUBJECT_LABEL.exec(line);
+    const v = m && clean(m[1]);
+    if (v && v.length >= 3 && !PR_SUBJECT_REJECT.test(v)) return v;
+  }
+  for (const line of head) {
+    const m = PR_SUBJECT_PHRASE.exec(line);
+    const v = m && clean(m[1]);
+    if (v && !PR_SUBJECT_REJECT.test(v)) return v;
+  }
+  return '';
+}
+
 function normalizePr(parsed: unknown): LlmPr | null {
   if (!parsed || typeof parsed !== 'object') return null;
   const outer = parsed as Record<string, unknown>;
@@ -1578,6 +1609,9 @@ export async function extractPurchaseRequisition(
       error: error ?? 'No requisition items could be extracted from the purchase-requisition file.',
     };
   }
+  // Rescue the header subject VERBATIM when the model didn't return one, so the
+  // TA form prints "Anchors for Kiln department" rather than a derived "Anchors".
+  if (!data.description?.trim()) data.description = prSubjectFromText(text) || null;
   return { pr: mapPr(data, fileName, 'llm'), textLength: text.length, method: 'llm', error: null };
 }
 
