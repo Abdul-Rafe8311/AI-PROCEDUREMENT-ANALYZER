@@ -53,8 +53,6 @@ interface Placement {
   align: Align;
   font: FontKind;
   color: ReturnType<typeof rgb>;
-  /** wrap + scroll instead of clipping (cells whose content spans several lines) */
-  multiline: boolean;
 }
 
 const INK = rgb(0.059, 0.09, 0.165); // C.ink
@@ -166,12 +164,7 @@ function resolveFaces(runs: TextRun[]): (id: string) => FontKind {
  * Work out where every editable widget goes, from the measured page.
  * `supplierCounts[p]` is how many supplier column-groups page `p` carries.
  */
-function planPlacements(
-  runs: TextRun[],
-  pageCount: number,
-  /** width of `text` at `size` in the given face — the real font, not an estimate */
-  measure: (text: string, size: number, face: FontKind) => number,
-): { placements: Placement[]; skipped: string[] } {
+function planPlacements(runs: TextRun[], pageCount: number): { placements: Placement[]; skipped: string[] } {
   const faceOf = resolveFaces(runs);
   const placements: Placement[] = [];
   const skipped: string[] = [];
@@ -184,184 +177,34 @@ function planPlacements(
     seen.add(name);
     placements.push({ ...p, name });
   };
-  // ── How a widget is sized ────────────────────────────────────────────────
-  // A widget used to be cut to the width of the text already printed under it,
-  // which is why a reviewer typing into it saw "10,000" clipped to "10,00" and
-  // "France" to "Franc": the box had no room beyond the pre-filled string, and the
-  // viewer insets field text by several points before drawing it. Widgets are now
-  // sized to their CELL — the column's inner width and the row's own vertical
-  // territory — and widened further when the value needs it, bounded so the box can
-  // never reach a neighbouring cell's text. Nothing in the printed layer moves.
-
-  /** The page currently being planned — the neighbours a widget must not cover. */
-  let pageRuns: TextRun[] = [];
-  /** Points a viewer reserves inside a widget before it starts drawing text. */
-  const VIEWER_INSET = 10;
-  /** Cells whose content is unpredictable get at least this many lines of room. */
-  const MIN_LINES = 3;
-
-  /** One cell's worth of printed lines, to be replaced by a single widget. */
-  interface CellPlacement {
-    name: string;
-    lines: TextRun[];
-    /** the column the cell lives in (x + width, from the shared layout module) */
-    col: { x: number; w: number };
-    align?: Align;
-    color?: ReturnType<typeof rgb>;
-    /** hard vertical limits — the widget may not cross these (neighbouring rows) */
-    top: number;
-    bottom: number;
-    /** never cover this y (the amber "spec differs" note keeps its own space) */
-    floor?: number;
-    /** force a generous, scrollable box even for a single printed line */
-    variable?: boolean;
-  }
-
-  const placeCell = (c: CellPlacement) => {
-    const ls = [...c.lines].sort((a, b) => b.y - a.y);
-    if (!ls.length) return;
-    const size = ls[0].size;
-    const face = faceOf(ls[0].fontId);
-    const align = c.align ?? 'left';
-    // A cell that already WRAPS must keep its printed wrap width, or the viewer
-    // re-flows the lines. A single-line cell has no wrap to protect, so it is free
-    // to widen — which is what gives a reviewer room to type.
-    // Only a cell that ALREADY wraps becomes multiline. A viewer draws a multiline
-    // field from the top and a single-line field centred, so forcing multiline onto
-    // a one-line cell shifts its text off the printed glyphs. One-line cells stay
-    // single-line and get their extra room horizontally instead.
-    const wraps = ls.length > 1;
-    const multiline = wraps;
-    const own = new Set(ls);
-    const lineH = size * 1.32;
-
-    // ── The rule that keeps the printed layer intact ─────────────────────────
-    // A viewer draws field text from the widget's own edges: left-aligned from the
-    // left edge, right-aligned from the right, single lines centred vertically and
-    // multiline runs from the top. So the edge the text is drawn FROM is pinned to
-    // where the text is already printed, and the box only ever grows in the free
-    // direction. Grow the pinned edge and the visible text moves — which is exactly
-    // what "only the field rectangles change" forbids.
-    const INSET = 2; // what a viewer reserves before the first glyph
-
-    const printedLeft = Math.min(...ls.map((l) => l.x));
-    const printedRight = Math.max(...ls.map((l) => l.x + l.w));
-    const printedTop = ls[0].y + size * 1.02;
-    const printedBottom = ls[ls.length - 1].y - size * 0.3;
-
-    // Neighbouring ink in this column sets the hard vertical limits.
-    const column = pageRuns.filter((r: TextRun) => inCol(r, c.col) && !own.has(r));
-    const ceiling = Math.min(
-      c.top,
-      ...column.filter((r: TextRun) => r.y > printedTop).map((r: TextRun) => r.y - r.size * 0.32),
-    );
-    const floorY = Math.max(
-      c.bottom,
-      c.floor ?? -Infinity,
-      ...column.filter((r: TextRun) => r.y < printedBottom).map((r: TextRun) => r.y + r.size * 1.04),
-    );
-
-    let top: number;
-    let bottom: number;
-    if (multiline) {
-      // Top-drawn: pin the top to the printed first line and grow DOWNWARD into
-      // whatever room the row owns, so a longer value wraps and scrolls rather than
-      // being clipped by a box cut to the extracted text.
-      // A viewer puts the first baseline about one line-height below the box top.
-      top = Math.min(ceiling, ls[0].y + size * 1.08);
-      const want = Math.max(ls.length, MIN_LINES) * lineH;
-      bottom = Math.max(floorY, top - Math.max(want, printedTop - printedBottom + 2));
-    } else {
-      // Centre-drawn: keep the printed line's centre and grow symmetrically.
-      const centre = (printedTop + printedBottom) / 2;
-      const half = Math.min(lineH / 2 + 1, ceiling - centre, centre - floorY);
-      top = centre + Math.max(half, size * 0.55);
-      bottom = centre - Math.max(half, size * 0.55);
-    }
-    const h = top - bottom;
-    if (h < size * 0.9) return; // no safe room — leave the cell exactly as printed
-
-    // ── width: pin the drawn-from edge, grow the other way. A multiline box also
-    // keeps the printed wrap width, so the viewer breaks the lines where react-pdf
-    // did instead of re-flowing the cell. ──
-    const printedW = printedRight - printedLeft;
-    const needed = Math.max(...ls.map((l) => measure(l.str, size, face))) + VIEWER_INSET;
-    const inner = { x: c.col.x + L.CELL_PAD_X, w: c.col.w - 2 * L.CELL_PAD_X };
-    let w = wraps ? printedW + 2 * INSET : Math.max(printedW + 2 * INSET, needed, inner.w);
-    let x =
-      align === 'right'
-        ? printedRight + INSET - w
-        : align === 'center'
-          ? (printedLeft + printedRight) / 2 - w / 2
-          : printedLeft - INSET;
-
-    // Clamp against neighbouring ink, shrinking from the FREE edge only.
-    const near = pageRuns.filter((r: TextRun) => !own.has(r) && r.y + r.size * 0.7 > bottom && r.y < top);
-    const leftBound = Math.max(
-      L.PAGE_PAD_X,
-      ...near.filter((r: TextRun) => r.x + r.w <= printedLeft + 0.5).map((r: TextRun) => r.x + r.w + 0.5),
-    );
-    const rightBound = Math.min(
-      L.PAGE_PAD_X + L.USABLE,
-      ...near.filter((r: TextRun) => r.x >= printedRight - 0.5).map((r: TextRun) => r.x - 0.5),
-    );
-    if (align === 'right') {
-      const left = Math.max(leftBound, x);
-      w = x + w - left;
-      x = left;
-    } else if (align === 'left') {
-      x = Math.max(leftBound, x);
-      w = Math.min(w, rightBound - x);
-    } else {
-      const left = Math.max(leftBound, x);
-      const right = Math.min(rightBound, x + w);
-      x = left;
-      w = right - left;
-    }
-    if (w < 6) return;
-
-    push({
-      name: c.name,
-      page: ls[0].page,
-      x,
-      y: bottom,
-      w,
-      h,
-      value: ls.map((l) => l.str).join('\n'),
-      size,
-      align,
-      font: face,
-      color: c.color ?? (face === 'oblique' ? INDIGO : BODY),
-      multiline,
-    });
-  };
-
-  /** A widget over a single run that is not part of the table grid. */
+  /** A widget sized to the run it replaces, with a little slack for the viewer's own inset. */
   const overRun = (
     r: TextRun,
     name: string,
     opts: { align?: Align; font?: FontKind; color?: ReturnType<typeof rgb>; x?: number; w?: number; tight?: boolean } = {},
-  ) => {
-    const face = opts.font ?? faceOf(r.fontId);
-    const needed = measure(r.str, r.size, face) + VIEWER_INSET;
+  ) =>
     push({
       name,
       page: r.page,
+      // A viewer insets field text by a point or two before drawing it, so the widget
+      // is a shade wider than the run it replaces — otherwise the last glyph clips.
+      // `tight` keeps the left edge where a value sits directly after its caption, so
+      // the space between the two is not swallowed.
       x: (opts.x ?? r.x) - (opts.tight ? 0.5 : 2),
       y: r.y - r.size * 0.3,
-      w: Math.max((opts.w ?? r.w) + (opts.tight ? 3 : 4.5), needed),
+      w: (opts.w ?? r.w) + (opts.tight ? 3 : 4.5),
       h: r.size * 1.32,
       value: r.str,
       size: r.size,
       align: opts.align ?? 'left',
-      font: face,
-      color: opts.color ?? (face === 'oblique' ? INDIGO : BODY),
-      multiline: false,
+      // The face is MEASURED, never assumed, so a bold total stays bold and an
+      // AI-suggested value keeps its italic.
+      font: opts.font ?? faceOf(r.fontId),
+      color: opts.color ?? (faceOf(r.fontId) === 'oblique' ? INDIGO : BODY),
     });
-  };
 
   for (let page = 0; page < pageCount; page++) {
-    pageRuns = runs.filter((r) => r.page === page);
+    const pageRuns = runs.filter((r) => r.page === page);
     const lines = toLines(pageRuns);
 
     // How many supplier groups does this page carry? One "Description" sub-header each.
@@ -409,133 +252,61 @@ function planPlacements(
       ...lines.filter((l) => l.y <= subHeaderY + 1 && l.y >= subHeaderY - 12).map((l) => l.y),
     );
     const tableTop = Math.min(Math.max(...rows.map((r) => r.band.top)) + 8, headerBottom - 1);
-    // The last row's own label is one line, but a supplier's cell there can wrap
-    // below it (a long Technical Comment). Reach far enough down to keep those
-    // lines inside the table — stopping short of whatever follows it on the page.
-    const afterTable = lines
-      .filter((l) => /^(AI SUGGESTED\b|Final Recommendation|Generated by)/.test(l.str.trim()))
-      .map((l) => l.y + l.size * 1.2);
-    const tableBottom = Math.max(
-      afterTable.length ? Math.max(...afterTable) : -Infinity,
-      Math.min(...rows.map((r) => r.band.bottom)) - 3 * L.FS,
-    );
+    const tableBottom = Math.min(...rows.map((r) => r.band.bottom)) - 8;
     const rowOf = (y: number) => rows.reduce((best, r) => (Math.abs(r.band.centre - y) < Math.abs(best.band.centre - y) ? r : best), rows[0]);
     const inTable = (l: TextRun) => l.y <= tableTop && l.y >= tableBottom;
     const key = (r: (typeof rows)[number]) => (r.kind === 'item' ? `r${r.index + 1}` : r.label.replace(/\s+/g, '_'));
 
-    // Each row owns the vertical band between the midpoints to its neighbours; a
-    // widget may fill that band but never cross into the next row's text.
-    const ordered = [...rows].sort((a, b) => b.band.centre - a.band.centre);
-    const territory = new Map<string, { top: number; bottom: number }>();
-    ordered.forEach((r, i) => {
-      const above = ordered[i - 1];
-      const below = ordered[i + 1];
-      territory.set(key(r), {
-        top: above ? (above.band.bottom + r.band.top) / 2 : Math.min(tableTop, headerBottom - 1),
-        bottom: below ? (r.band.bottom + below.band.top) / 2 : r.band.bottom - 6,
-      });
-    });
-
-    // Collect a column's printed lines into one group per row. Lines are clustered
-    // WITHIN the column first (rows are far apart there), then each cluster is
-    // assigned to the row whose band it OVERLAPS most. Assigning line-by-line to the
-    // nearest row centre mis-files the lower lines of a supplier cell that is taller
-    // than the PR cell beside it — which is how a widget ended up growing over its
-    // neighbour's text.
-    const cellsByRow = (col: { x: number; w: number }, keep: (l: TextRun) => boolean = () => true) => {
-      const mine = lines.filter((l) => inCol(l, col) && inTable(l) && keep(l));
-      const out = new Map<string, TextRun[]>();
-      for (const cluster of clusterRows(mine)) {
-        const band = bandOf(cluster);
-        const best = rows.reduce(
-          (acc, r) => {
-            const overlap = Math.min(band.top, r.band.top) - Math.max(band.bottom, r.band.bottom);
-            const score = overlap > 0 ? overlap : -Math.abs(r.band.centre - band.centre);
-            return score > acc.score ? { row: r, score } : acc;
-          },
-          { row: rows[0], score: -Infinity },
-        ).row;
-        const k = key(best);
-        out.set(k, [...(out.get(k) ?? []), ...cluster]);
-      }
-      return out;
-    };
-    const rowByKey = new Map(rows.map((r) => [key(r), r]));
-
     // ── left reference columns (the PR's own description / qty / uom) ──
-    for (const [col, base, align, variable] of [
-      [cols.left.prDesc, 'pr_item_desc', 'left', true],
-      [cols.left.prQty, 'pr_item_qty', 'center', false],
-      [cols.left.uom, 'pr_item_uom', 'center', false],
+    for (const [col, base, align] of [
+      [cols.left.prDesc, 'pr_item_desc', 'left'],
+      [cols.left.prQty, 'pr_item_qty', 'center'],
+      [cols.left.uom, 'pr_item_uom', 'center'],
     ] as const) {
-      for (const [k, ls] of cellsByRow(col)) {
-        if (rowByKey.get(k)?.kind !== 'item') continue;
-        placeCell({ name: `${base}.${k}`, lines: ls, col, align, variable, ...territory.get(k)! });
+      const cells = lines.filter((l) => inCol(l, col) && inTable(l));
+      const perRow = new Map<string, TextRun[]>();
+      for (const l of cells) {
+        const r = rowOf(l.y);
+        if (r.kind !== 'item') continue;
+        const k = key(r);
+        perRow.set(k, [...(perRow.get(k) ?? []), l]);
+      }
+      for (const [k, ls] of perRow) {
+        ls.sort((a, b) => b.y - a.y).forEach((l, i) => overRun(l, `${base}.${k}.l${i}`, { align }));
       }
     }
 
     // ── supplier columns ──
     for (let s = 0; s < n; s++) {
       const col = cols.supplier[s];
-      const isNote = (l: TextRun) => Math.abs(l.size - L.TYPE.specDiff) < 0.3;
-
-      // Item rows: description | qty | unit price, each in its own sub-column.
-      for (const [sub, base, align, variable] of [
-        [col.desc, 'cell_desc', 'left', true],
-        [col.qty, 'cell_qty', 'center', false],
-        [col.price, 'cell_price', 'right', false],
-      ] as const) {
-        for (const [k, ls] of cellsByRow(sub, (l) => !isNote(l))) {
-          const row = rowByKey.get(k);
-          if (!row || row.kind === 'term') continue;
-          const t = territory.get(k)!;
-          if (base === 'cell_price') {
-            // The price cell prints a bold SAR line over a smaller muted USD line —
-            // two different faces, so they stay two fields.
-            for (const l of ls) {
-              const usd = Math.abs(l.size - L.TYPE.priceUsd) < 0.3;
-              placeCell({
-                name: `cell_price_${usd ? 'usd' : 'sar'}.${k}.s${s}`,
-                lines: [l],
-                col: sub,
-                align,
-                color: usd ? MUTED : INK,
-                top: Math.min(t.top, l.y + l.size * 1.3),
-                bottom: Math.max(t.bottom, l.y - l.size * 0.45),
-              });
-            }
-            continue;
-          }
-          // The amber "spec differs" note keeps its own space under the description.
-          const note = lines.filter((l) => inCol(l, col.desc) && isNote(l) && key(rowOf(l.y)) === k);
-          const floor = note.length ? Math.max(...note.map((l) => l.y)) + note[0].size * 1.2 : undefined;
-          placeCell({ name: `${base}.${k}.s${s}`, lines: ls, col: sub, align, variable, ...t, floor });
-        }
-      }
-
-      // Term rows: the value spans the whole supplier group.
-      for (const [k, ls] of cellsByRow(col.group)) {
-        const row = rowByKey.get(k);
-        if (!row || row.kind !== 'term') continue;
-        const t = territory.get(k)!;
-        const isTotal = row.label.startsWith('Total Price');
-        if (isTotal) {
-          // The totals cell stacks original currency / SAR / USD in three faces.
-          for (const l of ls) {
-            const usd = Math.abs(l.size - L.TYPE.priceUsd) < 0.3;
-            placeCell({
-              name: `term.${k}.s${s}.l${Math.round(l.y * 10)}`,
-              lines: [l],
-              col: col.group,
-              align: 'right',
-              color: usd ? MUTED : undefined,
-              top: Math.min(t.top, l.y + l.size * 1.3),
-              bottom: Math.max(t.bottom, l.y - l.size * 0.45),
-            });
-          }
+      const cells = lines.filter((l) => inCol(l, col.group) && inTable(l));
+      for (const l of cells) {
+        const r = rowOf(l.y);
+        const k = key(r);
+        if (r.kind === 'term') {
+          // Term-row values span the whole supplier group. The totals row prints the
+          // original currency + SAR (both body size) and a smaller muted USD line.
+          const isUsd = Math.abs(l.size - L.TYPE.priceUsd) < 0.3;
+          overRun(l, `term.${k}.s${s}.l${Math.round(l.y * 10)}`, {
+            align: r.label.startsWith('Total Price') ? 'right' : 'left',
+            ...(isUsd ? { color: MUTED } : {}),
+          });
           continue;
         }
-        placeCell({ name: `term.${k}.s${s}`, lines: ls, col: col.group, align: 'left', variable: true, ...t });
+        if (inCol(l, col.desc)) {
+          // The amber "spec differs" note shares the description cell but is smaller —
+          // it is a status flag, not a value, so it stays as printed.
+          if (Math.abs(l.size - L.TYPE.specDiff) < 0.3) continue;
+          overRun(l, `cell_desc.${k}.s${s}.l${Math.round(l.y * 10)}`);
+        } else if (inCol(l, col.qty)) {
+          overRun(l, `cell_qty.${k}.s${s}`, { align: 'center' });
+        } else if (inCol(l, col.price)) {
+          const usd = Math.abs(l.size - L.TYPE.priceUsd) < 0.3;
+          overRun(l, `cell_price_${usd ? 'usd' : 'sar'}.${k}.s${s}`, {
+            align: 'right',
+            color: usd ? MUTED : INK,
+          });
+        }
       }
     }
 
@@ -551,15 +322,14 @@ function planPlacements(
         name: 'final_recommendation',
         page,
         x,
-        y: finalLabel.y - 3,
+        y: finalLabel.y - 2.5,
         w: Math.max(40, right - x),
-        h: 12,
+        h: 11,
         value: existing.map((l) => l.str).join('').trim(),
         size: L.FS,
         align: 'left',
         font: 'bold',
         color: INK,
-        multiline: false,
       });
     }
 
@@ -587,15 +357,14 @@ function planPlacements(
             name: `${base}.${i}`,
             page,
             x,
-            y: l.y - 3,
+            y: l.y - 2.5,
             w: Math.max(30, blockRight - x),
-            h: 11,
+            h: 10,
             value: '',
             size: L.FS,
             align: 'left',
             font: 'regular',
             color: INK,
-            multiline: false,
           });
         });
     }
@@ -632,26 +401,21 @@ export async function overlayEditableFields(bytes: Uint8Array): Promise<Uint8Arr
   const runs = await measureRuns(Uint8Array.from(bytes));
   const doc = await PDFDocument.load(bytes);
   const pages = doc.getPages();
+  const { placements } = planPlacements(runs, pages.length);
+  const checkboxes = planCheckboxes(runs);
+
   const form = doc.getForm();
   const fonts: Record<FontKind, PDFFont> = {
     regular: await doc.embedFont(StandardFonts.Helvetica),
     bold: await doc.embedFont(StandardFonts.HelveticaBold),
     oblique: await doc.embedFont(StandardFonts.HelveticaOblique),
   };
-  // Sizing needs real font metrics, so the faces are embedded before planning.
-  const { placements } = planPlacements(runs, pages.length, (text, size, face) =>
-    fonts[face].widthOfTextAtSize(text, size),
-  );
-  const checkboxes = planCheckboxes(runs);
   const WHITE = rgb(1, 1, 1);
   const LINE = rgb(0.2, 0.25, 0.33);
 
   const place = (p: Placement, page: PDFPage) => {
     const tf = form.createTextField(p.name);
     tf.setText(p.value);
-    // Multi-line cells wrap and SCROLL inside the widget instead of clipping, so a
-    // reviewer can type more than the extraction produced.
-    if (p.multiline) tf.enableMultiline();
     tf.setAlignment(p.align === 'right' ? TextAlignment.Right : p.align === 'center' ? TextAlignment.Center : TextAlignment.Left);
     tf.addToPage(page, {
       x: p.x,
