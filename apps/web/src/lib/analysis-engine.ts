@@ -4,10 +4,16 @@
 // swapped in behind /api/extract without changing the UI, since this module
 // produces the same AnalysisResult shape.
 
-import { DEFAULT_WEIGHTS, formatCurrency } from './workspace-types';
+import {
+  DEFAULT_WEIGHTS,
+  EXTRACTION_PIPELINE_VERSION,
+  formatCurrency,
+  PIPELINE_VERSION_NOTES,
+} from './workspace-types';
 import { type FxRates, toUsd as toUsdLive } from './fx-rates';
 import { matchQuotationsToPr } from './item-matching';
 import type {
+  StaleAnalysis,
   AnalysisResult,
   ExtractedQuotation,
   FieldKey,
@@ -390,6 +396,10 @@ export function assembleAnalysis(
     simulated,
     purchaseRequisition: purchaseRequisition ?? undefined,
     prMatch,
+    // Stamp the pipeline that produced this, so a session restored later can be
+    // told apart from one produced by the build running then.
+    pipelineVersion: EXTRACTION_PIPELINE_VERSION,
+    stale: null,
   };
 }
 
@@ -401,6 +411,13 @@ export function assembleAnalysis(
  * `items`/`mismatchCount` and no `prItems`, which the current UI would read as
  * `undefined` and crash on). Everything else is left as stored; with no PR,
  * prMatch stays null.
+ *
+ * What it CANNOT repair is the stored LINE ITEMS themselves. Those came out of
+ * the extraction pipeline at save time; if that pipeline has since changed, no
+ * amount of recomputation here recovers what it missed — only re-running
+ * extraction against the source documents does. So this also decides whether the
+ * restored results are STALE, and the caller must surface that instead of
+ * rendering them as if they were current.
  */
 export function normalizeRestoredAnalysis(result: AnalysisResult): AnalysisResult {
   const pr = result.purchaseRequisition;
@@ -409,7 +426,32 @@ export function normalizeRestoredAnalysis(result: AnalysisResult): AnalysisResul
   const quotations = result.quotations?.length ? ensureUniqueQuotationIds(result.quotations) : result.quotations;
   const prMatch =
     pr && pr.items.length && quotations?.length ? matchQuotationsToPr(quotations, pr) : null;
-  return { ...result, quotations, prMatch };
+  return { ...result, quotations, prMatch, stale: stalenessOf(result) };
+}
+
+/**
+ * Is a restored analysis older than the pipeline running now? An analysis with no
+ * `pipelineVersion` at all predates versioning entirely, so it is stale by
+ * definition — absence is never treated as "current".
+ */
+export function stalenessOf(result: Pick<AnalysisResult, 'pipelineVersion' | 'simulated'>): StaleAnalysis | null {
+  // The built-in sample is generated fresh every time; it is never stale.
+  if (result.simulated) return null;
+  const stored = result.pipelineVersion;
+  if (stored === EXTRACTION_PIPELINE_VERSION) return null;
+  if (typeof stored === 'number' && stored > EXTRACTION_PIPELINE_VERSION) return null; // newer build wrote it
+  // Everything that changed between the stored version and now, newest first.
+  const notes: string[] = [];
+  for (let v = EXTRACTION_PIPELINE_VERSION; v > (stored ?? 0); v--) {
+    if (PIPELINE_VERSION_NOTES[v]) notes.push(PIPELINE_VERSION_NOTES[v]);
+  }
+  return {
+    storedVersion: stored,
+    currentVersion: EXTRACTION_PIPELINE_VERSION,
+    reason: notes.length
+      ? notes.join(' ')
+      : 'The extraction pipeline has changed since this analysis was saved.',
+  };
 }
 
 export function buildRecommendation(

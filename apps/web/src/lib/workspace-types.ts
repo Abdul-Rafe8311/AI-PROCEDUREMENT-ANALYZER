@@ -376,7 +376,49 @@ export interface AnalysisResult {
   prMatch?: PrMatchResult | null;
   /** per-file extraction diagnostics (real uploads only) */
   debug?: ExtractionDebug[];
+  /**
+   * Which build of the extraction / matching pipeline produced these results.
+   * Stamped when the analysis is assembled and persisted with it, so a session
+   * restored from history can be compared against the pipeline running now.
+   * Absent on anything saved before versioning existed — which is exactly the
+   * case that must not be shown as if it were current.
+   */
+  pipelineVersion?: number;
+  /**
+   * Set at RESTORE time (never persisted as truth) when the stored results were
+   * produced by an older pipeline than the one running now. The UI must surface
+   * this rather than render the stored shapes as current.
+   */
+  stale?: StaleAnalysis | null;
 }
+
+/** Why a restored analysis can no longer be trusted as current. */
+export interface StaleAnalysis {
+  /** the pipeline that produced the stored results (undefined = pre-versioning) */
+  storedVersion?: number;
+  /** the pipeline running now */
+  currentVersion: number;
+  /** what changed since, in the reviewer's terms */
+  reason: string;
+}
+
+/**
+ * Bump whenever a change alters what EXTRACTION or MATCHING produces from the
+ * same source documents — a stored analysis from an older version is then stale
+ * and must be re-run rather than rendered.
+ *
+ *   1  pre-versioning (implicit): anything persisted before this constant existed
+ *   2  2026-07-26 — layout-aware row tolerance keyed off the tightest row pitch.
+ *      Before this, a dense item table inside loose prose had its rows merged in
+ *      pairs, so two products became one line item and the PR row the second one
+ *      belonged to printed "Not Quoted" (Krosaki OFR26-0040, PR 12601612 row 2).
+ */
+export const EXTRACTION_PIPELINE_VERSION = 2;
+
+/** What changed at each version, shown to a reviewer holding a stale analysis. */
+export const PIPELINE_VERSION_NOTES: Record<number, string> = {
+  2: 'Line items in dense quotation tables were being merged in pairs, which could drop a quoted item and show its PR row as "Not Quoted".',
+};
 
 // Charts the chat can render. The LLM only chooses the metric (a data-free
 // directive) — the app draws the chart from the real analysis data, so values

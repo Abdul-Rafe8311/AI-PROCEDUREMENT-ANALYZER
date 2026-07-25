@@ -8,6 +8,7 @@ import { UploadZone } from '@/components/workspace/upload-zone';
 import { PrUpload } from '@/components/workspace/pr-upload';
 import { PrSummary } from '@/components/workspace/pr-summary';
 import { AnalysisResults } from '@/components/workspace/analysis-results';
+import { StaleAnalysisBanner } from '@/components/workspace/stale-analysis-banner';
 import { ExtractionDebug } from '@/components/workspace/extraction-debug';
 import { ChatPanel } from '@/components/workspace/chat-panel';
 import { type DeepDoc, DeepSearchStatus } from '@/components/workspace/deep-search-status';
@@ -447,6 +448,20 @@ export default function WorkspacePage() {
     }
   }
 
+  // Drop a restored session so the reviewer can upload the documents again. Only
+  // the on-screen state is cleared — the saved analysis stays in history.
+  function startFreshAnalysis() {
+    setAnalysis(null);
+    setAnalysisId(null);
+    setMessages([]);
+    setError(null);
+    setDocs([]);
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(LAST_ANALYSIS_KEY);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }
+
   // Sample analysis is only ever shown via this explicit action.
   function loadSample() {
     setError(null);
@@ -734,6 +749,12 @@ export default function WorkspacePage() {
             <div className="mx-auto max-w-2xl whitespace-pre-wrap rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
               {error}
             </div>
+          )}
+
+          {/* A restored session from an older pipeline is never rendered as if it
+              were current — the warning comes before the data it applies to. */}
+          {analysis?.stale && (
+            <StaleAnalysisBanner stale={analysis.stale} onStartFresh={startFreshAnalysis} />
           )}
 
           {analysis?.debug && <ExtractionDebug debug={analysis.debug} />}

@@ -10,7 +10,8 @@ import {
   quotationsFromLlmSuppliers,
   type LlmSupplier,
 } from './extraction-server';
-import { normalizeRestoredAnalysis } from './analysis-engine';
+import { assembleAnalysis, normalizeRestoredAnalysis, stalenessOf } from './analysis-engine';
+import { EXTRACTION_PIPELINE_VERSION, PIPELINE_VERSION_NOTES } from './workspace-types';
 import { buildComparisonModel } from './pr-comparison';
 import { suggestTechnicalComments } from './item-matching';
 import type { AnalysisResult, PrMatchResult } from './workspace-types';
@@ -90,4 +91,54 @@ test('RESTORE: normalizeRestoredAnalysis upgrades prMatch to the current shape',
 test('RESTORE: an analysis with no PR normalizes to prMatch = null', () => {
   const noPr = normalizeRestoredAnalysis({ ...restored, purchaseRequisition: undefined, prMatch: oldPrMatch });
   assert.equal(noPr.prMatch, null);
+});
+
+// ── stale restored analyses ─────────────────────────────────────────────────
+// A restored session carries the LINE ITEMS the pipeline produced at save time.
+// If extraction has changed since, nothing downstream can recover what that build
+// missed — so the restore must report it and the UI must say so, rather than
+// rendering stored shapes as if they were current. This is the failure that had a
+// reviewer looking at a "Not Quoted" that had not been true for a day.
+
+test('STALE: an analysis saved before pipeline versioning is stale, never "current"', () => {
+  const { stale } = normalizeRestoredAnalysis(restored);
+  assert.ok(stale, 'a stored analysis with no pipelineVersion is stale');
+  assert.equal(stale!.storedVersion, undefined);
+  assert.equal(stale!.currentVersion, EXTRACTION_PIPELINE_VERSION);
+  assert.ok(stale!.reason.trim().length > 0, 'it says what changed');
+});
+
+test('STALE: an analysis from an OLDER pipeline is stale and explains what changed', () => {
+  const old = { ...restored, pipelineVersion: EXTRACTION_PIPELINE_VERSION - 1 };
+  const { stale } = normalizeRestoredAnalysis(old);
+  assert.ok(stale);
+  assert.equal(stale!.storedVersion, EXTRACTION_PIPELINE_VERSION - 1);
+  // The note for the version that introduced the change is surfaced verbatim.
+  assert.ok(
+    stale!.reason.includes(PIPELINE_VERSION_NOTES[EXTRACTION_PIPELINE_VERSION] ?? '—'),
+    `carries the v${EXTRACTION_PIPELINE_VERSION} note: ${stale!.reason}`,
+  );
+});
+
+test('STALE: an analysis from the CURRENT pipeline restores clean', () => {
+  const current = { ...restored, pipelineVersion: EXTRACTION_PIPELINE_VERSION };
+  assert.equal(normalizeRestoredAnalysis(current).stale, null);
+});
+
+test('STALE: a freshly assembled analysis is stamped and is never stale', () => {
+  const fresh = assembleAnalysis(restored.quotations, false, restored.purchaseRequisition ?? null);
+  assert.equal(fresh.pipelineVersion, EXTRACTION_PIPELINE_VERSION, 'stamped at assembly');
+  assert.equal(fresh.stale, null);
+  // …and it survives a persist/restore round-trip unchanged.
+  const roundTripped = normalizeRestoredAnalysis(JSON.parse(JSON.stringify(fresh)) as typeof fresh);
+  assert.equal(roundTripped.stale, null, 'saving and reopening it does not make it stale');
+});
+
+test('STALE: the built-in sample is generated fresh, so it is never flagged', () => {
+  assert.equal(stalenessOf({ simulated: true }), null);
+  assert.equal(stalenessOf({ simulated: true, pipelineVersion: 1 }), null);
+});
+
+test('STALE: an analysis written by a NEWER build is not second-guessed', () => {
+  assert.equal(stalenessOf({ simulated: false, pipelineVersion: EXTRACTION_PIPELINE_VERSION + 1 }), null);
 });

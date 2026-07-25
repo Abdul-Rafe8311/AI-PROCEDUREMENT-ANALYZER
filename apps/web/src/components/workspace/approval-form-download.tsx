@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowUp,
   ClipboardCheck,
@@ -406,6 +407,15 @@ export function ApprovalFormDownload({
           {loading ? 'Generating…' : 'Download Approval Form (PDF)'}
         </button>
       </div>
+      {/* A form built from a stale restored analysis leaves the app and gets
+          signed — the warning has to travel with the button, not just sit at the
+          top of the page. */}
+      {analysis.stale && (
+        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-warning">
+          <AlertTriangle className="h-3 w-3" />
+          Built from an out-of-date analysis — re-run before signing
+        </span>
+      )}
       {hasSuggestions && unreviewed > 0 && (
         <span className="text-[11px] text-muted-foreground">
           {unreviewed} AI-suggested comment{unreviewed === 1 ? '' : 's'} — review before signing
