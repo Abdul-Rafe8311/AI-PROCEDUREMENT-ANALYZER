@@ -117,7 +117,11 @@ function MoneyDual({
   const cur = currency.toUpperCase();
   return (
     <>
-      {showOriginal && cur !== 'SAR' && (
+      {/* The original-currency line is only worth printing when it is NEITHER of
+          the two lines below it. A USD quote was printing "USD 148,265 / SAR
+          555,993 / USD 148,265" — the same figure twice, once as the original and
+          once as the USD secondary. */}
+      {showOriginal && cur !== 'SAR' && cur !== 'USD' && (
         <Text style={{ color: C.body, textAlign: 'right' }}>{`${cur} ${money2(amount)}`}</Text>
       )}
       <Text style={{ fontFamily: 'Helvetica-Bold', color: C.ink, textAlign: 'right' }}>
@@ -345,6 +349,10 @@ function ApprovalDocument({
         {groups.map((group, gi) => {
           const n = group.length;
           const { supW, desc: subDescW, qty: subQtyW, price: subPriceW } = LAYOUT.supplierSubCols(n);
+          // Every cell in a PR row is normalised to that row's unit; when the whole
+          // requisition shares one unit we can state it once in the header.
+          const prUnits = [...new Set(model.rows.filter((r) => r.kind !== 'charge').map((r) => (r.uom ?? '').trim()).filter(Boolean))];
+          const unitBasis = prUnits.length === 1 ? prUnits[0] : null;
 
           return (
             <View key={gi} wrap={false}>
@@ -370,7 +378,9 @@ function ApprovalDocument({
                       <View style={[s.rowFlex, { marginTop: 2 }]}>
                         <Text style={[s.subLabel, { width: subDescW }]}>Description</Text>
                         <Text style={[s.subLabel, { width: subQtyW, textAlign: 'center' }]}>Qty</Text>
-                        <Text style={[s.subLabel, { width: subPriceW, textAlign: 'right' }]}>Unit Price (SAR / USD)</Text>
+                        <Text style={[s.subLabel, { width: subPriceW, textAlign: 'right' }]}>
+                          {unitBasis ? `Unit Price / ${unitBasis} (SAR / USD)` : 'Unit Price (SAR / USD)'}
+                        </Text>
                       </View>
                     </View>
                   );
@@ -402,6 +412,10 @@ function ApprovalDocument({
                           <Text style={notQuoted ? s.notQuoted : undefined}>
                             {cell?.description ?? (notQuoted ? 'Not Quoted' : '')}
                           </Text>
+                          {cell?.foc && (
+                            <Text style={s.specDiffTag}>FOC — supplied free of charge, no cost</Text>
+                          )}
+                          {cell?.unitWarning && <Text style={s.specDiffTag}>{cell.unitWarning}</Text>}
                           {cell?.matchState === 'quoted_spec_diff' && !cell.specDiffCleared && (
                             <Text style={s.specDiffTag}>
                               spec differs{cell.specDiffNote ? `: ${cell.specDiffNote}` : ''}

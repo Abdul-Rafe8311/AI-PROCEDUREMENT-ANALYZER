@@ -40,3 +40,4 @@ tmp/
 
 # Test
 coverage/
+apps/web/pdf/

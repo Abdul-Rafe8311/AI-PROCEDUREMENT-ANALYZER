@@ -10,6 +10,7 @@
 // behavior), so nothing regresses without a PR.
 
 import { type FxRates, toUsd } from './fx-rates';
+import { normalizeCell, reconcileToLineTotal, unitWarning } from './uom';
 import type {
   ExtractedQuotation,
   LineItemCategory,
@@ -39,6 +40,22 @@ export interface SupplierCell {
   matchState?: PrItemMatchState | null;
   /** short note on WHAT differs, when matchState is 'quoted_spec_diff' (else null) */
   specDiffNote?: string | null;
+  // ── unit normalisation (see uom.ts) ──
+  /** the unit `qty` and `unitPrice` are expressed in — the PR row's unit when convertible */
+  unit?: string | null;
+  /** the supplier's own unit, before conversion */
+  sourceUnit?: string | null;
+  /** the supplier's own quantity/price as quoted, kept for the audit trail */
+  sourceQty?: number | null;
+  sourceUnitPrice?: number | null;
+  /** true when the figures shown were converted from the supplier's unit */
+  converted?: boolean;
+  /** honest label when the unit could not be normalised — the row must be flagged */
+  unitWarning?: string | null;
+  /** qty x unitPrice in `currency`; invariant under conversion */
+  lineTotal?: number | null;
+  /** the supplier supplied this line free of charge — shown, but worth nothing */
+  foc?: boolean;
   // ── reviewer override (Technical Approval Form only; see item-review.ts) ──
   /** the reviewer explicitly dismissed the "spec differs" flag for this cell */
   specDiffCleared?: boolean;
@@ -116,14 +133,31 @@ function prRows(
       const pm = byQuotation.get(q.id)?.prItems?.[idx] ?? null;
       const li = pm?.supplierItem ?? null;
       if (!li) return null;
+      // Express the supplier's quantity and price in the PR ROW'S unit, so every
+      // column in this row is directly comparable. The line total is invariant, so
+      // a converted column still reconciles against the supplier's stated total.
+      // An unconvertible unit is never guessed — it is shown as quoted and flagged.
+      const n = reconcileToLineTotal(
+        normalizeCell({ qty: li.quantity, unitPrice: li.unitPrice, uom: li.uom }, it.unit, li.foc ? 0 : li.totalPrice),
+        it.quantity,
+        li.foc ? 0 : li.totalPrice,
+      );
       return {
         description: li.name,
-        qty: li.quantity,
-        unitPrice: li.unitPrice,
+        qty: n.qty,
+        unitPrice: n.unitPrice,
         currency: li.currency,
-        unitPriceUsd: cellUsd(li.unitPrice, li.currency, fx),
+        unitPriceUsd: cellUsd(n.unitPrice, li.currency, fx),
         matchState: pm?.state ?? null,
         specDiffNote: pm?.note ?? null,
+        unit: n.unit || it.unit || null,
+        sourceUnit: n.sourceUnit || null,
+        sourceQty: n.sourceQty,
+        sourceUnitPrice: n.sourceUnitPrice,
+        converted: n.status === 'converted' || n.status === 'derived-from-total',
+        unitWarning: unitWarning(n, it.unit ?? ''),
+        lineTotal: li.foc ? 0 : n.lineTotal,
+        ...(li.foc ? { foc: true } : {}),
       };
     });
     return {

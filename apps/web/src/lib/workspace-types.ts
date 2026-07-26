@@ -49,6 +49,14 @@ export interface LineItem {
   category?: LineItemCategory;
   /** unit of measure as stated (e.g. "SET", "PCS", "KG") — null when not stated */
   uom?: string | null;
+  /**
+   * The supplier supplied this line FREE OF CHARGE ("-FOC-", "Free of charge",
+   * "No charge", a 0.00 line total). It is still a real quoted line and is shown
+   * in the grid, but it contributes NOTHING to any total. Siam Refractory's offer
+   * ME-2623042 ends with two FOC lines whose unit prices (530 + 7,830) were being
+   * summed into the payable, overstating it by USD 8,360.
+   */
+  foc?: boolean;
 }
 
 /** A grand total exactly as stated in the document, with its own currency. */
@@ -88,6 +96,14 @@ export interface ExtractedQuotation {
   countryOfOrigin?: string | null;
   /** every grand total as stated, each with its own currency (multi-currency docs) */
   statedTotals?: StatedTotal[];
+  /**
+   * Set when the total we computed for this supplier disagrees with the total the
+   * supplier's OWN quotation states, by more than a rounding tolerance. A silent
+   * disagreement is how Siam Refractory shipped at USD 195,710 against a stated
+   * 187,350 — the difference was two free-of-charge lines being summed in. The
+   * reviewer must see this rather than a confidently wrong number.
+   */
+  totalMismatch?: { computed: number; stated: number; difference: number; currency: string } | null;
   /** detected-currency confidence 0..1 (1 = explicit currency in document) */
   currencyConfidence: number;
   /** FX rate used to normalize `currency` -> USD (1 when already USD) */

@@ -174,10 +174,45 @@ export async function POST(req: Request) {
       );
     }
 
+    // ── File accounting: every uploaded quotation file must be accounted for ──
+    // A supplier that was uploaded must never vanish without a word. Previously a
+    // per-file failure only reached `reasons`, which was logged server-side and
+    // returned ONLY when every file failed — so one bad file among many
+    // disappeared silently and the reviewer compared 8 columns believing they had
+    // uploaded 8. Now the outcome of each file travels back with the analysis.
+    const fileReports = fileInputs.map((f, idx) => {
+      const r = fileResults[idx];
+      const suppliers = r.quotations.map((q) => q.supplierName).filter(Boolean);
+      // A placeholder quotation carrying no data is a FAILURE, not a supplier.
+      const usable = r.quotations.filter((q) => q.totalCost != null || q.lineItems.length > 0);
+      return {
+        fileName: f.name,
+        suppliers: usable.length ? suppliers : [],
+        supplierCount: usable.length,
+        method: r.method,
+        error: r.error ?? (usable.length ? null : 'No supplier data could be read from this file.'),
+      };
+    });
+    const missing = fileReports.filter((r) => r.supplierCount === 0);
+    if (missing.length) {
+      for (const m of missing) reasons.push(`${m.fileName}: ${m.error}`);
+    }
     if (reasons.length) log(`partial extraction warnings: ${reasons.join(' | ')}`);
+
     // Passing the PR in runs line-item matching + technical-approval risks.
     const analysis = assembleAnalysis(quotations, false, purchaseRequisition);
-    return NextResponse.json({ ...analysis, debug });
+    return NextResponse.json({
+      ...analysis,
+      debug,
+      // The reviewer sees this: N files in, M supplier columns out, and exactly
+      // which file produced nothing.
+      fileAccounting: {
+        filesUploaded: fileInputs.length,
+        supplierColumns: analysis.quotations.length,
+        perFile: fileReports,
+        failures: missing.map((m) => ({ fileName: m.fileName, reason: m.error })),
+      },
+    });
   } catch (err) {
     return fail(500, 'Extraction failed unexpectedly.', (err as Error).stack ?? (err as Error).message);
   }

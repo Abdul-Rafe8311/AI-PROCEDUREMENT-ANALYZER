@@ -366,6 +366,26 @@ interface LlmLineItem {
   /** per-line stock/lead-time column ("Available in Days") when the doc has one —
    * a DELIVERY signal, never the offer validity */
   availableInDays?: number | null;
+  /** the line's TOTAL column copied VERBATIM when it is not a number — this is how
+   *  "-FOC-" survives extraction instead of becoming a null the sum falls back on */
+  totalPriceText?: string | null;
+  /** an explicit free-of-charge marker on the line, if the document has one */
+  focText?: string | null;
+}
+
+/** Does this text mark a line as supplied free of charge? */
+function isFocMarker(v: string | null | undefined): boolean {
+  const t = String(v ?? '').trim().toLowerCase().replace(/[-–—*()\s.]+/g, ' ').trim();
+  if (!t) return false;
+  return (
+    t === 'foc' ||
+    /\bfoc\b/.test(t) ||
+    /\bfree of charge\b/.test(t) ||
+    /\bno charge\b/.test(t) ||
+    /\bnil charge\b/.test(t) ||
+    /\bfree issue\b/.test(t) ||
+    /\bcomplimentary\b/.test(t)
+  );
 }
 
 export interface LlmSupplier {
@@ -496,8 +516,23 @@ const EXTRACTION_SYSTEM_PROMPT = [
   '    paymentTerms: string|null, warranty: string|null, validUntil: string|null (ISO date),',
   '    lineItems: { name: string, quantity: number|null, unitPrice: number|null,',
   '                 totalPrice: number|null, category: string|null, uom: string|null,',
-  '                 availableInDays: number|null }[]',
+  '                 availableInDays: number|null, totalPriceText: string|null,',
+  '                 focText: string|null }[]',
   '  }[] }',
+  '',
+  'UNIT OF MEASURE: copy each line\'s uom EXACTLY as the document states it — "Ton",',
+  '"MT", "TO", "Kg", "Kgs", "KG", "Set", "PCS". Do NOT normalise or convert it, and',
+  'do NOT infer one that is not written. The quantity must be the number stated',
+  'AGAINST that unit, and unitPrice the price PER that unit, so quantity x unitPrice',
+  'reproduces the line total. If a price column is headed per a multiple (e.g.',
+  '"Net Price / 1000 KG"), put that heading in uom verbatim.',
+  '',
+  'FREE OF CHARGE: when a line\'s TOTAL column is not a number but a marker such as',
+  '"-FOC-", "FOC", "Free of charge" or "No charge", set totalPrice to 0, copy the',
+  'marker verbatim into totalPriceText, and set focText to it as well. NEVER leave',
+  'totalPrice null for such a line and never copy the unit price into it — the item',
+  'is quoted but costs nothing, and treating its unit price as a line value',
+  'overstates the supplier\'s total.',
   '',
   'MULTIPLE SUPPLIERS: return ONE object per supplier that has ANY data (a name,',
   'prices, or a total). IGNORE empty supplier columns/slots. If it is a single',
@@ -851,7 +886,19 @@ function mapSupplier(
         quantity = quantity ?? 1;
       }
       const uom = li.uom?.trim() || null;
-      return { name: String(li.name ?? 'Item').trim(), quantity, unitPrice, totalPrice, currency, category, uom };
+      const name = String(li.name ?? 'Item').trim();
+      // FREE OF CHARGE: the quote marks the line's TOTAL column "-FOC-" / "Free of
+      // charge" / "No charge", or states a zero line total against a real unit
+      // price. Such a line is genuinely quoted and stays visible, but it must
+      // contribute nothing — otherwise the unit price gets summed into the payable
+      // (Siam ME-2623042 was overstated by exactly its two FOC unit prices).
+      const foc =
+        isFocMarker(li.focText) ||
+        isFocMarker(li.totalPriceText) ||
+        isFocMarker(name) ||
+        (totalPrice === 0 && (unitPrice ?? 0) > 0);
+      if (foc) totalPrice = 0;
+      return { name, quantity, unitPrice, totalPrice, currency, category, uom, ...(foc ? { foc: true } : {}) };
     })
     .filter((li) => {
       if (isVatLine(li.name, li.category ?? 'product')) {
@@ -899,8 +946,12 @@ function mapSupplier(
   // inflate the payable above the stated total (BUG 1: one supplier read ~15% high
   // from an over-summed product column).
   const statedInCurrency = primaryWithoutVat;
+  // A free-of-charge line is worth ZERO — never its unit price. Without this the
+  // qty x price fallback below quietly adds an FOC item's price to the payable.
   const lineAmount = (li: LineItem): number =>
-    li.totalPrice ?? (li.unitPrice != null && li.quantity != null ? li.unitPrice * li.quantity : 0);
+    li.foc
+      ? 0
+      : li.totalPrice ?? (li.unitPrice != null && li.quantity != null ? li.unitPrice * li.quantity : 0);
   const lineSum = lineItems.reduce((sum, li) => sum + lineAmount(li), 0);
   const chargeSum = lineItems.reduce(
     (sum, li) => ((li.category ?? 'product') !== 'product' ? sum + lineAmount(li) : sum),
@@ -915,6 +966,24 @@ function mapSupplier(
       : hasLines && lineSum > 0
         ? Math.round(lineSum)
         : null;
+
+  // ── Reconciliation: does what we computed agree with what the supplier says? ──
+  // The stated total is the supplier's own arithmetic on its own document. If ours
+  // differs by more than rounding, one of the two is wrong and the reviewer has to
+  // be told — publishing the computed figure silently is how an overstated total
+  // reaches a signature.
+  const RECONCILE_TOLERANCE = 1; // currency units; absorbs per-line rounding only
+  let totalMismatch: ExtractedQuotation['totalMismatch'] = null;
+  if (totalCost != null && statedInCurrency != null) {
+    const difference = Math.round((totalCost - statedInCurrency) * 100) / 100;
+    if (Math.abs(difference) > RECONCILE_TOLERANCE) {
+      totalMismatch = { computed: totalCost, stated: statedInCurrency, difference, currency };
+      log(
+        `"${fileName}" ${s.supplierName ?? 'supplier'}: computed total ${currency} ${totalCost} ` +
+          `disagrees with the quotation's stated ${currency} ${statedInCurrency} (difference ${difference}).`,
+      );
+    }
+  }
 
   // ── Delivery: prefer an explicit per-line "Available in Days" column (an
   // unambiguous lead-time signal) — take the longest so the buyer sees when ALL
@@ -989,6 +1058,7 @@ function mapSupplier(
     deliveryTerms,
     countryOfOrigin,
     statedTotals,
+    totalMismatch,
     currencyConfidence,
     usdRate,
     lineItems,
