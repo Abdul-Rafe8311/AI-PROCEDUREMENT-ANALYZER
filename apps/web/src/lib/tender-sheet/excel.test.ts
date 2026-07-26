@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildTenderWorkbook, planRows } from './excel';
 import { seedTenderSheet, chemicalsFor, requiredChemicalValue } from './seed';
+import { answersFromExtraction, commercialAnswersFromQuotation } from './extract';
 import { answerKey, mergeAiAnswers, type TenderAnswers, type TenderSheet } from './types';
 import { purchaseRequisitionFromLlm, quotationsFromLlmSuppliers, type LlmSupplier } from '../extraction-server';
 
@@ -174,4 +175,65 @@ test('EXCEL: the workbook writes real .xlsx bytes', async () => {
   const buf = Buffer.from(await wb.xlsx.writeBuffer());
   assert.ok(buf.length > 5000, `non-trivial workbook, got ${buf.length} bytes`);
   assert.equal(buf.subarray(0, 2).toString('latin1'), 'PK', 'a zip container, i.e. a real xlsx');
+});
+
+// ── the AI fill pass (mapping only — no network) ────────────────────────────
+// extractTenderAnswersForSupplier is the only part that talks to Claude; the
+// mapping from its JSON into sheet answers is pure, so it is asserted directly.
+
+test('FILL: a null value leaves the cell EMPTY rather than inventing one', () => {
+  const t = sheet().template;
+  const sid = t.suppliers[0].supplierId;
+  const out = answersFromExtraction(t, sid, {
+    items: [
+      {
+        itemNo: 1,
+        productName: 'AS-95',
+        description: 'Castable Refractory',
+        chemical: [
+          { name: 'Al2O3', value: '95%' },
+          { name: 'SiO2', value: null },
+          { name: 'Fe2O3', value: null },
+          { name: 'CaO', value: null },
+        ],
+        physical: [
+          { name: 'Bulk density', value: '2.85 g/cm3' },
+          { name: 'Refractoriness', value: null },
+        ],
+        thermal: [{ name: 'Max recommended temperature', value: null }],
+      },
+    ],
+    commercial: { Packing: '25 Kg bags', Warranty: null },
+  });
+  assert.equal(out[answerKey('specs', 1, null, sid)].value, 'AS-95\nCastable Refractory');
+  // A stated chemical prints; an unstated one shows N/A inside the pairs block.
+  assert.equal(out[answerKey('chemical', 1, null, sid)].value, 'Al2O3 → 95%\nSiO2 → N/A\nFe2O3 → N/A\nCaO → N/A');
+  assert.equal(out[answerKey('physical', 1, 'Bulk density', sid)].value, '2.85 g/cm3');
+  // Nulls produce NO key at all — an empty cell, never a fabricated value.
+  assert.equal(out[answerKey('physical', 1, 'Refractoriness', sid)], undefined);
+  assert.equal(out[answerKey('thermal', 1, 'Max recommended temperature', sid)], undefined);
+  const packing = t.sections.find((s) => s.title === 'Packing')!;
+  assert.equal(out[answerKey(packing.id, null, null, sid)].value, '25 Kg bags');
+  const warranty = t.sections.find((s) => s.title === 'Warranty')!;
+  assert.equal(out[answerKey(warranty.id, null, null, sid)], undefined, 'a null commercial answer stays empty');
+  for (const a of Object.values(out)) assert.equal(a.source, 'ai');
+});
+
+test('FILL: an item the supplier never quoted contributes nothing', () => {
+  const t = sheet().template;
+  const sid = t.suppliers[0].supplierId;
+  const out = answersFromExtraction(t, sid, {
+    items: [{ itemNo: 3, productName: null, description: null, chemical: [{ name: 'Al2O3', value: null }], physical: [], thermal: [] }],
+    commercial: {},
+  });
+  assert.deepEqual(Object.keys(out), [], 'an all-null item leaves the whole column empty for that row');
+});
+
+test('FILL: commercial answers already parsed on the quotation need no LLM', () => {
+  const t = sheet().template;
+  const out = commercialAnswersFromQuotation(t, quotations[0]);
+  const delivery = t.sections.find((s) => s.title === 'Delivery Time')!;
+  const origin = t.sections.find((s) => s.title === 'Country of Origin')!;
+  assert.equal(out[answerKey(delivery.id, null, null, quotations[0].id)].value, '30 days');
+  assert.equal(out[answerKey(origin.id, null, null, quotations[0].id)].value, 'India');
 });
