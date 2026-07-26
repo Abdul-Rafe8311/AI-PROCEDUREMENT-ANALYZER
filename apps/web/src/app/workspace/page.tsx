@@ -32,6 +32,7 @@ import {
   type IndexStatus,
   type SearchFailure,
   answerFromChunks,
+  ragEnabled,
   searchDocument,
   startIndexing,
 } from '@/lib/rag-client';
@@ -547,7 +548,15 @@ export default function WorkspacePage() {
       if (!ready.length) {
         const indexingDoc = docs.find((d) => d.status === 'indexing' || d.status === 'pending');
         const failed = docs.find((d) => d.status === 'failed');
-        if (indexingDoc) {
+        // A deployment with no RAG backend URL never indexes anything, so every
+        // upload lands here looking like a per-FILE problem. Say what it actually
+        // is — otherwise "not configured" is indistinguishable from a cold start
+        // or a genuine failure, which is exactly how a silently-off deep search
+        // goes unnoticed. This is the same message the typed `not_configured`
+        // failure produces once a search is actually attempted.
+        if (!ragEnabled) {
+          push(deepSearchFailureMessage({ kind: 'not_configured' }));
+        } else if (indexingDoc) {
           const pct =
             indexingDoc.chunkCount > 0
               ? Math.min(99, Math.round((indexingDoc.indexedChunks / indexingDoc.chunkCount) * 100))
