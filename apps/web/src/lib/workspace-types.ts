@@ -97,6 +97,14 @@ export interface ExtractedQuotation {
   /** every grand total as stated, each with its own currency (multi-currency docs) */
   statedTotals?: StatedTotal[];
   /**
+   * The document's extracted text, kept so downstream passes can read the parts
+   * of the quotation the structured fields do not carry — chemical analysis,
+   * bulk density, thermal data — WITHOUT re-uploading or re-parsing the PDF.
+   * The Tender Comparative Sheet's AI fill pass is the first consumer.
+   * Capped, because this is persisted with the analysis.
+   */
+  sourceText?: string | null;
+  /**
    * Set when the total we computed for this supplier disagrees with the total the
    * supplier's OWN quotation states, by more than a rounding tolerance. A silent
    * disagreement is how Siam Refractory shipped at USD 195,710 against a stated

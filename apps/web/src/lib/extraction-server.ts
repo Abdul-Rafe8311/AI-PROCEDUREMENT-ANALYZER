@@ -1296,8 +1296,19 @@ export async function extractQuotations(
 
   // The translation is per-DOCUMENT — attach it to every supplier read from this file.
   if (translation) for (const q of quotations) q.translation = translation;
+  // Keep the document text ON the quotation, so a later pass (the Tender
+  // Comparative Sheet) can read the chemical/physical/thermal detail the
+  // structured fields never carried, without re-uploading or re-parsing the PDF.
+  for (const q of quotations) q.sourceText = capSourceText(text);
 
   return { quotations, textLength: text.length, method: 'llm', error: llmError };
+}
+
+/** Persisted with the analysis, so it is capped — enough for a full offer body. */
+const MAX_SOURCE_TEXT = 60_000;
+export function capSourceText(text: string): string {
+  const t = String(text ?? '');
+  return t.length <= MAX_SOURCE_TEXT ? t : `${t.slice(0, MAX_SOURCE_TEXT)}\n…[truncated]`;
 }
 
 /** Total PRODUCT (non-charge) line items across a set of quotations. */

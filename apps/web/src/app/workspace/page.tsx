@@ -9,6 +9,7 @@ import { PrUpload } from '@/components/workspace/pr-upload';
 import { PrSummary } from '@/components/workspace/pr-summary';
 import { AnalysisResults } from '@/components/workspace/analysis-results';
 import { StaleAnalysisBanner } from '@/components/workspace/stale-analysis-banner';
+import { TenderSheetPanel } from '@/components/workspace/tender-sheet-panel';
 import { ExtractionDebug } from '@/components/workspace/extraction-debug';
 import { ChatPanel } from '@/components/workspace/chat-panel';
 import { type DeepDoc, DeepSearchStatus } from '@/components/workspace/deep-search-status';
@@ -767,6 +768,12 @@ export default function WorkspacePage() {
               selectedSupplier={selectedSupplier}
               onSelectSupplier={chooseSupplier}
             />
+          )}
+
+          {/* The tender comparative sheet — a second, Excel output built from the
+              same quotations. Independent of the TA form. */}
+          {displayAnalysis && displayAnalysis.quotations.length > 0 && (
+            <TenderSheetPanel analysis={displayAnalysis} analysisId={analysisId} />
           )}
 
           {docs.length > 0 && <DeepSearchStatus docs={docs} />}
