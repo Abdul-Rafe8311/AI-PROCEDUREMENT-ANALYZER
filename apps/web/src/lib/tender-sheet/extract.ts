@@ -14,7 +14,8 @@
 // Everything it produces is `source: 'ai'`, so mergeAiAnswers folds it in without
 // disturbing a reviewer's edits.
 
-import { extractJsonWithClaude, isAnthropicConfigured } from '../anthropic';
+import { isAnthropicConfigured } from '../anthropic';
+import { callLLM, isGroqConfigured } from '../llm-provider';
 import type { ExtractedQuotation } from '../workspace-types';
 import type { TenderAnswers, TenderTemplate } from './types';
 import { answerKey } from './types';
@@ -97,7 +98,8 @@ export async function extractTenderAnswersForSupplier(
   quotation: ExtractedQuotation,
   documentText: string,
 ): Promise<TenderExtractionResult | null> {
-  if (!isAnthropicConfigured() || !documentText.trim()) return null;
+  // Either provider can serve this; bail only when neither is configured.
+  if ((!isAnthropicConfigured() && !isGroqConfigured()) || !documentText.trim()) return null;
   const questions = itemQuestions(template);
   const instruction = [
     `Supplier: ${quotation.supplierName}`,
@@ -117,7 +119,13 @@ export async function extractTenderAnswersForSupplier(
     documentText,
   ].join('\n');
 
-  const { content } = await extractJsonWithClaude({ system: SYSTEM, user: instruction });
+  // The provider was decided ONCE for this document at upload (document-router)
+  // and travels on the quotation, so the sheet reads it the same way the TA form
+  // extraction did. A quotation extracted BEFORE routing existed carries no route
+  // — such a document must default to Claude, never silently land on Groq.
+  const provider = quotation.route?.provider ?? 'claude';
+  const usable = provider === 'groq' && isGroqConfigured() ? 'groq' : 'claude';
+  const { content } = await callLLM({ system: SYSTEM, user: instruction }, usable);
   const parsed = looseJson<TenderExtractionResult>(content);
   return parsed && Array.isArray(parsed.items) ? parsed : null;
 }

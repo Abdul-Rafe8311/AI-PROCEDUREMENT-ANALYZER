@@ -3,6 +3,8 @@
 // Returns ACTUAL values from the document — no sample/placeholder data here.
 
 import { normalizeDelivery } from './analysis-engine';
+import { routeDocument, type LlmProvider } from './document-router';
+import { callLLM, isGroqConfigured } from './llm-provider';
 import {
   EXTRACTION_MODEL,
   extractJsonFromMedia,
@@ -690,7 +692,26 @@ const SCAN_NOTE = [
 async function callExtractionLlm(
   system: string,
   userContent: string,
+  /** The document's routed provider. Omitted = Claude, preserving the old
+   *  behaviour for every caller that has not been routed (e.g. the PR reader). */
+  routedProvider: LlmProvider = 'claude',
 ): Promise<{ content: string | null; error: string | null }> {
+  // ROUTED TO GROQ: a digital English document the router judged Claude-grade
+  // reading unnecessary for. Falls through to the Claude path below if the Groq
+  // key is missing, so a misconfigured deployment degrades rather than failing.
+  if (routedProvider === 'groq' && isGroqConfigured()) {
+    try {
+      const { content } = await callLLM({ system, user: userContent }, 'groq');
+      log(`text extraction via groq:${process.env.GROQ_MODEL || 'llama-3.3-70b-versatile'}`);
+      if (!content) return { content: null, error: 'Groq returned an empty extraction response.' };
+      return { content, error: null };
+    } catch (err) {
+      const error = `Groq extraction failed: ${(err as Error).message}`;
+      log(error);
+      return { content: null, error };
+    }
+  }
+
   if (isAnthropicConfigured()) {
     try {
       const { content, usage } = await extractJsonWithClaude({ system, user: userContent });
@@ -752,11 +773,14 @@ async function callExtractionLlm(
 async function llmExtract(
   text: string,
   fileName = 'document',
+  /** the document's routed provider — Claude unless the router chose Groq */
+  routedProvider: LlmProvider = 'claude',
 ): Promise<{ data: LlmResult | null; error: string | null }> {
   const input = buildExtractionInput(text);
   const { content, error } = await callExtractionLlm(
     EXTRACTION_SYSTEM_PROMPT,
     `DOCUMENT TEXT:\n${input}`,
+    routedProvider,
   );
   // DEBUG: with EXTRACTION_DEBUG set, dump the exact text the model received AND
   // its raw response, so we can tell whether item rows are missing from the input
@@ -1216,6 +1240,13 @@ export async function extractQuotations(
   const isPdf = ext === 'pdf' || mime === 'application/pdf';
   const isImage = ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext) || mime.startsWith('image/');
   const { text, error: textError } = await extractText(buffer, fileName, mime);
+  // ONE routing decision for this document, made before any model is called and
+  // reused by BOTH consumers — the TA form extraction below and, via
+  // quotation.route, the tender-sheet fill later. Deciding once is what stops the
+  // two disagreeing about the same document. Both inputs are free: extractText is
+  // pdf.js and detectLanguage is a regex ratio.
+  const route = routeDocument(text, fileName);
+  log(`route "${fileName}": ${route.provider} (${route.reason}, ${route.textLength} chars)`);
 
   if (!text.trim()) {
     // Scanned PDF or image upload → read it with Claude vision.
@@ -1246,7 +1277,7 @@ export async function extractQuotations(
   const language = detectLanguage(text);
   const wantTranslation = language === 'ar' && isAnthropicConfigured();
   const [{ data: llm, error: llmError }, translation] = await Promise.all([
-    llmExtract(text, fileName),
+    llmExtract(text, fileName, route.provider),
     wantTranslation ? translateDocument(text, language, fileName) : Promise.resolve(null),
   ]);
 
@@ -1299,7 +1330,11 @@ export async function extractQuotations(
   // Keep the document text ON the quotation, so a later pass (the Tender
   // Comparative Sheet) can read the chemical/physical/thermal detail the
   // structured fields never carried, without re-uploading or re-parsing the PDF.
-  for (const q of quotations) q.sourceText = capSourceText(text);
+  for (const q of quotations) {
+    q.sourceText = capSourceText(text);
+    // Carried so the tender-sheet fill reuses THIS decision rather than re-deriving.
+    q.route = route;
+  }
 
   return { quotations, textLength: text.length, method: 'llm', error: llmError };
 }

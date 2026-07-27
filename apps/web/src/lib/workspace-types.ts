@@ -1,3 +1,6 @@
+import type { DocumentRoute } from './document-router';
+export type { DocumentRoute };
+
 // Shared types for the anonymous Procurement Workspace.
 
 export const ACCEPTED_EXTENSIONS = ['pdf', 'docx', 'png', 'jpg', 'jpeg'] as const;
@@ -104,6 +107,15 @@ export interface ExtractedQuotation {
    * Capped, because this is persisted with the analysis.
    */
   sourceText?: string | null;
+  /**
+   * Which provider was chosen for THIS document, decided once at upload from its
+   * language and text layer (see document-router.ts). Carried on the quotation so
+   * every later pass — the TA form extraction and the tender-sheet fill — uses the
+   * same decision instead of re-deriving it and potentially disagreeing.
+   * Absent on anything extracted before routing existed; callers must default to
+   * Claude rather than silently running such a document on Groq.
+   */
+  route?: DocumentRoute | null;
   /**
    * Set when the total we computed for this supplier disagrees with the total the
    * supplier's OWN quotation states, by more than a rounding tolerance. A silent
