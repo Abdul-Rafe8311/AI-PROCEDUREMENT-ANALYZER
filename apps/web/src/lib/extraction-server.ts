@@ -3,8 +3,6 @@
 // Returns ACTUAL values from the document — no sample/placeholder data here.
 
 import { normalizeDelivery } from './analysis-engine';
-import { routeDocument, type LlmProvider } from './document-router';
-import { callLLM, isGroqConfigured } from './llm-provider';
 import {
   EXTRACTION_MODEL,
   extractJsonFromMedia,
@@ -692,35 +690,7 @@ const SCAN_NOTE = [
 async function callExtractionLlm(
   system: string,
   userContent: string,
-  /** The document's routed provider. Omitted = Claude, preserving the old
-   *  behaviour for every caller that has not been routed (e.g. the PR reader). */
-  routedProvider: LlmProvider = 'claude',
 ): Promise<{ content: string | null; error: string | null }> {
-  // ROUTED TO GROQ: a digital English document the router judged Claude-grade
-  // reading unnecessary for. If Groq is unconfigured this FAILS LOUDLY rather
-  // than falling back to Claude — a silent fallback would spend Anthropic credits
-  // on exactly the documents routing exists to keep off them, and would do it
-  // invisibly.
-  if (routedProvider === 'groq') {
-    if (!isGroqConfigured()) {
-      const error =
-        'This document was routed to Groq (digital English), but GROQ_API_KEY is not configured. ' +
-        'Set it, or the document will not be extracted — it is deliberately NOT falling back to Claude.';
-      log(error);
-      return { content: null, error };
-    }
-    try {
-      const { content } = await callLLM({ system, user: userContent }, 'groq');
-      log(`text extraction via groq:${process.env.GROQ_MODEL || 'llama-3.3-70b-versatile'}`);
-      if (!content) return { content: null, error: 'Groq returned an empty extraction response.' };
-      return { content, error: null };
-    } catch (err) {
-      const error = `Groq extraction failed: ${(err as Error).message}`;
-      log(error);
-      return { content: null, error };
-    }
-  }
-
   if (isAnthropicConfigured()) {
     try {
       const { content, usage } = await extractJsonWithClaude({ system, user: userContent });
@@ -782,14 +752,11 @@ async function callExtractionLlm(
 async function llmExtract(
   text: string,
   fileName = 'document',
-  /** the document's routed provider — Claude unless the router chose Groq */
-  routedProvider: LlmProvider = 'claude',
 ): Promise<{ data: LlmResult | null; error: string | null }> {
   const input = buildExtractionInput(text);
   const { content, error } = await callExtractionLlm(
     EXTRACTION_SYSTEM_PROMPT,
     `DOCUMENT TEXT:\n${input}`,
-    routedProvider,
   );
   // DEBUG: with EXTRACTION_DEBUG set, dump the exact text the model received AND
   // its raw response, so we can tell whether item rows are missing from the input
@@ -1031,21 +998,11 @@ function mapSupplier(
   const deliveryTerms = s.deliveryTerms?.trim() || null;
   // Origin = the STATED country of origin; if the quote doesn't state one, fall
   // back to the country where the supplier itself is registered (its address/CR/
-  // VAT). Both come from THIS supplier's own document — `s` is one supplier object
-  // from one file's own extraction, so no other supplier's value is reachable here.
-  // Stays null only when the document carries no country information at all.
-  //
-  // Which of the two it was is recorded: an inferred value is a REGISTRATION
-  // country, not proof of where the goods are made, and after this point the two
-  // are otherwise indistinguishable.
-  const statedOrigin = normalizeCountry(s.countryOfOrigin);
-  const addressOrigin = normalizeCountry(s.supplierCountry);
-  const countryOfOrigin = statedOrigin ?? addressOrigin;
-  const countryOfOriginSource: ExtractedQuotation['countryOfOriginSource'] = statedOrigin
-    ? 'stated'
-    : addressOrigin
-      ? 'supplier-address'
-      : null;
+  // VAT). This is document-supported — a Saudi-registered supplier resolves to
+  // "Saudi Arabia" (and thus LOCAL for VAT), never a guessed country. Stays null
+  // only when the document carries no country information at all.
+  const countryOfOrigin =
+    normalizeCountry(s.countryOfOrigin) ?? normalizeCountry(s.supplierCountry);
   const reference = s.reference?.trim() || null;
   const prNumber = s.prNumber?.trim() || null;
   // Never fall back to the uploaded filename as a supplier name — use the
@@ -1100,7 +1057,6 @@ function mapSupplier(
     prNumber,
     deliveryTerms,
     countryOfOrigin,
-    countryOfOriginSource,
     statedTotals,
     totalMismatch,
     currencyConfidence,
@@ -1260,13 +1216,6 @@ export async function extractQuotations(
   const isPdf = ext === 'pdf' || mime === 'application/pdf';
   const isImage = ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext) || mime.startsWith('image/');
   const { text, error: textError } = await extractText(buffer, fileName, mime);
-  // ONE routing decision for this document, made before any model is called and
-  // reused by BOTH consumers — the TA form extraction below and, via
-  // quotation.route, the tender-sheet fill later. Deciding once is what stops the
-  // two disagreeing about the same document. Both inputs are free: extractText is
-  // pdf.js and detectLanguage is a regex ratio.
-  const route = routeDocument(text, fileName);
-  log(`route "${fileName}": ${route.provider} (${route.reason}, ${route.textLength} chars)`);
 
   if (!text.trim()) {
     // Scanned PDF or image upload → read it with Claude vision.
@@ -1297,7 +1246,7 @@ export async function extractQuotations(
   const language = detectLanguage(text);
   const wantTranslation = language === 'ar' && isAnthropicConfigured();
   const [{ data: llm, error: llmError }, translation] = await Promise.all([
-    llmExtract(text, fileName, route.provider),
+    llmExtract(text, fileName),
     wantTranslation ? translateDocument(text, language, fileName) : Promise.resolve(null),
   ]);
 
@@ -1350,11 +1299,7 @@ export async function extractQuotations(
   // Keep the document text ON the quotation, so a later pass (the Tender
   // Comparative Sheet) can read the chemical/physical/thermal detail the
   // structured fields never carried, without re-uploading or re-parsing the PDF.
-  for (const q of quotations) {
-    q.sourceText = capSourceText(text);
-    // Carried so the tender-sheet fill reuses THIS decision rather than re-deriving.
-    q.route = route;
-  }
+  for (const q of quotations) q.sourceText = capSourceText(text);
 
   return { quotations, textLength: text.length, method: 'llm', error: llmError };
 }

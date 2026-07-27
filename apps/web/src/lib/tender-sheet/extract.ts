@@ -14,8 +14,7 @@
 // Everything it produces is `source: 'ai'`, so mergeAiAnswers folds it in without
 // disturbing a reviewer's edits.
 
-import { isAnthropicConfigured } from '../anthropic';
-import { callLLM, isGroqConfigured } from '../llm-provider';
+import { extractJsonWithClaude, isAnthropicConfigured } from '../anthropic';
 import type { ExtractedQuotation } from '../workspace-types';
 import type { TenderAnswers, TenderTemplate } from './types';
 import { answerKey } from './types';
@@ -98,8 +97,7 @@ export async function extractTenderAnswersForSupplier(
   quotation: ExtractedQuotation,
   documentText: string,
 ): Promise<TenderExtractionResult | null> {
-  // Either provider can serve this; bail only when neither is configured.
-  if ((!isAnthropicConfigured() && !isGroqConfigured()) || !documentText.trim()) return null;
+  if (!isAnthropicConfigured() || !documentText.trim()) return null;
   const questions = itemQuestions(template);
   const instruction = [
     `Supplier: ${quotation.supplierName}`,
@@ -119,20 +117,7 @@ export async function extractTenderAnswersForSupplier(
     documentText,
   ].join('\n');
 
-  // The provider was decided ONCE for this document at upload (document-router)
-  // and travels on the quotation, so the sheet reads it the same way the TA form
-  // extraction did. A quotation extracted BEFORE routing existed carries no route
-  // — such a document must default to Claude, never silently land on Groq.
-  const provider = quotation.route?.provider ?? 'claude';
-  // Fail loudly rather than falling back to Claude: a silent fallback would spend
-  // Anthropic credits on a document routing exists to keep off them, invisibly.
-  if (provider === 'groq' && !isGroqConfigured()) {
-    throw new Error(
-      `${quotation.supplierName} was routed to Groq, but GROQ_API_KEY is not configured. ` +
-        'Set it — this is deliberately not falling back to Claude.',
-    );
-  }
-  const { content } = await callLLM({ system: SYSTEM, user: instruction }, provider);
+  const { content } = await extractJsonWithClaude({ system: SYSTEM, user: instruction });
   const parsed = looseJson<TenderExtractionResult>(content);
   return parsed && Array.isArray(parsed.items) ? parsed : null;
 }

@@ -27,10 +27,6 @@ export function TenderSheetPanel({
   const [note, setNote] = useState<string | null>(null);
 
   const hasPr = !!analysis.purchaseRequisition?.items.length;
-  const providersUsed = [...new Set(analysis.quotations.map((q) => q.route?.provider).filter(Boolean))];
-  const providerNote = providersUsed.length
-    ? `Extracted via ${providersUsed.map((p) => (p === 'groq' ? 'Groq' : 'Claude')).join(' + ')}`
-    : null;
 
   // Reopen a sheet saved for this analysis.
   useEffect(() => {
@@ -158,11 +154,6 @@ export function TenderSheetPanel({
         </div>
       )}
 
-      {/* Which AI read each document, from the per-document routing decision made
-          at upload — so a Groq-filled sheet is never taken for a Claude one. */}
-      {providerNote && !progress && (
-        <p className="mt-2 text-[11px] text-muted-foreground">{providerNote}</p>
-      )}
       {progress && <p className="mt-2 text-[11px] text-muted-foreground">{progress}</p>}
       {note && !progress && <p className="mt-2 text-[11px] text-muted-foreground">{note}</p>}
       {error && <p className="mt-2 text-xs text-danger">{error}</p>}

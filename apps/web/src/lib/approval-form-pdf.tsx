@@ -247,13 +247,6 @@ function ApprovalDocument({
     day: 'numeric',
   });
 
-  // "Extracted via Claude" / "via Groq" / both, from the per-document routing
-  // decision carried on each quotation. Absent on pre-routing analyses → omitted.
-  const providersUsed = [...new Set(qs.map((q) => q.route?.provider).filter(Boolean))] as string[];
-  const extractionProvenance = providersUsed.length
-    ? `Extracted via ${providersUsed.map((p) => (p === 'groq' ? 'Groq' : 'Claude')).join(' + ')}`
-    : null;
-
   const indexed = model.suppliers.map((s, i) => ({ ...s, colIndex: i }));
   const groups = supplierGroups(indexed, SUP_PER_GROUP);
   const fs = FS;
@@ -576,10 +569,6 @@ function ApprovalDocument({
           <Text style={s.footerLine}>
             Auto-filled from extracted data. Blank fields are for manual completion.
           </Text>
-          {/* Which AI read each document. Visible so a Groq-extracted result is
-              never mistaken for a Claude one. Layout untouched: this is one extra
-              footer line inside the existing footer block. */}
-          {extractionProvenance ? <Text style={s.footerLine}>{extractionProvenance}</Text> : null}
         </View>
       </Page>
     </Document>
