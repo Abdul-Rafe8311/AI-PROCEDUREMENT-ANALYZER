@@ -3,17 +3,28 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { routeDocument, isClaudeRequired } from './document-router';
+import { routeDocument, isClaudeRequired, isGroqRoutingEnabled } from './document-router';
 
 const english = (n = 400) => 'Quotation for refractory castable, price per ton. '.repeat(Math.ceil(n / 50)).slice(0, n);
 const arabic = 'عرض سعر للمواد الحرارية بسعر الطن الواحد شامل التوصيل إلى جدة. '.repeat(8);
 
-test('ROUTER: an ordinary digital English document goes to Groq', () => {
+test('ROUTER: Groq routing is DISABLED — no document routes to Groq', () => {
+  // Turned off after three of five suppliers extracted empty on the first live
+  // run. The detection still runs; only the provider is pinned.
+  assert.equal(isGroqRoutingEnabled(), false);
+  for (const text of [english(), english(5000), 'a'.repeat(1000)]) {
+    assert.equal(routeDocument(text, 'x.pdf').provider, 'claude');
+  }
+});
+
+test('ROUTER: a digital English document is still IDENTIFIED as such', () => {
+  // The reason and label stay truthful about what the document is, so re-enabling
+  // is a one-line change and the provenance line never lies in the meantime.
   const r = routeDocument(english(), 'LE_002.pdf');
-  assert.equal(r.provider, 'groq');
   assert.equal(r.reason, 'digital-text');
   assert.equal(r.language, 'en');
-  assert.match(r.label, /Extracted via Groq/);
+  assert.equal(r.provider, 'claude');
+  assert.match(r.label, /Extracted via Claude \(digital English document\)/);
 });
 
 test('ROUTER: an Arabic document stays on Claude even with a good text layer', () => {
@@ -45,10 +56,12 @@ test('ROUTER: letterhead-only OCR noise is NOT a text layer — the 200-char flo
   assert.equal(r.provider, 'claude');
   assert.equal(r.reason, 'scanned-no-text-layer');
   assert.ok(r.textLength < 200);
-  // …and the boundary is exact: 200 trimmed chars passes, 199 does not.
+  // …and the boundary is exact: 200 trimmed chars is 'digital-text', 199 is not.
+  // (Both resolve to Claude while Groq routing is disabled — the REASON is what
+  // the threshold decides, and it is what will select the provider once enabled.)
   const exact = (n: number) => 'a'.repeat(n);
-  assert.equal(routeDocument(exact(200), 'x.pdf').provider, 'groq');
-  assert.equal(routeDocument(exact(199), 'x.pdf').provider, 'claude');
+  assert.equal(routeDocument(exact(200), 'x.pdf').reason, 'digital-text');
+  assert.equal(routeDocument(exact(199), 'x.pdf').reason, 'scanned-no-text-layer');
 });
 
 test('ROUTER: the decision is deterministic — same input, same answer', () => {
@@ -58,7 +71,7 @@ test('ROUTER: the decision is deterministic — same input, same answer', () => 
 });
 
 test('ROUTER: the label names the provider and why, for the provenance line', () => {
-  assert.match(routeDocument(english(), 'q.pdf').label, /Groq \(digital English document\)/);
+  assert.match(routeDocument(english(), 'q.pdf').label, /Claude \(digital English document\)/);
   assert.match(routeDocument('', 'q.pdf').label, /Claude \(scanned document — vision required\)/);
   assert.match(routeDocument(arabic, 'q.pdf').label, /Claude \(Arabic source — translation required\)/);
 });

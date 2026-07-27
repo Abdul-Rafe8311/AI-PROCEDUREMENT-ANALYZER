@@ -5,6 +5,10 @@
 // The point is credit control: Claude is reserved for the documents that
 // genuinely need it, and everything else goes to Groq.
 //
+// >> GROQ ROUTING IS CURRENTLY DISABLED — see GROQ_ROUTING_ENABLED below. Every
+// >> document resolves to Claude today. Rule 3 is the only one Groq would serve,
+// >> and it is pinned to Claude until the empty-extraction cause is found.
+//
 // ── The rule, in priority order ─────────────────────────────────────────────
 //   1. Needs translation (Arabic / bilingual)  -> Claude
 //        Only Claude has the translation path this codebase uses, and the
@@ -12,7 +16,7 @@
 //   2. No usable text layer (scanned / image)  -> Claude
 //        Reading it at all requires vision. Groq's llama-3.3-70b-versatile is
 //        text-only, so it physically cannot do this.
-//   3. Otherwise (digital PDF, English)        -> Groq
+//   3. Otherwise (digital PDF, English)        -> Groq (disabled: -> Claude)
 //
 // ── Why this is safe to compute once ────────────────────────────────────────
 // Both signals come from the extracted TEXT, and extraction of that text is
@@ -48,6 +52,23 @@ export interface DocumentRoute {
 const MIN_TEXT_CHARS = 200;
 
 /**
+ * ── GROQ ROUTING IS DISABLED ────────────────────────────────────────────────
+ * Every document goes to Claude, exactly as before routing existed.
+ *
+ * Turned off after the first live run: three of five suppliers extracted empty
+ * ("Not found" across every field, score 0) once digital English PDFs began
+ * going to Groq. The cause was never established — the diagnostic logging on the
+ * Groq path went in but no failing run was captured — so this is disabled rather
+ * than fixed.
+ *
+ * The detection below still RUNS and still reports what a document is, so the
+ * reason and the provenance label stay truthful; only the provider is pinned.
+ * Flip this to true to re-enable, and expect to need the llm-provider diagnostics
+ * to finish the investigation.
+ */
+const GROQ_ROUTING_ENABLED = false;
+
+/**
  * Route ONE document. `text` is the output of extractText() for that document —
  * pass the same string that will later be sent to the model, so the decision and
  * the work are made on identical input.
@@ -72,8 +93,16 @@ export function routeDocument(text: string, fileName?: string): DocumentRoute {
     return route('claude', 'scanned-no-text-layer', language, textLength, fileName);
   }
 
-  // 3. Ordinary digital English document.
-  return route('groq', 'digital-text', language, textLength, fileName);
+  // 3. Ordinary digital English document — the only case Groq would ever serve.
+  //    While routing is disabled this still resolves to Claude; the reason stays
+  //    'digital-text' because that is genuinely what the document is.
+  return route(
+    GROQ_ROUTING_ENABLED ? 'groq' : 'claude',
+    'digital-text',
+    language,
+    textLength,
+    fileName,
+  );
 }
 
 const REASON_TEXT: Record<RouteReason, string> = {
@@ -101,3 +130,6 @@ function route(
 
 /** True when this document must stay on Claude regardless of any user preference. */
 export const isClaudeRequired = (r: DocumentRoute): boolean => r.provider === 'claude';
+
+/** Whether any document can currently be routed to Groq. */
+export const isGroqRoutingEnabled = (): boolean => GROQ_ROUTING_ENABLED;
