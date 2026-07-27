@@ -117,6 +117,18 @@ export interface ExtractedQuotation {
    */
   route?: DocumentRoute | null;
   /**
+   * WHERE countryOfOrigin came from, for this supplier's own document:
+   *   'stated'           — the quotation explicitly names a country of origin
+   *   'supplier-address' — inferred from THIS supplier's own letterhead / CR / VAT
+   *   null               — no country information in the document at all
+   *
+   * After mapping the two are otherwise indistinguishable, which is exactly what
+   * made "why does this supplier show that country?" hard to answer. An inferred
+   * value is the supplier's REGISTRATION country, not necessarily where the goods
+   * are made — worth knowing before it is read as provenance of the materials.
+   */
+  countryOfOriginSource?: 'stated' | 'supplier-address' | null;
+  /**
    * Set when the total we computed for this supplier disagrees with the total the
    * supplier's OWN quotation states, by more than a rounding tolerance. A silent
    * disagreement is how Siam Refractory shipped at USD 195,710 against a stated

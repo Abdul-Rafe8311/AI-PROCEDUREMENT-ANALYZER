@@ -124,8 +124,15 @@ export async function extractTenderAnswersForSupplier(
   // extraction did. A quotation extracted BEFORE routing existed carries no route
   // — such a document must default to Claude, never silently land on Groq.
   const provider = quotation.route?.provider ?? 'claude';
-  const usable = provider === 'groq' && isGroqConfigured() ? 'groq' : 'claude';
-  const { content } = await callLLM({ system: SYSTEM, user: instruction }, usable);
+  // Fail loudly rather than falling back to Claude: a silent fallback would spend
+  // Anthropic credits on a document routing exists to keep off them, invisibly.
+  if (provider === 'groq' && !isGroqConfigured()) {
+    throw new Error(
+      `${quotation.supplierName} was routed to Groq, but GROQ_API_KEY is not configured. ` +
+        'Set it — this is deliberately not falling back to Claude.',
+    );
+  }
+  const { content } = await callLLM({ system: SYSTEM, user: instruction }, provider);
   const parsed = looseJson<TenderExtractionResult>(content);
   return parsed && Array.isArray(parsed.items) ? parsed : null;
 }

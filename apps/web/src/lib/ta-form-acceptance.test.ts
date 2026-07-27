@@ -10,7 +10,7 @@ import {
   quotationsFromLlmSuppliers,
   type LlmSupplier,
 } from './extraction-server';
-import { matchQuotationsToPr, suggestTechnicalComments } from './item-matching';
+import { matchQuotationsToPr, suggestOrigins, suggestTechnicalComments } from './item-matching';
 import { buildComparisonModel } from './pr-comparison';
 import { withVatAmount } from './approval-form-pdf';
 import { isLocalCountry } from './workspace-types';
@@ -85,6 +85,16 @@ const supplyWave: LlmSupplier = {
     { name: 'Anchor Corrugated Type: TWS.10(60)-180(100)-40-310. Material GRADE - SS 310', quantity: 700, unitPrice: 9, totalPrice: null, category: 'product', uom: 'EA', availableInDays: null },
   ],
 };
+
+/** A minimal LlmSupplier for the origin tests below. */
+function blank(): LlmSupplier {
+  return {
+    supplierName: 'X', reference: null, prNumber: null, currency: 'USD', totalAmount: null,
+    vatAmount: null, totalWithoutVat: null, totalsByCurrency: null, deliveryTime: null,
+    deliveryTerms: null, countryOfOrigin: null, supplierCountry: null, paymentTerms: null,
+    warranty: null, validUntil: null, lineItems: [],
+  };
+}
 
 const quotations = quotationsFromLlmSuppliers([krosaki, alnajim, alfran, supplyWave, refratechnik], 'quotes.pdf', { currency: 'SAR', confidence: 0.6 });
 const prMatch = matchQuotationsToPr(quotations, pr);
@@ -319,4 +329,54 @@ test('"Not Quoted" stays truthful — a genuinely missing line still reports it'
   const sm = matchQuotationsToPr(missing, pr).bySupplier[0];
   assert.equal(sm.prItems[1].state, 'not_quoted', 'a genuinely absent line still reads Not Quoted');
   assert.equal(sm.notQuotedCount, 1);
+});
+
+// ── Country of Origin: resolution order and its provenance ──────────────────
+// Explicit statement first, else THIS supplier's own letterhead/registration
+// country, else nothing. The two are recorded distinctly because an inferred
+// value is where the SUPPLIER is registered, not proof of where the goods are
+// made — and after mapping they are otherwise indistinguishable.
+
+test('ORIGIN: an explicitly stated country wins and is marked "stated"', () => {
+  const q = quotationsFromLlmSuppliers(
+    [{ ...blank(), supplierName: 'Refratechnik', countryOfOrigin: 'F.R. OF GERMANY', supplierCountry: 'Germany' }],
+    'q.pdf', { currency: 'EUR', confidence: 1 },
+  )[0];
+  assert.equal(q.countryOfOrigin, 'Germany');
+  assert.equal(q.countryOfOriginSource, 'stated');
+});
+
+test('ORIGIN: with no stated origin it falls back to THIS supplier’s own address', () => {
+  const q = quotationsFromLlmSuppliers(
+    [{ ...blank(), supplierName: 'Alfran Saudi Arabia Co.', countryOfOrigin: null, supplierCountry: 'KSA' }],
+    'q.pdf', { currency: 'SAR', confidence: 1 },
+  )[0];
+  assert.equal(q.countryOfOrigin, 'Saudi Arabia');
+  assert.equal(q.countryOfOriginSource, 'supplier-address', 'flagged as inferred, not stated');
+});
+
+test('ORIGIN: no country information anywhere stays null — never guessed', () => {
+  const q = quotationsFromLlmSuppliers(
+    [{ ...blank(), supplierName: 'Supply Wave', countryOfOrigin: null, supplierCountry: null }],
+    'q.pdf', { currency: 'SAR', confidence: 1 },
+  )[0];
+  assert.equal(q.countryOfOrigin, null);
+  assert.equal(q.countryOfOriginSource, null);
+  assert.equal(suggestOrigins([q])[q.id], 'Not stated');
+});
+
+test('ORIGIN: one supplier’s country never leaks into another in the same batch', () => {
+  // The reported symptom was Refratechnik showing Thailand (Siam's country).
+  // Mapping is per-supplier-object, so co-extracted suppliers stay independent.
+  const qs = quotationsFromLlmSuppliers(
+    [
+      { ...blank(), supplierName: 'Siam Refractory', countryOfOrigin: 'Thailand' },
+      { ...blank(), supplierName: 'Refratechnik', countryOfOrigin: null, supplierCountry: 'Germany' },
+      { ...blank(), supplierName: 'Nameless', countryOfOrigin: null, supplierCountry: null },
+    ],
+    'multi.pdf', { currency: 'USD', confidence: 1 },
+  );
+  assert.equal(qs[0].countryOfOrigin, 'Thailand');
+  assert.equal(qs[1].countryOfOrigin, 'Germany', 'not Thailand');
+  assert.equal(qs[2].countryOfOrigin, null, 'not Thailand, not Germany');
 });

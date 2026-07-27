@@ -697,9 +697,18 @@ async function callExtractionLlm(
   routedProvider: LlmProvider = 'claude',
 ): Promise<{ content: string | null; error: string | null }> {
   // ROUTED TO GROQ: a digital English document the router judged Claude-grade
-  // reading unnecessary for. Falls through to the Claude path below if the Groq
-  // key is missing, so a misconfigured deployment degrades rather than failing.
-  if (routedProvider === 'groq' && isGroqConfigured()) {
+  // reading unnecessary for. If Groq is unconfigured this FAILS LOUDLY rather
+  // than falling back to Claude — a silent fallback would spend Anthropic credits
+  // on exactly the documents routing exists to keep off them, and would do it
+  // invisibly.
+  if (routedProvider === 'groq') {
+    if (!isGroqConfigured()) {
+      const error =
+        'This document was routed to Groq (digital English), but GROQ_API_KEY is not configured. ' +
+        'Set it, or the document will not be extracted — it is deliberately NOT falling back to Claude.';
+      log(error);
+      return { content: null, error };
+    }
     try {
       const { content } = await callLLM({ system, user: userContent }, 'groq');
       log(`text extraction via groq:${process.env.GROQ_MODEL || 'llama-3.3-70b-versatile'}`);
@@ -1022,11 +1031,21 @@ function mapSupplier(
   const deliveryTerms = s.deliveryTerms?.trim() || null;
   // Origin = the STATED country of origin; if the quote doesn't state one, fall
   // back to the country where the supplier itself is registered (its address/CR/
-  // VAT). This is document-supported — a Saudi-registered supplier resolves to
-  // "Saudi Arabia" (and thus LOCAL for VAT), never a guessed country. Stays null
-  // only when the document carries no country information at all.
-  const countryOfOrigin =
-    normalizeCountry(s.countryOfOrigin) ?? normalizeCountry(s.supplierCountry);
+  // VAT). Both come from THIS supplier's own document — `s` is one supplier object
+  // from one file's own extraction, so no other supplier's value is reachable here.
+  // Stays null only when the document carries no country information at all.
+  //
+  // Which of the two it was is recorded: an inferred value is a REGISTRATION
+  // country, not proof of where the goods are made, and after this point the two
+  // are otherwise indistinguishable.
+  const statedOrigin = normalizeCountry(s.countryOfOrigin);
+  const addressOrigin = normalizeCountry(s.supplierCountry);
+  const countryOfOrigin = statedOrigin ?? addressOrigin;
+  const countryOfOriginSource: ExtractedQuotation['countryOfOriginSource'] = statedOrigin
+    ? 'stated'
+    : addressOrigin
+      ? 'supplier-address'
+      : null;
   const reference = s.reference?.trim() || null;
   const prNumber = s.prNumber?.trim() || null;
   // Never fall back to the uploaded filename as a supplier name — use the
@@ -1081,6 +1100,7 @@ function mapSupplier(
     prNumber,
     deliveryTerms,
     countryOfOrigin,
+    countryOfOriginSource,
     statedTotals,
     totalMismatch,
     currencyConfidence,
