@@ -8,6 +8,7 @@ import {
   ClipboardCheck,
   Eye,
   EyeOff,
+  FileSpreadsheet,
   Loader2,
   Plus,
   RotateCcw,
@@ -287,6 +288,8 @@ export function ApprovalFormDownload({
   const [roles, setRoles] = useState<SigRole[]>(makeDefaultRoles);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [xlsxLoading, setXlsxLoading] = useState(false);
+  const [xlsxError, setXlsxError] = useState<string | null>(null);
 
   const supKey = analysis.quotations.map((q) => q.id).join('|');
   const suggestions = useMemo(
@@ -377,6 +380,56 @@ export function ApprovalFormDownload({
     }
   }
 
+  // Same form, same Customize state, as an .xlsx — Farid wants both formats from
+  // one review pass. ExcelJS needs Node, so this one round-trips through an API
+  // route (the tender sheet's export does the same) rather than generating
+  // client-side like the PDF; the analysis + every Customize option travel in the
+  // body so the download matches exactly what is on screen, unsaved edits
+  // included. The fx rate is `items.fx` — the SAME rate already used to build the
+  // on-screen comparison table and its totals — rather than a fresh server-side
+  // fetch, so the workbook's numbers cannot disagree with what the reviewer saw.
+  async function handleDownloadExcel() {
+    if (xlsxLoading) return;
+    setXlsxError(null);
+    setXlsxLoading(true);
+    try {
+      const signatureRoles = roles.filter((r) => r.enabled).map((r) => r.label.trim()).filter(Boolean);
+      const res = await fetch('/api/ta-form/export-excel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          analysis,
+          options: {
+            signatureRoles,
+            technicalComments: comments,
+            warranties: warranty.values,
+            countriesOfOrigin: origin.values,
+            selectedSupplier,
+            itemReview: items.review,
+          },
+          fx: items.fx,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `technical-approval-form-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (err) {
+      console.error('[xlsx] approval form export failed', err);
+      setXlsxError((err as Error).message || 'Could not generate the Excel file. Please try again.');
+    } finally {
+      setXlsxLoading(false);
+    }
+  }
+
   return (
     <div className="flex flex-col items-end gap-1">
       <div className="flex items-center gap-2">
@@ -406,6 +459,15 @@ export function ApprovalFormDownload({
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ClipboardCheck className="h-4 w-4" />}
           {loading ? 'Generating…' : 'Download Approval Form (PDF)'}
         </button>
+        <button
+          type="button"
+          onClick={handleDownloadExcel}
+          disabled={xlsxLoading}
+          className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-2 text-sm font-medium text-foreground shadow-sm transition hover:bg-muted/60 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {xlsxLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
+          {xlsxLoading ? 'Generating…' : 'Download TA Form (.xlsx)'}
+        </button>
       </div>
       {/* A form built from a stale restored analysis leaves the app and gets
           signed — the warning has to travel with the button, not just sit at the
@@ -422,6 +484,7 @@ export function ApprovalFormDownload({
         </span>
       )}
       {error && <span className="text-xs text-danger">{error}</span>}
+      {xlsxError && <span className="text-xs text-danger">{xlsxError}</span>}
     </div>
   );
 }
