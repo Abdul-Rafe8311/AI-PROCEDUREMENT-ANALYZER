@@ -32,6 +32,7 @@ import {
 } from './item-matching';
 import { buildComparisonModel, supplierGroups } from './pr-comparison';
 import { applyItemReview, type ItemReview } from './item-review';
+import { trimSupplierDescription } from './supplier-desc';
 import * as LAYOUT from './approval-form-layout';
 import {
   type AnalysisResult,
@@ -417,7 +418,11 @@ function ApprovalDocument({
                       <View key={sup.quotationId} style={[s.rowFlex, { width: supW, borderRightWidth: 1, borderRightColor: C.line }]}>
                         <View style={[s.cellBox, { width: subDescW, borderRightWidth: 1, borderRightColor: C.border }]}>
                           <Text style={notQuoted ? s.notQuoted : undefined}>
-                            {cell?.description ?? (notQuoted ? 'Not Quoted' : '')}
+                            {cell?.description
+                              ? trimSupplierDescription(cell.description, r.label)
+                              : notQuoted
+                                ? 'Not Quoted'
+                                : ''}
                           </Text>
                           {cell?.foc && (
                             <Text style={s.specDiffTag}>FOC — supplied free of charge, no cost</Text>
