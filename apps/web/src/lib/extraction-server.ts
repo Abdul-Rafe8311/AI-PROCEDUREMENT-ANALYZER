@@ -13,6 +13,7 @@ import {
   type ImageMediaType,
   type VisionMedia,
 } from './anthropic';
+import { callGroqExtraction, groqModel, isGroqConfigured } from './groq-client';
 import type {
   DocumentTranslation,
   ExtractedQuotation,
@@ -680,72 +681,54 @@ const SCAN_NOTE = [
   'company name appears anywhere for that supplier.',
 ].join('\n');
 
-// ── Raw structured-extraction call (Claude primary; Groq/OpenAI fallback) ──
+// ── Raw structured-extraction call (Groq primary; Claude safety net) ──
 // Sends a system prompt + document text and returns the model's raw JSON text.
-// Shared by supplier-quotation and purchase-requisition text extraction. Claude
-// (claude-sonnet-4-6) is the PRIMARY model — it reads clean text layers far more
-// accurately than Groq's llama-3.3-70b (grades, VAT, week/day units, quantities).
-// Groq/OpenAI stay as a fallback ONLY when ANTHROPIC_API_KEY is absent. Token
-// usage is logged per call so real cost can be measured.
+// Shared by supplier-quotation and purchase-requisition text extraction.
+//
+// UNDER TEST (2026-07-30): Groq (llama-3.3-70b-versatile) is tried FIRST when
+// configured. The July 27 "three of five suppliers empty" incident traced to
+// the account's Groq tier being capped at 12,000 tokens/minute — a batch of
+// calls back to back hit HTTP 429, which the old code turned straight into an
+// empty extraction. groq-client.ts now serializes calls and retries a 429
+// after the wait Groq itself reports, so a batch runs slower instead of
+// dropping documents. If Groq still fails after retries (or isn't
+// configured), this falls back to Claude so a transient/rate-limit failure
+// never produces an empty quotation during the comparison period — `provider`
+// on the result records which one actually answered, for the report.
+// Scanned/image documents and the Arabic vision-rescue path are UNCHANGED —
+// they call Claude directly (extractJsonFromMedia) and never reach here.
 async function callExtractionLlm(
   system: string,
   userContent: string,
-): Promise<{ content: string | null; error: string | null }> {
+): Promise<{ content: string | null; error: string | null; provider: 'groq' | 'claude' | null }> {
+  if (isGroqConfigured()) {
+    const started = Date.now();
+    const { content, error, finishReason } = await callGroqExtraction(system, userContent);
+    if (content) {
+      log(`extraction via Groq (${groqModel()}) in ${Date.now() - started}ms`);
+      return { content, error: null, provider: 'groq' };
+    }
+    log(`Groq extraction failed (finish_reason=${finishReason}): ${error} — falling back to Claude if available.`);
+  }
+
   if (isAnthropicConfigured()) {
     try {
       const { content, usage } = await extractJsonWithClaude({ system, user: userContent });
       log(
         `[tokens] text extraction via ${EXTRACTION_MODEL}: input=${usage.inputTokens} output=${usage.outputTokens} (total=${usage.inputTokens + usage.outputTokens})`,
       );
-      if (!content) return { content: null, error: 'Claude returned an empty extraction response.' };
-      return { content, error: null };
+      if (!content) return { content: null, error: 'Claude returned an empty extraction response.', provider: null };
+      return { content, error: null, provider: 'claude' };
     } catch (err) {
       const error = `Claude extraction failed: ${(err as Error).message}`;
       log(error);
-      return { content: null, error };
+      return { content: null, error, provider: null };
     }
   }
 
-  // Fallback: Groq (preferred) → OpenAI, only when no Anthropic key is set.
-  const provider = resolveProvider();
-  if (!provider) {
-    const error = 'No LLM provider configured — set ANTHROPIC_API_KEY (or GROQ_API_KEY / OPENAI_API_KEY).';
-    log(error);
-    return { content: null, error };
-  }
-  try {
-    const res = await fetch(provider.url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
-      body: JSON.stringify({
-        model: provider.model,
-        temperature: 0,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: userContent },
-        ],
-      }),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      const error = `LLM HTTP ${res.status} (model "${provider.model}"): ${body.slice(0, 300)}`;
-      log(error);
-      return { content: null, error };
-    }
-    const data = await res.json();
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content) {
-      const error = 'LLM returned an empty response.';
-      log(error);
-      return { content: null, error };
-    }
-    return { content, error: null };
-  } catch (err) {
-    const error = `LLM request failed: ${(err as Error).message}`;
-    log(error);
-    return { content: null, error };
-  }
+  const error = 'No LLM provider configured — set GROQ_API_KEY or ANTHROPIC_API_KEY.';
+  log(error);
+  return { content: null, error, provider: null };
 }
 
 // ── LLM structured extraction (supplier quotations) ──
@@ -784,26 +767,6 @@ async function llmExtract(
     return { data: null, error: e };
   }
   return { data: { suppliers }, error: null };
-}
-
-function resolveProvider() {
-  const groq = process.env.GROQ_API_KEY;
-  if (groq) {
-    return {
-      apiKey: groq,
-      url: 'https://api.groq.com/openai/v1/chat/completions',
-      model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
-    };
-  }
-  const openai = process.env.OPENAI_API_KEY;
-  if (openai) {
-    return {
-      apiKey: openai,
-      url: 'https://api.openai.com/v1/chat/completions',
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    };
-  }
-  return null;
 }
 
 const num = (v: unknown): number | null =>
