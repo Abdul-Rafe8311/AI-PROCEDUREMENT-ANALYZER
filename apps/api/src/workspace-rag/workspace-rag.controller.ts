@@ -63,7 +63,7 @@ export class WorkspaceRagController {
   }
 
   // Deep-document retrieval: returns relevance-filtered chunks for the caller
-  // to synthesize a plain-language answer (synthesis runs on Vercel/Groq).
+  // to synthesize a plain-language answer.
   @Post('search')
   async query(@Body() body: { documentId?: string; query?: string }) {
     const { documentId, query } = body ?? {};

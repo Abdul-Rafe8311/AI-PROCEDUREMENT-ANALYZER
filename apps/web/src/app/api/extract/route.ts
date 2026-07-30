@@ -67,10 +67,10 @@ export async function POST(req: Request) {
     const debug: Record<string, unknown>[] = [];
     const reasons: string[] = [];
 
-    // Read every upload's bytes, then extract ALL documents CONCURRENTLY. Claude
-    // is slower per-document than Groq, so processing 5 quotes + a PR in series
-    // blew past the serverless function timeout ("Could not reach the extraction
-    // service"). In parallel, total latency ≈ the slowest single document.
+    // Read every upload's bytes, then extract ALL documents CONCURRENTLY —
+    // processing 5 quotes + a PR in series blew past the serverless function
+    // timeout ("Could not reach the extraction service"). In parallel, total
+    // latency ≈ the slowest single document.
     const fileInputs = await Promise.all(
       files.map(async (file, i) => ({
         i,

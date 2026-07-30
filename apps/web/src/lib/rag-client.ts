@@ -160,7 +160,7 @@ export async function searchDocument(documentId: string, query: string): Promise
   return { ok: false, failure: lastFailure };
 }
 
-// Synthesize a plain-language answer from retrieved chunks (Vercel/Groq).
+// Synthesize a plain-language answer from retrieved chunks.
 export async function answerFromChunks(
   question: string,
   fileName: string | null,

@@ -1,6 +1,6 @@
 // Server-only real extraction: parse uploaded file text, detect currency, and
-// use an LLM (Groq, OpenAI-compatible) to extract structured quotation data.
-// Returns ACTUAL values from the document — no sample/placeholder data here.
+// use Claude to extract structured quotation data. Returns ACTUAL values from
+// the document — no sample/placeholder data here.
 
 import { normalizeDelivery } from './analysis-engine';
 import {
@@ -13,7 +13,6 @@ import {
   type ImageMediaType,
   type VisionMedia,
 } from './anthropic';
-import { callGroqExtraction, groqModel, isGroqConfigured } from './groq-client';
 import type {
   DocumentTranslation,
   ExtractedQuotation,
@@ -495,10 +494,10 @@ function normalizeSuppliers(parsed: unknown): LlmSupplier[] {
   return asArray.filter((s): s is LlmSupplier => !!s && typeof s === 'object');
 }
 
-// Shared structured-extraction schema + rules. Used by BOTH the text path
-// (Groq) and the scanned/image vision path (Claude) so the output shape and
-// business rules (freight in total, multi-supplier, currency-per-amount) are
-// identical regardless of how the document was read.
+// Shared structured-extraction schema + rules. Used by BOTH the digital-text
+// path and the scanned/image vision path (both run on Claude) so the output
+// shape and business rules (freight in total, multi-supplier,
+// currency-per-amount) are identical regardless of how the document was read.
 const EXTRACTION_SYSTEM_PROMPT = [
   'You extract structured data from a procurement document. It may be a SINGLE',
   'supplier quotation, OR a comparison sheet with MULTIPLE suppliers side by side',
@@ -681,54 +680,33 @@ const SCAN_NOTE = [
   'company name appears anywhere for that supplier.',
 ].join('\n');
 
-// ── Raw structured-extraction call (Groq primary; Claude safety net) ──
+// ── Raw structured-extraction call (Claude) ──
 // Sends a system prompt + document text and returns the model's raw JSON text.
 // Shared by supplier-quotation and purchase-requisition text extraction.
-//
-// UNDER TEST (2026-07-30): Groq (llama-3.3-70b-versatile) is tried FIRST when
-// configured. The July 27 "three of five suppliers empty" incident traced to
-// the account's Groq tier being capped at 12,000 tokens/minute — a batch of
-// calls back to back hit HTTP 429, which the old code turned straight into an
-// empty extraction. groq-client.ts now serializes calls and retries a 429
-// after the wait Groq itself reports, so a batch runs slower instead of
-// dropping documents. If Groq still fails after retries (or isn't
-// configured), this falls back to Claude so a transient/rate-limit failure
-// never produces an empty quotation during the comparison period — `provider`
-// on the result records which one actually answered, for the report.
-// Scanned/image documents and the Arabic vision-rescue path are UNCHANGED —
-// they call Claude directly (extractJsonFromMedia) and never reach here.
+// Scanned/image documents and the Arabic vision-rescue path call Claude
+// directly (extractJsonFromMedia) and never reach here.
 async function callExtractionLlm(
   system: string,
   userContent: string,
-): Promise<{ content: string | null; error: string | null; provider: 'groq' | 'claude' | null }> {
-  if (isGroqConfigured()) {
-    const started = Date.now();
-    const { content, error, finishReason } = await callGroqExtraction(system, userContent);
-    if (content) {
-      log(`extraction via Groq (${groqModel()}) in ${Date.now() - started}ms`);
-      return { content, error: null, provider: 'groq' };
-    }
-    log(`Groq extraction failed (finish_reason=${finishReason}): ${error} — falling back to Claude if available.`);
+): Promise<{ content: string | null; error: string | null; provider: 'claude' | null }> {
+  if (!isAnthropicConfigured()) {
+    const error = 'No LLM provider configured — set ANTHROPIC_API_KEY.';
+    log(error);
+    return { content: null, error, provider: null };
   }
 
-  if (isAnthropicConfigured()) {
-    try {
-      const { content, usage } = await extractJsonWithClaude({ system, user: userContent });
-      log(
-        `[tokens] text extraction via ${EXTRACTION_MODEL}: input=${usage.inputTokens} output=${usage.outputTokens} (total=${usage.inputTokens + usage.outputTokens})`,
-      );
-      if (!content) return { content: null, error: 'Claude returned an empty extraction response.', provider: null };
-      return { content, error: null, provider: 'claude' };
-    } catch (err) {
-      const error = `Claude extraction failed: ${(err as Error).message}`;
-      log(error);
-      return { content: null, error, provider: null };
-    }
+  try {
+    const { content, usage } = await extractJsonWithClaude({ system, user: userContent });
+    log(
+      `[tokens] text extraction via ${EXTRACTION_MODEL}: input=${usage.inputTokens} output=${usage.outputTokens} (total=${usage.inputTokens + usage.outputTokens})`,
+    );
+    if (!content) return { content: null, error: 'Claude returned an empty extraction response.', provider: null };
+    return { content, error: null, provider: 'claude' };
+  } catch (err) {
+    const error = `Claude extraction failed: ${(err as Error).message}`;
+    log(error);
+    return { content: null, error, provider: null };
   }
-
-  const error = 'No LLM provider configured — set GROQ_API_KEY or ANTHROPIC_API_KEY.';
-  log(error);
-  return { content: null, error, provider: null };
 }
 
 // ── LLM structured extraction (supplier quotations) ──
@@ -1338,8 +1316,9 @@ interface LlmPr {
   items: LlmPrItem[];
 }
 
-// Shared schema + rules for reading a PR, used by BOTH the text path (Groq) and
-// the scanned/image vision path (Claude) so the output shape is identical.
+// Shared schema + rules for reading a PR, used by BOTH the digital-text path
+// and the scanned/image vision path (both run on Claude) so the output shape
+// is identical.
 const PR_EXTRACTION_SYSTEM_PROMPT = [
   'You extract structured data from a COMPANY-INTERNAL PURCHASE REQUISITION (PR),',
   'also called an "Approved Requisition Report". This is NOT a supplier quotation —',
@@ -1569,7 +1548,7 @@ export interface PrExtraction {
 }
 
 // Read the company's Purchase Requisition from an uploaded file. Digital text
-// (PDF/DOCX) goes through Groq; a scanned PDF or image is read with Claude
+// (PDF/DOCX) goes through Claude; a scanned PDF or image is read with Claude
 // vision — mirroring supplier-quotation extraction. Never invents data.
 export async function extractPurchaseRequisition(
   buffer: Buffer,
