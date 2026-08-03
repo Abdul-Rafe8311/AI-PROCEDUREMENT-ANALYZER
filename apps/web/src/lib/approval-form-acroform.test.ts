@@ -10,7 +10,6 @@ import { PDFCheckBox, PDFDocument, PDFFont, PDFName, PDFTextField, StandardFonts
 import { purchaseRequisitionFromLlm, quotationsFromLlmSuppliers, type LlmSupplier } from './extraction-server';
 import { assembleAnalysis } from './analysis-engine';
 import { generateApprovalFormPdf } from './approval-form-acroform';
-import { SUPPLIERS_PER_GROUP } from './pr-comparison';
 import type { FxRates } from './fx-rates';
 import type { AnalysisResult } from './workspace-types';
 
@@ -155,11 +154,7 @@ test('TA ACROFORM: Signature/Date fields start BLANK for the team to complete by
 // landscape page (15 sub-columns), so no column was wide enough for a part code
 // at any font size.
 
-// The per-page cap follows SUPPLIERS_PER_GROUP, which is re-exported from the layout
-// module — it moved 4 → 3 when the TA form's body type went 8pt → 12pt, and this
-// build shares the constant so the two can never disagree about which supplier lands
-// on which page. The test reads the constant rather than hardcoding the number again.
-test('TA PAGINATION: 5 suppliers → at most SUPPLIERS_PER_GROUP columns per page', async () => {
+test('TA PAGINATION: 5 suppliers → at most FOUR supplier columns per page, split 1-4 then 5-5', async () => {
   const { doc, form } = await generateAndLoad(fiveSupplierAnalysis());
   const pages = fieldPages(doc);
   assert.ok(doc.getPageCount() >= 2, `paginated, got ${doc.getPageCount()} page(s)`);
@@ -174,25 +169,15 @@ test('TA PAGINATION: 5 suppliers → at most SUPPLIERS_PER_GROUP columns per pag
     perPage.get(p)!.add(m[1]);
   }
   for (const [p, cols] of perPage) {
-    assert.ok(
-      cols.size <= SUPPLIERS_PER_GROUP,
-      `page ${p} shows ${cols.size} supplier columns (max ${SUPPLIERS_PER_GROUP})`,
-    );
+    assert.ok(cols.size <= 4, `page ${p} shows ${cols.size} supplier columns (max 4)`);
   }
   const seen = new Set([...perPage.values()].flatMap((s) => [...s]));
   assert.deepEqual([...seen].sort(), ['0', '1', '2', '3', '4'], 'every supplier appears somewhere');
 
-  // The blocks partition the suppliers in order. This build gives a long block
-  // CONTINUATION pages, so the same column set legitimately appears on more than one
-  // page — dedupe by membership before checking the partition.
-  const blocks: string[][] = [];
-  for (const [, cols] of [...perPage.entries()].sort((a, b) => a[0] - b[0])) {
-    const key = [...cols].sort().join(',');
-    if (blocks.length && blocks[blocks.length - 1].join(',') === key) continue;
-    blocks.push([...cols].sort());
+  // Suppliers 1-4 and supplier 5 never share a page.
+  for (const cols of perPage.values()) {
+    if (cols.has('4')) assert.equal(cols.size, 1, 'the 5th supplier gets its own block');
   }
-  assert.deepEqual(blocks.flat(), ['0', '1', '2', '3', '4'], 'each supplier belongs to exactly one block');
-  assert.equal(blocks[0].length, SUPPLIERS_PER_GROUP, 'the first block is full');
 });
 
 test('TA PAGINATION: the continuation page carries REAL editable fields with unique names', async () => {
@@ -366,6 +351,6 @@ test('TA NEUTRAL: page numbering is stamped so a multi-page form cannot be read 
   const merged = String(text);
   assert.ok(merged.includes(`Page 1 of ${doc.getPageCount()}`), 'page 1 stamped');
   assert.ok(merged.includes(`Page ${doc.getPageCount()} of ${doc.getPageCount()}`), 'last page stamped');
-  assert.match(merged, /Suppliers 1-3 of 5/, 'supplier range header printed');
-  assert.match(merged, /Suppliers 4-5 of 5/, 'second supplier block header printed');
+  assert.match(merged, /Suppliers 1-4 of 5/, 'supplier range header printed');
+  assert.match(merged, /Suppliers 5-5 of 5/, 'second supplier block header printed');
 });

@@ -20,7 +20,6 @@ import { buildComparisonModel } from './pr-comparison';
 import { trimSupplierDescription } from './supplier-desc';
 import { taFormWorkbookBuffer } from './ta-form-excel';
 import * as LAYOUT from './approval-form-layout';
-import { helveticaMeasurer, wrapLines } from './text-fit';
 
 (globalThis as unknown as { React: typeof React }).React = React;
 
@@ -68,16 +67,10 @@ test('A3: the .xlsx is set to A3 landscape too', async () => {
 
 // ── 2. type ────────────────────────────────────────────────────────────────
 
-test('TYPE: the PDF body is readable in print, and matches the workbook', async () => {
-  // 6.5pt on A4, then 8pt on A3, now 12pt — the same size the .xlsx uses, so the
-  // two exports of one form read alike. Anything below 12 is a regression.
-  assert.ok(LAYOUT.FS >= 12, `body type is ${LAYOUT.FS}pt`);
-  // Column headers are bold AND a step above the body, so the band reads as a header.
-  assert.ok(LAYOUT.TYPE_HEAD > LAYOUT.FS, `header type ${LAYOUT.TYPE_HEAD}pt exceeds body ${LAYOUT.FS}pt`);
-  // Nothing on the form is small enough to be a footnote by accident.
-  for (const [name, size] of Object.entries(LAYOUT.TYPE)) {
-    assert.ok(size >= 9, `${name} is ${size}pt — under the 9pt print floor`);
-  }
+test('TYPE: the PDF body is meaningfully larger than the A4 original', async () => {
+  // It was 6.5pt. Anything at or below that is a regression of the whole point.
+  assert.ok(LAYOUT.FS >= 8, `body type is ${LAYOUT.FS}pt`);
+  assert.ok(LAYOUT.FS > 6.5, 'larger than the A4 original');
 });
 
 test('TYPE: the supplier column heading is bigger than the body, in both formats', async () => {
@@ -130,13 +123,10 @@ test('TYPE: the overlay can still tell the type sizes apart', () => {
 
 // ── 3. nothing overflows its column ────────────────────────────────────────
 
-test('FIT: no token can overrun its column once wrapped', async () => {
-  // This USED to assert that a whole part code fitted its column outright, which is
-  // what capped the body type at 8pt. Cell text is now pre-wrapped by text-fit.ts
-  // before react-pdf sees it, so the invariant that actually matters is different:
-  // every LINE the wrapper emits fits the column it was wrapped to. A token with no
-  // space in it is broken at its own punctuation seams, so "fits outright" is no
-  // longer required — "never overruns" still is, because react-pdf does not clip.
+test('FIT: the longest unbreakable token fits every column it can land in', async () => {
+  // This is the constraint that sets the type size. A part code has no space to
+  // wrap at, and react-pdf does not clip — at 9.5pt the supplier description was
+  // being written straight through the quantity column beside it.
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const model = buildComparisonModel(analysis.quotations, analysis.purchaseRequisition, analysis.prMatch, {
@@ -147,15 +137,15 @@ test('FIT: no token can overrun its column once wrapped', async () => {
   const widest = (tokens: string[]) =>
     tokens.reduce((m, t) => Math.max(m, font.widthOfTextAtSize(t, LAYOUT.FS)), 0);
 
-  const prLabels: string[] = [];
-  const descs: string[] = [];
+  const prTokens: string[] = [];
+  const descTokens: string[] = [];
   const qtys: string[] = [];
   const prices: string[] = [];
   for (const r of model.rows) {
-    prLabels.push(String(r.label));
+    prTokens.push(...String(r.label).split(/\s+/));
     r.cells.forEach((c) => {
       if (!c) return;
-      descs.push(c.description ? trimSupplierDescription(c.description, r.label) : '');
+      descTokens.push(...(c.description ? trimSupplierDescription(c.description, r.label) : '').split(/\s+/));
       qtys.push(c.qty == null ? '' : c.qty.toLocaleString('en-US'));
       prices.push(
         `${c.currency} ${(c.unitPrice ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
@@ -163,83 +153,19 @@ test('FIT: no token can overrun its column once wrapped', async () => {
     });
   }
 
-  // The renderer fits columns to THIS document's content, so the test must measure
-  // against the same fit rather than the default one.
-  const profile = LAYOUT.profileFrom(prLabels, descs, LAYOUT.SUP_PER_GROUP);
-  const fit = LAYOUT.fitColumns(LAYOUT.SUP_PER_GROUP, profile);
-  const measure = helveticaMeasurer(LAYOUT.FS);
-
-  /** Every wrapped line of every sample fits the column, with room for padding. */
-  const fitsWrapped = (samples: string[], colW: number, what: string) => {
-    const inner = colW - pad;
-    for (const sample of samples) {
-      for (const line of wrapLines(sample, inner, measure)) {
-        assert.ok(
-          font.widthOfTextAtSize(line, LAYOUT.FS) <= inner + 0.5,
-          `${what}: wrapped line ${JSON.stringify(line)} is wider than its ${colW}pt column`,
-        );
-      }
-    }
-  };
-
-  fitsWrapped(prLabels, fit.prDesc, 'PR description');
-  fitsWrapped(descs, fit.desc, 'supplier description');
-  // Quantities and prices are short and must NOT wrap — they are single figures, and
-  // a price broken across two lines is a misread waiting to happen.
-  assert.ok(widest(qtys) + pad <= fit.qty, 'quantity sub-column holds its widest quantity outright');
-  assert.ok(widest(prices) + pad <= fit.price, 'price sub-column holds its widest price outright');
-});
-
-test('FIT: wrapping only ever splits — it never adds or drops a character', () => {
-  // The reason react-pdf's own hyphenation callback is unusable here: it inserts a
-  // literal "-" at every intra-word break, which would silently alter a part number
-  // on a form somebody signs. Our wrapper must be incapable of that.
-  const measure = helveticaMeasurer(LAYOUT.FS);
-  const samples = [
-    'TWS.10(60)-200(140)-45-253MA-C',
-    'ALUMINA BRICK 70% AL2O3 230x114x76/64mm',
-    'ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZ',
-    'short',
-    '',
-  ];
-  // Whitespace is compared out on BOTH sides: a break at a space legitimately drops
-  // that space, and a break inside a token legitimately adds none. What must survive
-  // untouched is every non-whitespace character — a stray "-" here is the bug.
-  const bare = (t: string) => t.replace(/\s+/g, '');
-  for (const s of samples) {
-    for (const width of [40, 80, 150, 400]) {
-      const joined = wrapLines(s, width, measure).join('');
-      assert.equal(bare(joined), bare(s), `wrapping ${JSON.stringify(s)} at ${width}pt altered it`);
-    }
-  }
+  const { desc, qty, price } = LAYOUT.supplierSubCols(LAYOUT.SUP_PER_GROUP);
+  assert.ok(widest(prTokens) + pad <= LAYOUT.PR_DESC_W, 'PR description column holds its longest token');
+  assert.ok(widest(descTokens) + pad <= desc, 'supplier description sub-column holds its longest part code');
+  assert.ok(widest(qtys) + pad <= qty, 'quantity sub-column holds its widest quantity');
+  assert.ok(widest(prices) + pad <= price, 'price sub-column holds its widest price');
 });
 
 test('FIT: a supplier block never runs past the usable page width', () => {
-  const fit = LAYOUT.fitColumns(LAYOUT.SUP_PER_GROUP);
+  const { supW } = LAYOUT.supplierSubCols(LAYOUT.SUP_PER_GROUP);
   assert.ok(
-    fit.left + LAYOUT.SUP_PER_GROUP * fit.supW <= LAYOUT.USABLE + 0.5,
-    `${LAYOUT.SUP_PER_GROUP} supplier groups plus the left block fit the page`,
+    LAYOUT.LEFT_W + LAYOUT.SUP_PER_GROUP * supW <= LAYOUT.USABLE + 0.5,
+    'four supplier groups plus the left block fit the page',
   );
-});
-
-test('FIT: the overlay recovers the exact column fit the renderer used', () => {
-  // Column widths are content-derived, and the overlay sees only the rendered page.
-  // The renderer stamps its profile into the PDF's Keywords; if that round-trip
-  // breaks, every editable widget lands on the wrong column.
-  const profile = LAYOUT.profileFrom(['a'.repeat(70)], ['b'.repeat(20)], 3);
-  const decoded = LAYOUT.decodeFit(LAYOUT.encodeFit(profile));
-  assert.deepEqual(LAYOUT.fitColumns(3, decoded), LAYOUT.fitColumns(3, profile));
-  // An unstamped (or older) document must still fit, on the default profile.
-  assert.deepEqual(LAYOUT.decodeFit(undefined), LAYOUT.DEFAULT_PROFILE);
-});
-
-test('FIT: a trailing part-block keeps the full block’s column widths', () => {
-  // 5 suppliers render as 3 + 2. If the block of 2 stretched to fill the page, the
-  // sheet would carry two grids of different geometry — and the overlay, which sees
-  // "this band has 2 columns", would place its widgets on the wrong one.
-  const profile = LAYOUT.profileFrom(['item description'], ['supplier description'], 3);
-  assert.equal(LAYOUT.fitColumns(2, profile).supW, LAYOUT.fitColumns(3, profile).supW);
-  assert.equal(LAYOUT.fitColumns(2, profile).prDesc, LAYOUT.fitColumns(3, profile).prDesc);
 });
 
 // ── 4. pagination ──────────────────────────────────────────────────────────
@@ -270,24 +196,12 @@ test('PAGES: a supplier block is never split across a page break', async () => {
   }
 });
 
-test('PAGES: one page per supplier block plus the sign-off, and no more', async () => {
-  // Farid confirmed the approval blocks may fall to their own page rather than the
-  // layout being compressed to force them up. What is not acceptable is the form
-  // SPRAWLING — so the ceiling is expressed as what the content actually requires,
-  // not as a fixed count.
-  //
-  // This was a flat "at most 2 pages", which was the 8pt result: the whole grid fit
-  // page 1 and the sign-off took page 2. At 12pt a block no longer shares a page —
-  // five suppliers are two blocks of 3 + 2, so the grid is two pages and the
-  // sign-off a third. That is the cost of readable type on a five-supplier PR, and
-  // it is the trade the 12pt standard was chosen with. A block spilling across two
-  // pages, or a stray fourth page, still fails here.
+test('PAGES: two pages is the ceiling for this PR, and the sign-off owns the last one', async () => {
+  // Farid confirmed the approval blocks may fall to a second page rather than the
+  // layout being compressed to force one. What is not acceptable is the form
+  // sprawling further than that for an ordinary five-supplier requisition.
   const doc = await PDFDocument.load(await renderPdf());
-  const blocks = Math.ceil(analysis.quotations.length / LAYOUT.SUP_PER_GROUP);
-  assert.ok(
-    doc.getPageCount() <= blocks + 1,
-    `expected at most ${blocks + 1} pages (${blocks} supplier blocks + sign-off), got ${doc.getPageCount()}`,
-  );
+  assert.ok(doc.getPageCount() <= 2, `expected at most 2 pages, got ${doc.getPageCount()}`);
 
   const { measureRuns } = await import('./approval-form-overlay');
   const runs = await measureRuns(await renderPdf());

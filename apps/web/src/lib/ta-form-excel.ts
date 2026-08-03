@@ -45,7 +45,6 @@ import {
   type TaCurrencySelection,
 } from './ta-currency';
 import type { ApprovalFormOptions } from './approval-form-pdf';
-import { countLines, excelColPoints, helveticaMeasurer } from './text-fit';
 
 // ── palette (mirrors the PDF's greys) ──
 const HEAD_BG = 'FFE2E8F0'; // header band
@@ -156,33 +155,8 @@ function borderRange(
   }
 }
 
-/**
- * A cell as row-height input: its text, and how wide (in Excel column-width units)
- * the space it occupies is — the sum of the widths when the cell is merged.
- */
-interface HeightCell {
-  text: string;
-  chars: number;
-}
-
-/**
- * Height (pt) a row needs for every one of its cells to be fully visible.
- *
- * This used to be `text.split('\n').length` — the count of EXPLICIT newlines. Every
- * cell already sets `wrapText: true`, so Excel was wrapping a 60-character
- * description onto three lines inside a row reserved for one and clipping the rest.
- * The line count now comes from the same wrapping model the PDF uses (text-fit.ts),
- * measured against the cell's own column width, so both outputs grow a row for the
- * same text.
- */
-function rowHeight(cells: HeightCell[], size = FS_BODY): number {
-  const measure = helveticaMeasurer(size);
-  const lines = Math.max(
-    1,
-    ...cells.map((c) => countLines(String(c.text ?? ''), excelColPoints(c.chars), measure)),
-  );
-  return lines * lineHeight(size) + 6;
-}
+const rowHeight = (texts: string[], size = FS_BODY) =>
+  Math.max(lineHeight(size) + 6, Math.max(1, ...texts.map((t) => String(t ?? '').split('\n').length)) * lineHeight(size) + 6);
 
 /**
  * Build the Technical Approval Form workbook from the SAME inputs the PDF
@@ -278,14 +252,6 @@ export async function buildTaFormWorkbook(
       { width: w(8) }, // UOM
       ...group.flatMap(() => [{ width: w(34) }, { width: w(9) }, { width: w(18) }]),
     ];
-    /** Column widths by 1-based index — the row-height maths needs them to know how
-     *  far a cell's text can run before Excel wraps it. */
-    const colChars = ws.columns.map((c) => c.width ?? 10);
-    /** Width available to a cell spanning columns `from`..`to` (a merge). */
-    const spanChars = (from: number, to = from) =>
-      colChars.slice(from - 1, to).reduce((a, b) => a + b, 0);
-    /** Every cell in a row, ready for `rowHeight`. */
-    const hcell = (text: string, from: number, to = from): HeightCell => ({ text, chars: spanChars(from, to) });
 
     let row = 1;
     const put = (
@@ -304,7 +270,7 @@ export async function buildTaFormWorkbook(
     put(row, 1, 'TECHNICAL APPROVAL FORM', { bold: true, size: FS_TITLE });
     ws.mergeCells(row, 1, row, lastCol);
     borderRange(ws, row, 1, row, lastCol, HEAD_BG);
-    ws.getRow(row).height = rowHeight([hcell('TECHNICAL APPROVAL FORM', 1, lastCol)], FS_TITLE);
+    ws.getRow(row).height = rowHeight(['x'], FS_TITLE);
     row++;
 
     for (const [label, value] of [
@@ -319,9 +285,7 @@ export async function buildTaFormWorkbook(
       put(row, 3, value);
       ws.mergeCells(row, 3, row, lastCol);
       borderRange(ws, row, 1, row, lastCol);
-      // The value is merged across columns 3..lastCol, so it has that whole span to
-      // wrap in — a long SAR-conversion stamp is one line, not five.
-      ws.getRow(row).height = rowHeight([hcell(value, 3, lastCol)]);
+      ws.getRow(row).height = rowHeight([value]);
       row++;
     }
     row++; // spacer
@@ -364,33 +328,22 @@ export async function buildTaFormWorkbook(
     borderRange(ws, bandTop, 1, bandTop + 1, lastCol, HEAD_BG);
     // The supplier name band gets its own tint, over its whole merged width.
     group.forEach((_s, i) => borderRange(ws, bandTop, 5 + i * 3, bandTop, 7 + i * 3, SUP_BG));
-    // The name band is "SUPPLIER #n — Name" over a REF# line, merged across that
-    // supplier's three sub-columns; a long company name wraps and the band grows.
-    ws.getRow(bandTop).height = rowHeight(
-      group.map((sup, i) =>
-        hcell(`SUPPLIER #${sup.colIndex + 1} — ${nameOf(sup.quotationId, sup.supplier)}\nREF# x`, 5 + i * 3, 7 + i * 3),
-      ),
-      FS_SUPPLIER,
-    );
-    ws.getRow(bandTop + 1).height = rowHeight([
-      ...group.map((sup, i) =>
-        hcell(`Unit Price (${headerLabel(sup.currency, fx, currencyDisplay.lineItems)})`, 7 + i * 3),
-      ),
-      hcell(model.hasPr ? 'PR Item Description' : 'Item Description', 2),
-    ]);
+    // Two lines of the LARGER supplier type, so the band reads as a column heading.
+    ws.getRow(bandTop).height = rowHeight(['a\nb'], FS_SUPPLIER);
+    ws.getRow(bandTop + 1).height = rowHeight(['x']);
     // Repeat the left reference columns + this band on every printed page.
     ws.pageSetup.printTitlesRow = `${bandTop}:${bandTop + 1}`;
     row = bandTop + 2;
 
     // ── item rows ──
     model.rows.forEach((r, idx) => {
-      const texts: HeightCell[] = [];
+      const texts: string[] = [];
       put(row, 1, r.kind === 'charge' ? '' : r.index, { align: 'center' });
       const label = `${r.label}${r.kind === 'charge' ? `  [${r.category.toUpperCase()}]` : ''}`;
       put(row, 2, label);
       put(row, 3, plain(r.qty), { align: 'center' });
       put(row, 4, r.uom ?? '', { align: 'center' });
-      texts.push(hcell(label, 2));
+      texts.push(label);
       group.forEach((sup, i) => {
         const cell = r.cells[sup.colIndex] ?? null;
         const notQuoted = !cell && r.kind !== 'charge';
@@ -406,7 +359,7 @@ export async function buildTaFormWorkbook(
         // single-currency sheet. Only the totals below convert by default.
         const price = cell ? moneyCell(cell.unitPrice, cell.currency, fx, currencyDisplay.lineItems) : '';
         put(row, c0 + 2, price, { align: 'right' });
-        texts.push(hcell(`${desc}${note}${foc}`, c0), hcell(price, c0 + 2));
+        texts.push(`${desc}${note}${foc}`, price);
       });
       borderRange(ws, row, 1, row, lastCol, idx % 2 === 1 ? ROW_ALT : undefined);
       ws.getRow(row).height = rowHeight(texts);
@@ -438,7 +391,7 @@ export async function buildTaFormWorkbook(
     for (const [label, valueFor] of terms) {
       put(row, 1, label, { bold: true });
       ws.mergeCells(row, 1, row, 4);
-      const texts: HeightCell[] = [hcell(label, 1, 4)];
+      const texts = [label];
       group.forEach((sup, i) => {
         const q = qById.get(sup.quotationId)!;
         const v = valueFor(q);
@@ -449,9 +402,7 @@ export async function buildTaFormWorkbook(
           align: label.startsWith('Total Price') ? 'right' : 'left',
         });
         ws.mergeCells(row, c0, row, c0 + 2);
-        // A term value is merged across all three sub-columns, so it wraps against
-        // the full supplier width — a payment-terms paragraph gets the room it needs.
-        texts.push(hcell(v, c0, c0 + 2));
+        texts.push(v);
       });
       borderRange(ws, row, 1, row, lastCol, TERM_BG);
       // …then clear the tint from the value cells so only the label band is shaded.
@@ -471,9 +422,7 @@ export async function buildTaFormWorkbook(
         put(row, 1, `AI SUGGESTED — system-generated, NOT an approval: ${ai}`, { color: AI_INK });
         ws.mergeCells(row, 1, row, lastCol);
         borderRange(ws, row, 1, row, lastCol);
-        ws.getRow(row).height = rowHeight([
-          hcell(`AI SUGGESTED — system-generated, NOT an approval: ${ai}`, 1, lastCol),
-        ]);
+        ws.getRow(row).height = rowHeight([ai]);
         row += 2;
       }
 

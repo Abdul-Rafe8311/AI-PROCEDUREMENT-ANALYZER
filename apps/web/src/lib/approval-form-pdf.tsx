@@ -20,7 +20,7 @@
 // Signature blocks are provided by the caller (user-configured): count, names
 // and order vary per document — nothing is hardcoded.
 
-import { Document, Font, Page, Text, View, StyleSheet, pdf } from '@react-pdf/renderer';
+import { Document, Page, Text, View, StyleSheet, pdf } from '@react-pdf/renderer';
 import { scoreSuppliers } from './analysis-engine';
 import { type FxRates, getFxRates, sarPerUnit, toSar, toUsd } from './fx-rates';
 import {
@@ -35,7 +35,6 @@ import { buildComparisonModel, supplierGroups } from './pr-comparison';
 import { applyItemReview, type ItemReview, type ReviewedValue, valueOf } from './item-review';
 import { trimSupplierDescription } from './supplier-desc';
 import * as LAYOUT from './approval-form-layout';
-import { fitText, helveticaMeasurer } from './text-fit';
 import {
   type AnalysisResult,
   type ApprovalFieldValue,
@@ -108,41 +107,7 @@ export interface ApprovalFormOptions {
 
 // Page geometry lives in the shared layout module so the pdf-lib field overlay
 // places its widgets on exactly the columns this renderer draws.
-const { SUP_PER_GROUP, USABLE, PAGE_PAD_X, PAGE_PAD_Y, FS } = LAYOUT;
-
-/**
- * Pre-wrap a cell's text to its column, in points.
- *
- * react-pdf only breaks at spaces and never clips, so an unbreakable part code
- * wider than its column is drawn straight through the column beside it. Wrapping
- * here — rather than via react-pdf's hyphenation callback, which would insert a
- * literal "-" into the part number (see text-fit.ts) — means every line handed to
- * <Text> already fits, so react-pdf breaks nothing and invents nothing. Row height
- * stays dynamic: the cell simply reports more lines and flexbox grows the row.
- */
-const bodyMeasure = helveticaMeasurer(LAYOUT.TYPE.body);
-const fitCell = (text: string, colW: number) =>
-  fitText(text, colW - 2 * LAYOUT.CELL_PAD_X, bodyMeasure);
-
-/** The supplier name is bold and the largest type on the grid, so it gets its own
- *  measurer rather than borrowing the body's. */
-const nameMeasure = helveticaMeasurer(LAYOUT.TYPE.supplierName, true);
-const fitName = (text: string, colW: number) =>
-  fitText(text, colW - 2 * LAYOUT.CELL_PAD_X, nameMeasure);
-
-// Turn react-pdf's OWN hyphenation engine off, document-wide.
-//
-// Left on, it breaks a too-long word and inserts a literal U+002D at the break
-// (@react-pdf/textkit: `insertGlyph(..., HYPHEN, line)`, a hardcoded constant with
-// no option to suppress it). That is how a reviewer's edited supplier name came out
-// of the renderer as "Supply Wave Trading Establish-" — a company name the reviewer
-// never typed, on a form somebody signs. The same mechanism would silently rewrite a
-// part code.
-//
-// Returning the word whole means react-pdf breaks ONLY at spaces and never inserts
-// anything. Fitting long unbreakable tokens is our job instead, done up front by
-// `fitCell` / `fitName`, which split without adding a character.
-Font.registerHyphenationCallback((word) => [word]);
+const { SUP_PER_GROUP, USABLE, PAGE_PAD_X, PAGE_PAD_Y, FS, IDX_W, PR_DESC_W, QTY_L_W, UOM_W, LEFT_W } = LAYOUT;
 
 /** Gutter between signature blocks — used for BOTH the width maths and the style. */
 const SIGN_GAP = LAYOUT.SIGN_BOX_GAP;
@@ -381,21 +346,6 @@ function ApprovalDocument({
   const groups = supplierGroups(indexed, SUP_PER_GROUP);
   const fs = FS;
 
-  // Column widths are derived from THIS document's content: the PR column and the
-  // supplier columns split the free width in proportion to how long their
-  // descriptions actually are (75th percentile, so one pathological row cannot
-  // hand its column half the page). The profile is stamped into the PDF's Keywords
-  // so the AcroForm overlay — which sees only the rendered page — fits identically.
-  const profile = LAYOUT.profileFrom(
-    model.rows.map((r) => String(r.label ?? '')),
-    model.rows.flatMap((r) =>
-      r.cells.map((c) => (c?.description ? trimSupplierDescription(c.description, r.label) : '')),
-    ),
-    Math.min(SUP_PER_GROUP, Math.max(1, model.suppliers.length)),
-  );
-  const fit = LAYOUT.fitColumns(SUP_PER_GROUP, profile);
-  const { index: idxW, prDesc: prDescW, qtyL: qtyLW, uom: uomW, left: leftW } = fit;
-
   const s = StyleSheet.create({
     page: { paddingVertical: PAGE_PAD_Y, paddingHorizontal: PAGE_PAD_X, fontSize: fs, color: C.body, fontFamily: 'Helvetica' },
     title: { textAlign: 'center', fontSize: LAYOUT.TYPE_TITLE, fontFamily: 'Helvetica-Bold', color: C.ink, letterSpacing: 0.5, marginBottom: 4 },
@@ -408,18 +358,16 @@ function ApprovalDocument({
     faintVal: { color: C.faint, fontFamily: 'Helvetica-Oblique' },
     blockLabel: { fontSize: fs, fontFamily: 'Helvetica-Bold', color: C.muted, marginTop: 6, marginBottom: 2 },
     rowFlex: { flexDirection: 'row' },
-    // No fixed height and no maxHeight anywhere on a cell: the box is sized by its
-    // (pre-wrapped) content, so a 3-line description makes a 3-line row.
-    cellBox: { borderRightWidth: 1, borderRightColor: C.border, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: LAYOUT.CELL_PAD_Y, paddingHorizontal: LAYOUT.CELL_PAD_X, justifyContent: 'center' },
-    headCell: { backgroundColor: C.head, fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: LAYOUT.TYPE_HEAD },
-    supHead: { backgroundColor: C.head, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: LAYOUT.CELL_PAD_Y, paddingHorizontal: LAYOUT.CELL_PAD_X },
+    cellBox: { borderRightWidth: 1, borderRightColor: C.border, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 2, paddingHorizontal: 3, justifyContent: 'center' },
+    headCell: { backgroundColor: C.head, fontFamily: 'Helvetica-Bold', color: C.ink },
+    supHead: { backgroundColor: C.head, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 2.5, paddingHorizontal: 3 },
     supNo: { fontFamily: 'Helvetica-Bold', color: C.muted, fontSize: LAYOUT.TYPE.ref, letterSpacing: 0.4 },
     supName: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: LAYOUT.TYPE.supplierName },
     ref: { color: C.muted, fontSize: LAYOUT.TYPE.ref },
-    subLabel: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: LAYOUT.TYPE_HEAD },
+    subLabel: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs - 0.5 },
     labelRow: { fontFamily: 'Helvetica-Bold', color: C.ink },
     notQuoted: { color: C.faint, fontFamily: 'Helvetica-Oblique' },
-    specDiffTag: { fontSize: LAYOUT.TYPE.specDiff, fontFamily: 'Helvetica-Oblique', color: C.specDiff, marginTop: 2 },
+    specDiffTag: { fontSize: LAYOUT.TYPE.specDiff, fontFamily: 'Helvetica-Oblique', color: C.specDiff, marginTop: 1.5 },
     aiBox: { marginTop: 6, borderWidth: 1, borderColor: C.aiBorder, backgroundColor: C.aiBg, borderRadius: 3, paddingVertical: 5, paddingHorizontal: 7 },
     aiLabel: { fontSize: fs - 0.5, fontFamily: 'Helvetica-Bold', color: C.aiBorder, marginBottom: 2 },
     aiText: { color: C.aiBorder, fontFamily: 'Helvetica-Oblique' },
@@ -429,8 +377,8 @@ function ApprovalDocument({
     signBox: { borderWidth: 1, borderColor: C.line, borderRadius: 3, paddingVertical: 6, paddingHorizontal: LAYOUT.SIGN_BOX_PAD, minHeight: LAYOUT.SIGN_BOX_MIN_H },
     signTitle: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs, marginBottom: 3 },
     checkRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 3, gap: 3 },
-    box: { width: 14, height: 14, borderWidth: 1, borderColor: C.line },
-    sigLine: { marginTop: 7, borderTopWidth: 1, borderTopColor: C.border, paddingTop: 3, color: C.muted },
+    box: { width: 10, height: 10, borderWidth: 1, borderColor: C.line },
+    sigLine: { marginTop: 5, borderTopWidth: 1, borderTopColor: C.border, paddingTop: 2, color: C.muted },
     footer: { position: 'absolute', bottom: 10, left: 16, right: 16, alignItems: 'center' },
     footerLine: { fontSize: LAYOUT.TYPE_FOOTER, color: C.faint, textAlign: 'center' },
   });
@@ -447,12 +395,14 @@ function ApprovalDocument({
   const signRows: string[][] = [];
   for (let i = 0; i < signatureRoles.length; i += perRow) signRows.push(signatureRoles.slice(i, i + perRow));
 
+  const idxW = IDX_W;
+  const prDescW = PR_DESC_W;
+  const qtyLW = QTY_L_W;
+  const uomW = UOM_W;
+  const leftW = LEFT_W;
+
   return (
-    <Document
-      title="Technical Approval Form"
-      author="AI Procurement Copilot"
-      keywords={LAYOUT.encodeFit(profile)}
-    >
+    <Document title="Technical Approval Form" author="AI Procurement Copilot">
       <Page size={LAYOUT.PAGE_SIZE} orientation="landscape" style={s.page} wrap>
         <Text style={s.title}>TECHNICAL APPROVAL FORM</Text>
         {/* The item rows are anchored to the PR document. This note shows ONLY when
@@ -469,11 +419,11 @@ function ApprovalDocument({
             The approver's name/signature is captured by the per-role signature
             blocks at the foot of the form, so there is no separate "Reviewed By" row. */}
         <View style={s.metaRow}>
-          <Text style={[s.metaCell, { width: 300 }]}>
+          <Text style={[s.metaCell, { width: 200 }]}>
             <Text style={s.metaLabel}>TA Date: </Text>
             {generatedOn}
           </Text>
-          <Text style={[s.metaCell, { width: 300 }]}>
+          <Text style={[s.metaCell, { width: 200 }]}>
             <Text style={s.metaLabel}>PR#: </Text>
             {prNumber || <Text style={s.faintVal}>Not provided</Text>}
           </Text>
@@ -505,12 +455,7 @@ function ApprovalDocument({
 
         {groups.map((group, gi) => {
           const n = group.length;
-          // A trailing block with fewer suppliers (5 suppliers → 3 + 2) keeps the
-          // SAME column widths as a full block rather than stretching to fill the
-          // page: two grids of different geometry stacked on one sheet are read as
-          // two different forms. Only a document that never has a full block sizes
-          // its columns to its own supplier count.
-          const { supW, desc: subDescW, qty: subQtyW, price: subPriceW } = LAYOUT.supplierSubCols(n, profile);
+          const { supW, desc: subDescW, qty: subQtyW, price: subPriceW } = LAYOUT.supplierSubCols(n);
           // Every cell in a PR row is normalised to that row's unit; when the whole
           // requisition shares one unit we can state it once in the header.
           const prUnits = [...new Set(model.rows.filter((r) => r.kind !== 'charge').map((r) => (r.uom ?? '').trim()).filter(Boolean))];
@@ -542,7 +487,7 @@ function ApprovalDocument({
                   return (
                     <View key={sup.quotationId} style={[s.supHead, { width: supW }]}>
                       <Text style={s.supNo}>{`SUPPLIER #${supNo}`}</Text>
-                      <Text style={s.supName}>{fitName(nameOf(sup.quotationId, sup.supplier), supW)}</Text>
+                      <Text style={s.supName}>{nameOf(sup.quotationId, sup.supplier)}</Text>
                       <Text style={s.ref}>{sup.reference ? `REF# ${sup.reference}` : 'REF# —'}</Text>
                       <View style={[s.rowFlex, { marginTop: 2 }]}>
                         <Text style={[s.subLabel, { width: subDescW }]}>Description</Text>
@@ -572,7 +517,8 @@ function ApprovalDocument({
                     {r.kind === 'charge' ? '' : r.index}
                   </Text>
                   <Text style={[s.cellBox, { width: prDescW }]}>
-                    {fitCell(`${r.label}${r.kind === 'charge' ? `  [${r.category.toUpperCase()}]` : ''}`, prDescW)}
+                    {r.label}
+                    {r.kind === 'charge' ? `  [${r.category.toUpperCase()}]` : ''}
                   </Text>
                   <Text style={[s.cellBox, { width: qtyLW, textAlign: 'center' }]}>{plain(r.qty)}</Text>
                   <Text style={[s.cellBox, { width: uomW, textAlign: 'center' }]}>{r.uom ?? ''}</Text>
@@ -586,14 +532,11 @@ function ApprovalDocument({
                       <View key={sup.quotationId} style={[s.rowFlex, { width: supW, borderRightWidth: 1, borderRightColor: C.line }]}>
                         <View style={[s.cellBox, { width: subDescW, borderRightWidth: 1, borderRightColor: C.border }]}>
                           <Text style={notQuoted ? s.notQuoted : undefined}>
-                            {fitCell(
-                              cell?.description
-                                ? trimSupplierDescription(cell.description, r.label)
-                                : notQuoted
-                                  ? 'Not Quoted'
-                                  : '',
-                              subDescW,
-                            )}
+                            {cell?.description
+                              ? trimSupplierDescription(cell.description, r.label)
+                              : notQuoted
+                                ? 'Not Quoted'
+                                : ''}
                           </Text>
                           {cell?.foc && (
                             <Text style={s.specDiffTag}>FOC — supplied free of charge, no cost</Text>
@@ -704,17 +647,6 @@ function ApprovalDocument({
           );
         })}
 
-        {/* THE SIGN-OFF, as one unit that cannot be split across pages.
-            At 8pt the grid fitted one page and this all landed on page 2 together.
-            At 12pt the grid runs to two pages, and these were breaking apart —
-            "Final Recommendation:" left stranded at the foot of page 2 with the
-            signature blocks alone on page 3, i.e. an approval line on a different
-            sheet from the signatures that approve it. It moves as a whole now.
-            The guard: with more than two ROWS of blocks the unit could exceed a
-            page, and an unbreakable view taller than the page overflows rather than
-            flowing, so past that it is allowed to break again (each row and each box
-            stays individually whole either way). */}
-        <View wrap={signRows.length > 2}>
         {/* AI-SUGGESTED recommendation — clearly labelled, system-generated, NOT an
             approval. Kept SEPARATE from the human Technical Comments / Final
             Recommendation fields, which stay blank below. */}
@@ -732,7 +664,7 @@ function ApprovalDocument({
           {selectedSupplier ? (
             <Text style={{ fontFamily: 'Helvetica-Bold', color: C.ink }}>
               {`${selectedSupplier}  `}
-              <Text style={{ fontFamily: 'Helvetica-Oblique', color: C.muted, fontSize: LAYOUT.TYPE.ref }}>
+              <Text style={{ fontFamily: 'Helvetica-Oblique', color: C.muted, fontSize: 7 }}>
                 (selected by reviewer)
               </Text>
             </Text>
@@ -762,7 +694,6 @@ function ApprovalDocument({
             ))}
           </View>
         )}
-        </View>
 
         <View style={s.footer} fixed>
           <Text style={s.footerLine}>Generated by AI Procurement Copilot — {generatedOn}</Text>
@@ -788,9 +719,9 @@ function CommentCell({
 }) {
   const text = comment?.text?.trim() ?? '';
   return (
-    <View style={{ width, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: LAYOUT.CELL_PAD_Y, paddingHorizontal: LAYOUT.CELL_PAD_X, minHeight: 30, justifyContent: 'center' }}>
+    <View style={{ width, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3, minHeight: 22, justifyContent: 'center' }}>
       {text ? (
-        <Text style={comment!.aiSuggested ? s.aiText : { color: C.ink }}>{fitCell(text, width)}</Text>
+        <Text style={comment!.aiSuggested ? s.aiText : { color: C.ink }}>{text}</Text>
       ) : (
         <Text> </Text>
       )}
@@ -815,9 +746,7 @@ function TermRow({
     <View style={{ flexDirection: 'row' }} wrap={false}>
       <Text style={[s.cellBox, s.labelRow, { width: leftW, borderLeftWidth: 1, borderLeftColor: C.border }]}>{label}</Text>
       {values.map((v, i) => (
-        <Text key={i} style={[s.cellBox, { width: supW, borderRightWidth: 1, borderRightColor: C.line }]}>
-          {fitCell(v, supW)}
-        </Text>
+        <Text key={i} style={[s.cellBox, { width: supW, borderRightWidth: 1, borderRightColor: C.line }]}>{v}</Text>
       ))}
     </View>
   );
@@ -854,7 +783,7 @@ function FieldRow({
             style={[s.cellBox, { width: supW, borderRightWidth: 1, borderRightColor: C.line }]}
           >
             {text ? (
-              <Text style={f!.aiSuggested ? s.aiText : { color: C.ink }}>{fitCell(text, supW)}</Text>
+              <Text style={f!.aiSuggested ? s.aiText : { color: C.ink }}>{text}</Text>
             ) : (
               <Text> </Text>
             )}
