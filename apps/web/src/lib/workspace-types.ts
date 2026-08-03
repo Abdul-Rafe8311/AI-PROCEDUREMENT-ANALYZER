@@ -57,6 +57,16 @@ export interface LineItem {
    * summed into the payable, overstating it by USD 8,360.
    */
   foc?: boolean;
+  /**
+   * Country of origin of THIS ITEM as stated on the quote — the manufacturing /
+   * product origin. For a trading company this is NOT where the supplier is
+   * registered: a Riyadh reseller can quote German-made anchors. null when the
+   * document states none for the line; never guessed, never back-filled from the
+   * supplier's address.
+   */
+  countryOfOrigin?: string | null;
+  /** per-line delivery / lead-time wording as written ("2 weeks", "ex stock") */
+  deliveryText?: string | null;
 }
 
 /** A grand total exactly as stated in the document, with its own currency. */
@@ -91,9 +101,24 @@ export interface ExtractedQuotation {
   prNumber?: string | null;
   /** incoterms / delivery terms as written, e.g. "CFR Jeddah", "CIF Jeddah", "EXW" */
   deliveryTerms?: string | null;
-  /** country of origin/manufacture as stated on the quote (normalized), else null —
-   * never guessed. Drives local (Saudi Arabia) vs international VAT display. */
+  /**
+   * Country of origin of the GOODS as stated on the quote (normalized), else null.
+   * This is the item's manufacturing origin, NOT where the supplier is registered —
+   * a Saudi trading company reselling German anchors has origin "Germany". Never
+   * guessed and never inferred from the supplier's address: a quote that states no
+   * origin leaves this null, and the form prints "Not stated".
+   *
+   * Set only when the whole offer shares ONE origin; when the offer's items differ,
+   * each origin lives on its own line item and the form lists them per item.
+   */
   countryOfOrigin?: string | null;
+  /**
+   * Where the SUPPLIER itself is registered, read from its own address / letterhead
+   * / C.R. / VAT number. Kept strictly separate from `countryOfOrigin` — this is a
+   * fact about the company, not the goods. Drives the local-vs-international VAT
+   * display; it is NEVER shown as, or substituted for, the country of origin.
+   */
+  supplierCountry?: string | null;
   /** every grand total as stated, each with its own currency (multi-currency docs) */
   statedTotals?: StatedTotal[];
   /**
@@ -546,10 +571,60 @@ export const DEFAULT_SIGNATURE_ROLES = [
 ];
 
 /**
- * A supplier is LOCAL when its country of origin is Saudi Arabia; anything else
- * (with a stated country) is INTERNATIONAL. Drives the TA form's VAT display.
+ * How many currencies the Technical Approval Form prints for a supplier who quoted
+ * in something other than SAR. Chosen per form in the Customize dialog before each
+ * download — it is not a stored global preference, so a reviewer can produce a
+ * three-currency sheet for one PR and a SAR-only one for the next.
+ *
+ *   'all'        line: as quoted · total: quoted + SAR + USD   (the default)
+ *   'quoted-sar' line: as quoted · total: quoted + SAR         (drops the USD line)
+ *   'sar'        line: SAR       · total: SAR                  (one currency, everywhere)
+ *
+ * 'all' and 'quoted-sar' both leave LINE ITEMS in the currency the supplier
+ * actually quoted — a unit price gets checked against the supplier's own quotation,
+ * so it has to read as it does there. 'sar' is the deliberate opt-out for an
+ * approver who wants the whole sheet in one currency; it restates the lines too, at
+ * the same stamped rate as the totals. Nothing is converted silently: wherever a
+ * figure has been restated, the rate stamp in the form header says at what rate and
+ * as of when.
+ *
+ * Lives here, not in the renderer, because the .xlsx exporter runs server-side and
+ * must not import the react-pdf module.
+ */
+export type TaCurrencyMode = 'all' | 'quoted-sar' | 'sar';
+
+/** What every TA form was built with before the choice existed. */
+export const TA_CURRENCY_MODE_DEFAULT: TaCurrencyMode = 'all';
+
+/**
+ * A supplier is LOCAL when it is registered in Saudi Arabia; anything else (with a
+ * stated country) is INTERNATIONAL. Drives the TA form's VAT display.
  * Used for display only — never to compute VAT.
  */
 export function isLocalCountry(country: string | null | undefined): boolean {
   return country?.trim().toLowerCase() === 'saudi arabia';
+}
+
+/**
+ * The with-VAT total the TA form may print for a supplier, or null.
+ *
+ * Shown ONLY when the supplier is INTERNATIONAL and their own quote states a VAT
+ * amount (→ `totalCostInclVat`). VAT is never computed or estimated by the app,
+ * and a local supplier never gets a with-VAT line even if their quote mentions VAT.
+ *
+ * "International" is decided by `supplierCountry` — who invoices you — falling back
+ * to the goods' origin only when the document shows no supplier registration at
+ * all. It deliberately does NOT read the country of origin first: a Riyadh trading
+ * company selling German-made anchors issues a LOCAL invoice. The old rule read
+ * origin and happened to work only because origin was itself being back-filled from
+ * the supplier's address; now that origin means the goods, this names its real input.
+ *
+ * Single definition on purpose — the PDF, the .xlsx and the legacy AcroForm build
+ * all call this one, so a change here can't leave two of them disagreeing about
+ * whether a supplier owes VAT.
+ */
+export function withVatAmount(q: ExtractedQuotation): number | null {
+  const country = q.supplierCountry ?? q.countryOfOrigin ?? null;
+  const international = country != null && !isLocalCountry(country);
+  return international && q.totalCostInclVat != null ? q.totalCostInclVat : null;
 }

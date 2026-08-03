@@ -59,7 +59,6 @@ import {
   DEFAULT_WEIGHTS,
   deliveryNormalizedHint,
   type ExtractedQuotation,
-  isLocalCountry,
   type TechnicalComment,
 } from './workspace-types';
 import type { ApprovalFormOptions } from './approval-form-pdf';
@@ -135,11 +134,6 @@ function specDiffLabel(note: string | null | undefined): string {
   return detail ? `spec differs: ${detail}` : 'spec differs';
 }
 
-function withVatAmount(q: ExtractedQuotation): number | null {
-  const international = q.countryOfOrigin != null && !isLocalCountry(q.countryOfOrigin);
-  return international && q.totalCostInclVat != null ? q.totalCostInclVat : null;
-}
-
 function fxStampText(fx: FxRates, currencies: string[]): string {
   const uniq = Array.from(new Set(['USD', ...currencies.map((c) => c.toUpperCase())])).filter((c) => c !== 'SAR');
   const bits = uniq
@@ -196,7 +190,6 @@ export async function generateApprovalFormPdf(
   const origins = options?.countriesOfOrigin ?? buildApprovalFields(qs, suggestOrigins(qs));
   const showWarranty = qs.some((q) => warranties[q.id]?.enabled);
   const showOrigin = qs.some((q) => origins[q.id]?.enabled);
-  const showVat = qs.some((q) => withVatAmount(q) != null);
   const roles = options?.signatureRoles?.length ? options.signatureRoles : DEFAULT_SIGNATURE_ROLES;
   const selectedSupplier = options?.selectedSupplier ?? null;
 
@@ -644,14 +637,12 @@ export async function generateApprovalFormPdf(
       return sar != null ? `${own} / SAR ${money2(sar)}` : own;
     };
     const terms: { label: string; valueFor: (q: ExtractedQuotation) => string; align?: Align; f?: PDFFont }[] = [
+      // The ONLY total the TA form carries — the with-VAT row was removed from every
+      // build of this form (see approval-form-pdf.tsx for the reasoning). VAT is a
+      // pass-through that applies identically to whichever offer wins, so it was
+      // never a differentiator, and printing both totals put a with-VAT figure next
+      // to a without-VAT one where a signer could read the wrong row.
       { label: 'Total Price without VAT', valueFor: (q) => (q.totalCost == null ? '' : totalText(q.totalCost, q.currency)), align: 'right' },
-      ...(showVat
-        ? [{
-            label: 'Total Price with VAT',
-            valueFor: (q: ExtractedQuotation) => { const v = withVatAmount(q); return v == null ? '' : totalText(v, q.currency); },
-            align: 'right' as Align,
-          }]
-        : []),
       { label: 'Payment Terms', valueFor: (q) => q.paymentTerms ?? '' },
       {
         label: 'Delivery Time',

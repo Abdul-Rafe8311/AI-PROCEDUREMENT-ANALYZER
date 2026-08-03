@@ -23,6 +23,7 @@ import { type FxRates, sarPerUnit, toSar, toUsd } from './fx-rates';
 import {
   buildApprovalFields,
   resolvePrDescription,
+  suggestDeliveryTimes,
   suggestOrigins,
   suggestTechnicalComments,
   suggestWarranties,
@@ -36,8 +37,13 @@ import {
   DEFAULT_WEIGHTS,
   deliveryNormalizedHint,
   type ExtractedQuotation,
-  isLocalCountry,
 } from './workspace-types';
+import {
+  headerLabel,
+  resolveMoneyLines,
+  TA_CURRENCY_DISPLAY_DEFAULT,
+  type TaCurrencySelection,
+} from './ta-currency';
 import type { ApprovalFormOptions } from './approval-form-pdf';
 
 // ── palette (mirrors the PDF's greys) ──
@@ -51,14 +57,26 @@ const INK = 'FF0F172A';
 const BLACK = 'FF000000';
 const FONT = 'Arial';
 
+// ── Type scale ──
+// The workbook is printed and read across a meeting table, not just scrolled on a
+// laptop, so the body is 12pt rather than the 9pt this started at, and it is laid
+// out for A3. Everything that derives from the base size (row heights, the title,
+// the supplier band) is computed from FS_BODY so the scale stays proportional if
+// it is ever changed again.
+const FS_BODY = 12; // item text, terms, prices
+const FS_TITLE = Math.round(FS_BODY * 1.5); // "TECHNICAL APPROVAL FORM"
+const FS_SUPPLIER = FS_BODY + 4; // supplier name band — the column heading
+const FS_SUPPLIER_REF = FS_BODY; // its REF# line
+/** Points of row height one line of `size` type needs, plus cell padding. */
+const lineHeight = (size = FS_BODY) => Math.round(size * 1.35);
+
+// A3 is paperSize 8 in the OOXML spec (ECMA-376 §17.6.2, w:paperSize). ExcelJS's
+// own PaperSize enum only declares a handful of sizes and omits A3, so the literal
+// is asserted rather than looked up — the number is the spec's, not a guess.
+const PAPER_A3 = 8 as unknown as import('exceljs').PaperSize;
+
 const money2 = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const plain = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? '' : n.toLocaleString('en-US'));
-
-/** Same rule as the PDF: with-VAT shows only for international + quote-stated VAT. */
-function withVatAmount(q: ExtractedQuotation): number | null {
-  const international = q.countryOfOrigin != null && !isLocalCountry(q.countryOfOrigin);
-  return international && q.totalCostInclVat != null ? q.totalCostInclVat : null;
-}
 
 function fieldText(map: Record<string, ApprovalFieldValue>, id: string): string {
   const f = map[id];
@@ -98,19 +116,20 @@ function aiRecommendation(analysis: AnalysisResult, fx: FxRates | null): string 
   return `${name} — ${reason}.`;
 }
 
-/** The money block a unit-price / total cell shows: SAR primary, USD secondary. */
-function moneyCell(amount: number | null | undefined, currency: string, fx: FxRates | null, showOriginal = false): string {
-  if (amount == null || !Number.isFinite(amount)) return '';
-  const sar = fx ? toSar(amount, currency, fx) : null;
-  const usd = fx ? toUsd(amount, currency, fx) : null;
-  const cur = currency.toUpperCase();
-  if (sar == null || usd == null) return `${cur} ${money2(amount)}`;
-  const lines: string[] = [];
-  // The original-currency line only when it is neither of the two below it.
-  if (showOriginal && cur !== 'SAR' && cur !== 'USD') lines.push(`${cur} ${money2(amount)}`);
-  lines.push(`SAR ${money2(sar)}`);
-  lines.push(`USD ${money2(usd)}`);
-  return lines.join('\n');
+/**
+ * A money cell, in whichever currencies the reviewer selected for that part of the
+ * form. One shared resolver with the PDF (see ta-currency.ts), so the workbook and
+ * the document can never print different currencies for the same figure.
+ */
+function moneyCell(
+  amount: number | null | undefined,
+  currency: string,
+  fx: FxRates | null,
+  selection: TaCurrencySelection,
+): string {
+  return resolveMoneyLines(amount, currency, fx, selection)
+    .map((l) => `${l.code} ${money2(l.amount)}`)
+    .join('\n');
 }
 
 /** Border every cell of a range — never just the merge anchor. */
@@ -136,8 +155,8 @@ function borderRange(
   }
 }
 
-const rowHeight = (texts: string[]) =>
-  Math.max(16, Math.max(1, ...texts.map((t) => String(t ?? '').split('\n').length)) * 12 + 4);
+const rowHeight = (texts: string[], size = FS_BODY) =>
+  Math.max(lineHeight(size) + 6, Math.max(1, ...texts.map((t) => String(t ?? '').split('\n').length)) * lineHeight(size) + 6);
 
 /**
  * Build the Technical Approval Form workbook from the SAME inputs the PDF
@@ -171,9 +190,10 @@ export async function buildTaFormWorkbook(
   const model = reviewed.model;
   const totalOf = (q: ExtractedQuotation) => reviewed.totals[q.id] ?? q.totalCost;
 
+  const deliveries = suggestDeliveryTimes(qs);
+  const currencyDisplay = options?.currencyDisplay ?? TA_CURRENCY_DISPLAY_DEFAULT;
   const showWarranty = qs.some((q) => warranties[q.id]?.enabled);
   const showOrigin = qs.some((q) => origins[q.id]?.enabled);
-  const showVat = qs.some((q) => withVatAmount(q) != null);
 
   const pr = analysis.purchaseRequisition;
   const prNumber = pr?.requestNo ?? qs.find((q) => q.prNumber)?.prNumber ?? '';
@@ -204,31 +224,53 @@ export async function buildTaFormWorkbook(
       groups.length > 1
         ? `Suppliers ${group[0].colIndex + 1}-${group[n - 1].colIndex + 1} of ${model.suppliers.length}`
         : 'Technical Approval Form';
-    const ws = wb.addWorksheet(title.slice(0, 31));
+    // A3 landscape, fitted to ONE page wide. The form is printed and signed round a
+    // table, so it has to be legible on paper — at 12pt body text the grid no longer
+    // fits A4, and letting Excel spill supplier columns onto a second sheet of paper
+    // is what makes a comparison form useless. Height is left unbounded (`undefined`)
+    // so a long requisition flows onto further pages instead of being scaled to
+    // nothing; the header rows repeat on each via `printTitlesRow`.
+    const ws = wb.addWorksheet(title.slice(0, 31), {
+      pageSetup: {
+        paperSize: PAPER_A3,
+        orientation: 'landscape',
+        fitToPage: true,
+        fitToWidth: 1,
+        fitToHeight: 0,
+        horizontalCentered: true,
+        margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 },
+      },
+    });
     const lastCol = 4 + n * 3; // #, PR desc, Qty, UOM, then 3 sub-columns each
 
+    // Column widths scale with the body size — at 12pt the 9pt widths clipped text.
+    const w = (chars: number) => Math.round(chars * (FS_BODY / 9));
     ws.columns = [
-      { width: 5 }, // #
-      { width: 44 }, // PR Item Description
-      { width: 10 }, // Qty
-      { width: 8 }, // UOM
-      ...group.flatMap(() => [{ width: 34 }, { width: 9 }, { width: 18 }]),
+      { width: w(5) }, // #
+      { width: w(44) }, // PR Item Description
+      { width: w(10) }, // Qty
+      { width: w(8) }, // UOM
+      ...group.flatMap(() => [{ width: w(34) }, { width: w(9) }, { width: w(18) }]),
     ];
 
     let row = 1;
-    const put = (r: number, c: number, v: string | number, opts: { bold?: boolean; color?: string; align?: 'left' | 'center' | 'right' } = {}) => {
+    const put = (
+      r: number,
+      c: number,
+      v: string | number,
+      opts: { bold?: boolean; color?: string; align?: 'left' | 'center' | 'right'; size?: number } = {},
+    ) => {
       const cell = ws.getCell(r, c);
       cell.value = v;
-      cell.font = { name: FONT, size: 9, bold: !!opts.bold, color: { argb: opts.color ?? INK } };
+      cell.font = { name: FONT, size: opts.size ?? FS_BODY, bold: !!opts.bold, color: { argb: opts.color ?? INK } };
       cell.alignment = { vertical: 'top', horizontal: opts.align ?? 'left', wrapText: true };
     };
 
     // ── header block ──
-    put(row, 1, 'TECHNICAL APPROVAL FORM', { bold: true });
-    ws.getCell(row, 1).font = { name: FONT, size: 13, bold: true, color: { argb: INK } };
+    put(row, 1, 'TECHNICAL APPROVAL FORM', { bold: true, size: FS_TITLE });
     ws.mergeCells(row, 1, row, lastCol);
     borderRange(ws, row, 1, row, lastCol, HEAD_BG);
-    ws.getRow(row).height = 22;
+    ws.getRow(row).height = rowHeight(['x'], FS_TITLE);
     row++;
 
     for (const [label, value] of [
@@ -257,17 +299,40 @@ export async function buildTaFormWorkbook(
     for (const c of [1, 2, 3, 4]) ws.mergeCells(bandTop, c, bandTop + 1, c);
     group.forEach((sup, i) => {
       const c0 = 5 + i * 3;
-      put(bandTop, c0, `${nameOf(sup.quotationId, sup.supplier)}\nREF# ${sup.reference ?? '—'}`, { bold: true });
+      // "SUPPLIER #2 — Krosaki" : the number is the supplier's position in the WHOLE
+      // analysis, so it survives the 4-per-sheet split and approvers can refer to a
+      // column by number across sheets. Set as a rich-text run so the name can be
+      // bigger than the body while the REF# line stays small.
+      ws.getCell(bandTop, c0).value = {
+        richText: [
+          {
+            text: `SUPPLIER #${sup.colIndex + 1} — ${nameOf(sup.quotationId, sup.supplier)}`,
+            font: { name: FONT, size: FS_SUPPLIER, bold: true, color: { argb: INK } },
+          },
+          {
+            text: `\nREF# ${sup.reference ?? '—'}`,
+            font: { name: FONT, size: FS_SUPPLIER_REF, bold: false, color: { argb: MUTED } },
+          },
+        ],
+      };
+      ws.getCell(bandTop, c0).alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
       ws.mergeCells(bandTop, c0, bandTop, c0 + 2);
       put(bandTop + 1, c0, 'Description', { bold: true });
       put(bandTop + 1, c0 + 1, 'Qty', { bold: true, align: 'center' });
-      put(bandTop + 1, c0 + 2, 'Unit Price (SAR / USD)', { bold: true, align: 'right' });
+      // The sub-header names whatever this column ACTUALLY prints: the supplier's
+      // own quoted currency normally, SAR when the reviewer chose a
+      // single-currency sheet. Never a EUR heading over SAR figures.
+      const priceCur = headerLabel(sup.currency, fx, currencyDisplay.lineItems);
+      put(bandTop + 1, c0 + 2, `Unit Price (${priceCur})`, { bold: true, align: 'right' });
     });
     borderRange(ws, bandTop, 1, bandTop + 1, lastCol, HEAD_BG);
     // The supplier name band gets its own tint, over its whole merged width.
     group.forEach((_s, i) => borderRange(ws, bandTop, 5 + i * 3, bandTop, 7 + i * 3, SUP_BG));
-    ws.getRow(bandTop).height = 26;
-    ws.getRow(bandTop + 1).height = 24;
+    // Two lines of the LARGER supplier type, so the band reads as a column heading.
+    ws.getRow(bandTop).height = rowHeight(['a\nb'], FS_SUPPLIER);
+    ws.getRow(bandTop + 1).height = rowHeight(['x']);
+    // Repeat the left reference columns + this band on every printed page.
+    ws.pageSetup.printTitlesRow = `${bandTop}:${bandTop + 1}`;
     row = bandTop + 2;
 
     // ── item rows ──
@@ -290,7 +355,9 @@ export async function buildTaFormWorkbook(
         const c0 = 5 + i * 3;
         put(row, c0, `${desc}${note}${foc}`, { color: notQuoted ? MUTED : INK });
         put(row, c0 + 1, cell ? plain(cell.qty) : '', { align: 'center' });
-        const price = cell ? moneyCell(cell.unitPrice, cell.currency, fx) : '';
+        // Quoted currency, UNCONVERTED — unless the reviewer chose a
+        // single-currency sheet. Only the totals below convert by default.
+        const price = cell ? moneyCell(cell.unitPrice, cell.currency, fx, currencyDisplay.lineItems) : '';
         put(row, c0 + 2, price, { align: 'right' });
         texts.push(`${desc}${note}${foc}`, price);
       });
@@ -301,14 +368,19 @@ export async function buildTaFormWorkbook(
 
     // ── term rows ──
     const terms: [string, (q: ExtractedQuotation) => string][] = [
-      ['Total Price without VAT', (q) => moneyCell(totalOf(q), q.currency, fx, true)],
-      ...(showVat ? [['Total Price with VAT', (q: ExtractedQuotation) => moneyCell(withVatAmount(q), q.currency, fx, true)] as [string, (q: ExtractedQuotation) => string]] : []),
+      // The ONLY total the TA form carries — see the PDF renderer for why the
+      // with-VAT row was removed. `withVatAmount()` is still exported and correct;
+      // it simply is not printed on this form.
+      ['Total Price without VAT', (q) => moneyCell(totalOf(q), q.currency, fx, currencyDisplay.totals)],
       ['Payment Terms', (q) => q.paymentTerms ?? ''],
+      // Per-item aware: one lead time when the offer shares one, else
+      // "Item #1 (2 weeks), Item #2 (6 weeks)".
       ['Delivery Time', (q) => {
-        const raw = q.deliveryRaw?.trim() ?? '';
-        if (!raw) return '';
+        const text = deliveries[q.id] ?? '';
+        if (!text || text === 'Not stated') return '';
+        if (text !== (q.deliveryRaw?.trim() ?? '')) return text;
         const hint = deliveryNormalizedHint(q.deliveryRaw, q.deliveryDays);
-        return hint ? `${raw} (${hint})` : raw;
+        return hint ? `${text} (${hint})` : text;
       }],
       ['Delivery Terms', (q) => q.deliveryTerms ?? ''],
       ...(showOrigin ? [['Country of Origin', (q: ExtractedQuotation) => fieldText(origins, q.id)] as [string, (q: ExtractedQuotation) => string]] : []),

@@ -10,7 +10,7 @@ import {
   quotationsFromLlmSuppliers,
   type LlmSupplier,
 } from './extraction-server';
-import { matchQuotationsToPr, suggestTechnicalComments } from './item-matching';
+import { matchQuotationsToPr, suggestOrigins, suggestTechnicalComments } from './item-matching';
 import { buildComparisonModel } from './pr-comparison';
 import { withVatAmount } from './approval-form-pdf';
 import { isLocalCountry } from './workspace-types';
@@ -162,19 +162,25 @@ test('TA FORM: the supplier-union fallback is GONE — no PR items ⇒ zero prod
   assert.equal(model.rows.filter((r) => r.kind !== 'charge').length, 0, 'never fabricates rows from supplier descriptions');
 });
 
-test('TA FORM: Country of Origin per supplier — stated → normalized; KSA → Saudi Arabia', () => {
+test('TA FORM: Country of Origin per supplier — a STATED origin is normalized', () => {
   const origin = (name: string) => quotations.find((q) => q.supplierName === name)!.countryOfOrigin;
   assert.equal(origin('KROSAKI'), 'France'); // "Country of Origin: France"
   assert.equal(origin('Refratechnik'), 'Germany'); // "F.R. OF GERMANY"
-  assert.equal(origin('AL NAJIM'), 'Saudi Arabia');
   assert.equal(origin('AlFRAN'), 'Saudi Arabia'); // "KSA" → Saudi Arabia
+  // These two state "Saudi Arabia" as the goods' origin on the quote itself, so it
+  // survives — a STATED origin is always kept. What no longer happens is inferring
+  // one from an address; see the next test.
+  assert.equal(origin('AL NAJIM'), 'Saudi Arabia');
   assert.equal(origin('Supply Wave'), 'Saudi Arabia');
 });
 
-test('TA FORM: origin INFERRED from supplier registration when no origin line is stated', () => {
-  // The three Saudi suppliers don't print a "Country of Origin" line, but their
-  // letterhead/address/CR/VAT are Saudi → origin must resolve to "Saudi Arabia"
-  // (and thus LOCAL), never blank. Foreign/unknown registrations are respected.
+test('TA FORM: origin is the GOODS’ origin — NEVER inferred from the supplier’s address', () => {
+  // Farid's correction. The Country of Origin column asks where the ITEM was made.
+  // A supplier is very often a trading company reselling goods made elsewhere, so
+  // its registered address answers a different question. Origin used to fall back
+  // to `supplierCountry` when the quote stated none, which put "Saudi Arabia"
+  // against German-made anchors and made an unstated origin indistinguishable from
+  // a stated one. It must now stay blank.
   const mk = (o: Partial<LlmSupplier>) =>
     quotationsFromLlmSuppliers(
       [{ supplierName: 'X', reference: null, prNumber: null, currency: 'SAR', totalAmount: null, vatAmount: null, totalWithoutVat: null, totalsByCurrency: null, deliveryTime: null, deliveryTerms: null, paymentTerms: null, warranty: null, validUntil: null, lineItems: [], ...o }],
@@ -182,20 +188,28 @@ test('TA FORM: origin INFERRED from supplier registration when no origin line is
       { currency: (o.currency as string) ?? 'SAR', confidence: 1 },
     )[0];
 
-  // No stated origin, Saudi registration → inferred "Saudi Arabia" + LOCAL.
-  const saudiByAddress = mk({ countryOfOrigin: null, supplierCountry: 'Saudi Arabia' });
-  assert.equal(saudiByAddress.countryOfOrigin, 'Saudi Arabia');
-  assert.equal(isLocalCountry(saudiByAddress.countryOfOrigin), true);
-  const saudiByKsa = mk({ countryOfOrigin: null, supplierCountry: 'KSA' });
-  assert.equal(saudiByKsa.countryOfOrigin, 'Saudi Arabia');
+  // No stated origin + a Saudi registration → origin stays NULL, and the form says
+  // "Not stated". The supplier's own country is still captured, separately.
+  const byAddress = mk({ countryOfOrigin: null, supplierCountry: 'Saudi Arabia' });
+  assert.equal(byAddress.countryOfOrigin, null, 'origin is not back-filled from the address');
+  assert.equal(byAddress.supplierCountry, 'Saudi Arabia', 'supplier country is still recorded');
+  assert.equal(suggestOrigins([byAddress])[byAddress.id], 'Not stated');
 
-  // A STATED origin always wins over the registration country.
-  const statedWins = mk({ countryOfOrigin: 'F.R. OF GERMANY', supplierCountry: 'Saudi Arabia' });
-  assert.equal(statedWins.countryOfOrigin, 'Germany');
+  // The trading-company case: Saudi reseller, German goods.
+  const reseller = mk({ countryOfOrigin: 'F.R. OF GERMANY', supplierCountry: 'Saudi Arabia' });
+  assert.equal(reseller.countryOfOrigin, 'Germany');
+  assert.equal(reseller.supplierCountry, 'Saudi Arabia');
 
-  // Genuinely no country information anywhere → stays blank (never guessed).
-  const blank = mk({ countryOfOrigin: null, supplierCountry: null });
-  assert.equal(blank.countryOfOrigin, null);
+  // Nothing stated anywhere → blank, as before.
+  assert.equal(mk({ countryOfOrigin: null, supplierCountry: null }).countryOfOrigin, null);
+
+  // VAT still resolves, because it now reads the SUPPLIER's country — who invoices
+  // you. A local reseller of foreign goods is a LOCAL invoice, which the old
+  // origin-based rule would now get wrong.
+  assert.equal(isLocalCountry(reseller.supplierCountry), true);
+  assert.equal(withVatAmount({ ...reseller, totalCostInclVat: 1000 }), null, 'local reseller → no with-VAT line');
+  const german = mk({ countryOfOrigin: 'Germany', supplierCountry: 'Germany' });
+  assert.equal(withVatAmount({ ...german, totalCostInclVat: 1000 }), 1000, 'international → with-VAT line');
 });
 
 test('TA FORM VAT: no supplier states VAT on PR 12601612 → NO with-VAT line for anyone', () => {

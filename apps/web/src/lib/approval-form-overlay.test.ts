@@ -134,8 +134,8 @@ test('TA FORM: the output is a real AcroForm — editable, uniquely named, pre-f
   for (const f of fields) assert.equal(f.isReadOnly(), false, `${f.getName()} is editable`);
 
   // Names are page-scoped and stable, and cover both supplier blocks.
-  assert.ok(names.some((n) => n.startsWith('p1.cell_price_sar.')), 'page 1 unit prices are fields');
-  assert.ok(names.some((n) => n.startsWith('p2.cell_price_sar.')), 'page 2 unit prices are fields');
+  assert.ok(names.some((n) => n.startsWith('p1.cell_price.')), 'page 1 unit prices are fields');
+  assert.ok(names.some((n) => n.startsWith('p2.cell_price.')), 'page 2 unit prices are fields');
   assert.ok(names.some((n) => n.startsWith('p1.cell_qty.')) && names.some((n) => n.startsWith('p2.cell_qty.')));
   assert.ok(names.some((n) => n.startsWith('p1.term.')) && names.some((n) => n.startsWith('p2.term.')));
   assert.ok(names.some((n) => n === 'p2.final_recommendation'), 'Final Recommendation is editable');
@@ -144,7 +144,11 @@ test('TA FORM: the output is a real AcroForm — editable, uniquely named, pre-f
 
   // Pre-filled from the extracted data.
   const val = (p: string) => (fields.find((f) => f.getName().startsWith(p)) as PDFTextField | undefined)?.getText() ?? '';
-  assert.match(val('p1.cell_price_sar.'), /^SAR /, `unit price pre-filled: ${val('p1.cell_price_sar.')}`);
+  // A line-item price is pre-filled in the SUPPLIER'S OWN quoted currency, never
+  // converted; only the totals (the `term.` fields) restate in SAR. Page 1 leads
+  // with Krosaki, who quote in EUR.
+  assert.match(val('p1.cell_price.'), /^[A-Z]{3} [\d,]+\.\d\d$/, `unit price pre-filled: ${val('p1.cell_price.')}`);
+  assert.ok(!val('p1.cell_price.').startsWith('SAR '), 'a EUR line is not restated in SAR');
   assert.match(val('p1.cell_qty.'), /\d/, 'quantity pre-filled');
   assert.equal(val('p1.pr_number'), '12601612');
   // Signature / Date start blank for the reviewer.

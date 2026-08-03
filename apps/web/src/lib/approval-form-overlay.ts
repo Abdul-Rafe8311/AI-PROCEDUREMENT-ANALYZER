@@ -301,10 +301,15 @@ function planPlacements(runs: TextRun[], pageCount: number): { placements: Place
         } else if (inCol(l, col.qty)) {
           overRun(l, `cell_qty.${k}.s${s}`, { align: 'center' });
         } else if (inCol(l, col.price)) {
-          const usd = Math.abs(l.size - L.TYPE.priceUsd) < 0.3;
-          overRun(l, `cell_price_${usd ? 'usd' : 'sar'}.${k}.s${s}`, {
+          // An item row's price is ONE line, in the supplier's own quoted currency —
+          // line items are no longer converted, so the field is simply `cell_price`
+          // (it was `cell_price_sar` back when every line was restated in SAR).
+          // The smaller muted size is still recognised as a secondary line; only the
+          // TOTAL rows, handled above under `term.`, print SAR + USD now.
+          const secondary = Math.abs(l.size - L.TYPE.priceUsd) < 0.3;
+          overRun(l, `cell_price${secondary ? '_alt' : ''}.${k}.s${s}`, {
             align: 'right',
-            color: usd ? MUTED : INK,
+            color: secondary ? MUTED : INK,
           });
         }
       }

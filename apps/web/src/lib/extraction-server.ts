@@ -371,6 +371,11 @@ interface LlmLineItem {
   totalPriceText?: string | null;
   /** an explicit free-of-charge marker on the line, if the document has one */
   focText?: string | null;
+  /** country of origin/manufacture stated FOR THIS LINE, when the document has a
+   *  per-item origin column (offers that mix origins across items) */
+  countryOfOrigin?: string | null;
+  /** delivery / lead-time stated FOR THIS LINE, verbatim ("2 weeks", "ex stock") */
+  deliveryText?: string | null;
 }
 
 /** Does this text mark a line as supplied free of charge? */
@@ -511,14 +516,33 @@ const EXTRACTION_SYSTEM_PROMPT = [
   '    totalWithoutVat: number|null, // total price WITHOUT VAT, if the doc states it',
   '    totalsByCurrency: { amount: number, currency: string }[]|null,',
   '    deliveryTime: string|null, deliveryTerms: string|null,',
-  '    countryOfOrigin: string|null, // country of origin/manufacture/supply if STATED (e.g. "Country of Origin: France", "F.R. OF GERMANY"); else null — NEVER guess',
-  '    supplierCountry: string|null, // the country where THIS SUPPLIER is registered/located, read from its OWN address, letterhead, Commercial Registration (C.R.) or VAT number (a 15-digit Saudi VAT number ⇒ Saudi Arabia). This is the supplier\'s country, NOT necessarily the goods\' origin. null only if the document shows no supplier address/registration at all.',
+  '    countryOfOrigin: string|null, // where the GOODS are MADE, if STATED (e.g. "Country of Origin: France", "F.R. OF GERMANY", "Made in China"); else null — NEVER guess',
+  '    supplierCountry: string|null, // the country where THIS SUPPLIER is registered/located, read from its OWN address, letterhead, Commercial Registration (C.R.) or VAT number (a 15-digit Saudi VAT number ⇒ Saudi Arabia). This is the supplier\'s country, NOT the goods\' origin. null only if the document shows no supplier address/registration at all.',
   '    paymentTerms: string|null, warranty: string|null, validUntil: string|null (ISO date),',
   '    lineItems: { name: string, quantity: number|null, unitPrice: number|null,',
   '                 totalPrice: number|null, category: string|null, uom: string|null,',
   '                 availableInDays: number|null, totalPriceText: string|null,',
-  '                 focText: string|null }[]',
+  '                 focText: string|null, countryOfOrigin: string|null,',
+  '                 deliveryText: string|null }[]',
   '  }[] }',
+  '',
+  'COUNTRY OF ORIGIN is a fact about the GOODS, never about the seller. It is the',
+  'manufacturing / production country: "Country of Origin", "Origin", "Made in",',
+  '"Manufactured in", "Manufacturer", or a named mill/plant location. A supplier is',
+  'very often a TRADING COMPANY reselling goods made somewhere else — a Saudi',
+  'reseller quoting German-made anchors has origin GERMANY, not Saudi Arabia.',
+  'NEVER derive origin from the supplier\'s address, letterhead, phone number, C.R.,',
+  'VAT number or bank details; that information belongs in supplierCountry ONLY.',
+  'If the document states no origin for the goods, return null. A null here is a',
+  'correct and useful answer — do not fill it in to be helpful.',
+  '',
+  'PER-ITEM ORIGIN AND DELIVERY: when the document gives an origin or a lead time',
+  'PER LINE (an "Origin" / "Made in" / "Delivery" / "Lead time" column, or a note',
+  'against individual items), put each line\'s own value on that line\'s',
+  'countryOfOrigin / deliveryText, verbatim. Set the SUPPLIER-level countryOfOrigin',
+  'ONLY when one origin covers the whole offer; if the items differ, leave the',
+  'supplier-level field null and let the per-line values carry it. Same for',
+  'deliveryTime vs the per-line deliveryText.',
   '',
   'UNIT OF MEASURE: copy each line\'s uom EXACTLY as the document states it — "Ton",',
   '"MT", "TO", "Kg", "Kgs", "KG", "Set", "PCS". Do NOT normalise or convert it, and',
@@ -839,7 +863,24 @@ function mapSupplier(
         isFocMarker(name) ||
         (totalPrice === 0 && (unitPrice ?? 0) > 0);
       if (foc) totalPrice = 0;
-      return { name, quantity, unitPrice, totalPrice, currency, category, uom, ...(foc ? { foc: true } : {}) };
+      // Per-line origin / lead time, kept ONLY when the document states them for
+      // that line. These are what let the form say "Item #1 (China), Item #2
+      // (Germany)" instead of collapsing a mixed offer to one misleading value.
+      const liOrigin = normalizeCountry(li.countryOfOrigin);
+      const liDelivery =
+        li.deliveryText?.trim() || (li.availableInDays != null ? `${li.availableInDays} days` : null);
+      return {
+        name,
+        quantity,
+        unitPrice,
+        totalPrice,
+        currency,
+        category,
+        uom,
+        ...(foc ? { foc: true } : {}),
+        ...(liOrigin ? { countryOfOrigin: liOrigin } : {}),
+        ...(liDelivery ? { deliveryText: liDelivery } : {}),
+      };
     })
     .filter((li) => {
       if (isVatLine(li.name, li.category ?? 'product')) {
@@ -937,13 +978,20 @@ function mapSupplier(
     ? `${Math.max(...availDays)} days`
     : s.deliveryTime?.trim() || null;
   const deliveryTerms = s.deliveryTerms?.trim() || null;
-  // Origin = the STATED country of origin; if the quote doesn't state one, fall
-  // back to the country where the supplier itself is registered (its address/CR/
-  // VAT). This is document-supported — a Saudi-registered supplier resolves to
-  // "Saudi Arabia" (and thus LOCAL for VAT), never a guessed country. Stays null
-  // only when the document carries no country information at all.
-  const countryOfOrigin =
-    normalizeCountry(s.countryOfOrigin) ?? normalizeCountry(s.supplierCountry);
+  // Origin = the STATED country of origin of the GOODS, and nothing else.
+  //
+  // This used to fall back to the supplier's own registered country whenever the
+  // quote stated no origin. That reads plausibly and is wrong: a trading company
+  // resells goods made elsewhere, so a Riyadh reseller's address put "Saudi Arabia"
+  // in a column that is asking about the anchors, not the office. It also made an
+  // unstated origin indistinguishable from a stated one. An unstated origin now
+  // stays null and the form prints "Not stated".
+  //
+  // The supplier's own country is still extracted — it is a real and separate fact,
+  // and it is what the local/international VAT display reads (VAT follows who
+  // invoices you, not where the goods were made).
+  const countryOfOrigin = normalizeCountry(s.countryOfOrigin);
+  const supplierCountry = normalizeCountry(s.supplierCountry);
   const reference = s.reference?.trim() || null;
   const prNumber = s.prNumber?.trim() || null;
   // Never fall back to the uploaded filename as a supplier name — use the
@@ -998,6 +1046,7 @@ function mapSupplier(
     prNumber,
     deliveryTerms,
     countryOfOrigin,
+    supplierCountry,
     statedTotals,
     totalMismatch,
     currencyConfidence,

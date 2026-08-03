@@ -11,6 +11,7 @@
 //     SAME item, and the one that flips when a grade/dimension is wrong.
 // A shared long spec code is treated as near-certain evidence of a match.
 
+import { describePerItem } from './per-item-field';
 import type {
   ApprovalFieldValue,
   ExtractedQuotation,
@@ -559,14 +560,45 @@ export function suggestWarranties(quotations: ExtractedQuotation[]): Record<stri
   return out;
 }
 
-// The AI pre-fill VALUE for the per-supplier Country of Origin field: the origin
-// already derived during extraction (stated, or inferred "Saudi Arabia" for a
-// locally-registered supplier), else "Not stated". This is DISPLAY-ONLY — the VAT
-// local/international rule always reads the underlying extracted `countryOfOrigin`,
-// so editing/hiding this field never changes VAT. Keyed by quotation id.
+/** The product lines of a quotation, numbered exactly as the form prints them. */
+function productLines(q: ExtractedQuotation): { index: number; li: LineItem }[] {
+  return q.lineItems
+    .filter((li) => (li.category ?? 'product') === 'product')
+    .map((li, i) => ({ index: i + 1, li }));
+}
+
+// The AI pre-fill VALUE for the per-supplier Country of Origin field.
+//
+// This is the origin of the GOODS as the quote states it — never the supplier's
+// own address. When the offer's items were made in different countries the value
+// names them ("Item #1 (China), Item #2 (Germany)") rather than picking one and
+// printing it over the whole column. When the quote states no origin at all the
+// value is "Not stated": it is NOT back-filled from where the supplier is
+// registered, because a trading company's address says nothing about who made the
+// goods.
+//
+// DISPLAY-ONLY — the VAT local/international rule reads `supplierCountry` (who
+// invoices you), so editing or hiding this field never changes VAT.
+// Keyed by quotation id.
 export function suggestOrigins(quotations: ExtractedQuotation[]): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const q of quotations) out[q.id] = q.countryOfOrigin?.trim() || 'Not stated';
+  for (const q of quotations) {
+    const perItem = productLines(q).map(({ index, li }) => ({ index, value: li.countryOfOrigin ?? null }));
+    out[q.id] = describePerItem(perItem, q.countryOfOrigin) || 'Not stated';
+  }
+  return out;
+}
+
+// The AI pre-fill VALUE for the per-supplier Delivery Time field, same shape as
+// the origin: the offer's single lead time when every item shares one, else
+// "Item #1 (2 weeks), Item #2 (6 weeks)". Falls back to the offer-level delivery
+// text the quote states; "Not stated" when it states none. Keyed by quotation id.
+export function suggestDeliveryTimes(quotations: ExtractedQuotation[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const q of quotations) {
+    const perItem = productLines(q).map(({ index, li }) => ({ index, value: li.deliveryText ?? null }));
+    out[q.id] = describePerItem(perItem, q.deliveryRaw) || 'Not stated';
+  }
   return out;
 }
 

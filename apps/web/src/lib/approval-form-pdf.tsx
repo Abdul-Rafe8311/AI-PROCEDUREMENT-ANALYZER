@@ -26,6 +26,7 @@ import { type FxRates, getFxRates, sarPerUnit, toSar, toUsd } from './fx-rates';
 import {
   buildApprovalFields,
   resolvePrDescription,
+  suggestDeliveryTimes,
   suggestOrigins,
   suggestTechnicalComments,
   suggestWarranties,
@@ -41,9 +42,15 @@ import {
   DEFAULT_WEIGHTS,
   deliveryNormalizedHint,
   type ExtractedQuotation,
-  isLocalCountry,
   type TechnicalComment,
 } from './workspace-types';
+import {
+  headerLabel,
+  resolveMoneyLines,
+  TA_CURRENCY_DISPLAY_DEFAULT,
+  type TaCurrencyDisplay,
+  type TaCurrencySelection,
+} from './ta-currency';
 
 const C = {
   ink: '#0f172a',
@@ -58,6 +65,10 @@ const C = {
   aiBorder: '#6366f1', // indigo — AI-suggested (system-generated) content only
 };
 
+// The currency choice lives in its own pure module so the .xlsx exporter — which
+// runs in the Node route and must not pull react-pdf in — can read it too.
+export { TA_CURRENCY_DISPLAY_DEFAULT, type TaCurrencyDisplay } from './ta-currency';
+
 export interface ApprovalFormOptions {
   /** ordered, enabled signature-block role names (defaults to DEFAULT_SIGNATURE_ROLES) */
   signatureRoles?: string[];
@@ -66,7 +77,9 @@ export interface ApprovalFormOptions {
   /** per-supplier Warranty field (toggle + AI-prefilled value) keyed by quotation id */
   warranties?: Record<string, ApprovalFieldValue>;
   /** per-supplier Country of Origin field (toggle + AI-prefilled value) keyed by quotation id.
-   *  DISPLAY-ONLY — the VAT local/international rule reads the extracted origin, not this. */
+   *  This is the GOODS' origin, and may read "Item #1 (China), Item #2 (Germany)"
+   *  when one offer mixes them. DISPLAY-ONLY — the VAT local/international rule
+   *  reads the supplier's own registered country, so editing this never moves VAT. */
   countriesOfOrigin?: Record<string, ApprovalFieldValue>;
   /** SAR/USD rate override; when omitted a live rate is fetched (cached fallback). null = no rate */
   fx?: FxRates | null;
@@ -82,6 +95,10 @@ export interface ApprovalFormOptions {
   supplierNames?: Record<string, ReviewedValue>;
   /** reviewer edit to the PR Description header field (`edited ?? original`). */
   prDescription?: ReviewedValue;
+  /** which currencies to print, separately for line items and totals — see
+   *  ta-currency.ts. Omitted = the long-standing behaviour: line items as quoted,
+   *  totals in quoted + SAR + USD. */
+  currencyDisplay?: TaCurrencyDisplay;
   /** Overlay editable AcroForm fields on the rendered layout. OFF by default: the
    *  form is a flat, printable document and all editing happens in the Customize
    *  form modal beforehand. Kept so a fillable build stays one option away. */
@@ -103,42 +120,93 @@ const money2 = (n: number | null | undefined) =>
     ? null
     : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// TA-form money is normalized to SAR (primary) + USD (secondary) at the live rate.
-// If the rate is unavailable OR the currency is unknown to the feed, we disclose
-// the original amount instead of inventing a conversion.
-function MoneyDual({
+/**
+ * A LINE-ITEM price, in the currency the supplier actually quoted — never
+ * converted.
+ *
+ * Line items and totals are deliberately treated differently. A unit price is
+ * something the buyer checks against the supplier's own quotation, so it has to
+ * read exactly as it does there: an EUR offer shows EUR 2.42, not the SAR figure
+ * it becomes at today's rate. Converting every line also silently restates the
+ * whole grid whenever the rate moves, so two copies of the same form printed a day
+ * apart disagree on numbers the supplier never changed.
+ *
+ * Only the TOTAL converts (see MoneyDual) — that is where the cross-offer
+ * comparison actually happens, and it carries the rate + timestamp stamp that
+ * makes the conversion auditable.
+ */
+function MoneyQuoted({
   amount,
   currency,
   fx,
-  showOriginal,
+  selection,
 }: {
   amount: number | null | undefined;
   currency: string;
   fx: FxRates | null;
-  /** also show the ORIGINAL-currency amount above SAR (used on the total rows,
-   *  matching the company form's "EUR 36,388 / SAR 155,013"). No-op for SAR. */
-  showOriginal?: boolean;
+  selection: TaCurrencySelection;
 }) {
-  if (amount == null || !Number.isFinite(amount)) return <Text> </Text>;
-  const sar = fx ? toSar(amount, currency, fx) : null;
-  const usd = fx ? toUsd(amount, currency, fx) : null;
-  if (sar == null || usd == null) {
-    return <Text style={{ textAlign: 'right', color: C.body }}>{`${currency} ${money2(amount)}`}</Text>;
-  }
-  const cur = currency.toUpperCase();
+  const lines = resolveMoneyLines(amount, currency, fx, selection);
+  if (!lines.length) return <Text> </Text>;
+  // First line at full size, any additional currency muted beneath it — so the
+  // default (original only) renders exactly as it always has.
   return (
     <>
-      {/* The original-currency line is only worth printing when it is NEITHER of
-          the two lines below it. A USD quote was printing "USD 148,265 / SAR
-          555,993 / USD 148,265" — the same figure twice, once as the original and
-          once as the USD secondary. */}
-      {showOriginal && cur !== 'SAR' && cur !== 'USD' && (
-        <Text style={{ color: C.body, textAlign: 'right' }}>{`${cur} ${money2(amount)}`}</Text>
+      {lines.map((l, i) => (
+        <Text
+          key={l.code}
+          style={
+            i === 0
+              ? { textAlign: 'right', color: C.ink }
+              : { textAlign: 'right', color: C.muted, fontSize: 5.5 }
+          }
+        >
+          {`${l.code} ${money2(l.amount)}`}
+        </Text>
+      ))}
+    </>
+  );
+}
+
+// TOTALS are normalized to SAR (primary) + USD (secondary) at the live rate, so
+// offers in different currencies can be compared. If the rate is unavailable OR
+// the currency is unknown to the feed, we disclose the original amount instead of
+// inventing a conversion.
+function MoneyDual({
+  amount,
+  currency,
+  fx,
+  selection,
+}: {
+  amount: number | null | undefined;
+  currency: string;
+  fx: FxRates | null;
+  selection: TaCurrencySelection;
+}) {
+  const lines = resolveMoneyLines(amount, currency, fx, selection);
+  if (!lines.length) return <Text> </Text>;
+  // The SAR figure is the one the offers are compared on, so it carries the
+  // emphasis when it is present; otherwise the first line does. Duplicate
+  // suppression happens in the resolver — a USD quote showing {original, USD} used
+  // to print "USD 148,265 / USD 148,265", the same figure twice.
+  const primary = lines.find((l) => l.code === 'SAR') ?? lines[0];
+  return (
+    <>
+      {lines.map((l) =>
+        l === primary ? (
+          <Text key={l.code} style={{ fontFamily: 'Helvetica-Bold', color: C.ink, textAlign: 'right' }}>
+            {`${l.code} ${money2(l.amount)}`}
+          </Text>
+        ) : l.code === 'USD' ? (
+          <Text key={l.code} style={{ color: C.muted, textAlign: 'right', fontSize: 5.5 }}>
+            {`${l.code} ${money2(l.amount)}`}
+          </Text>
+        ) : (
+          <Text key={l.code} style={{ color: C.body, textAlign: 'right' }}>
+            {`${l.code} ${money2(l.amount)}`}
+          </Text>
+        ),
       )}
-      <Text style={{ fontFamily: 'Helvetica-Bold', color: C.ink, textAlign: 'right' }}>
-        {`SAR ${money2(sar)}`}
-      </Text>
-      <Text style={{ color: C.muted, textAlign: 'right', fontSize: 5.5 }}>{`USD ${money2(usd)}`}</Text>
     </>
   );
 }
@@ -190,14 +258,10 @@ function aiRecommendation(analysis: AnalysisResult, fx: FxRates | null): string 
   return `${name} — ${reason}.`;
 }
 
-// INTERNATIONAL = a stated country of origin other than Saudi Arabia. The TA form
-// shows a WITH-VAT total ONLY for an international supplier whose OWN quote states a
-// VAT amount (→ totalCostInclVat). VAT is NEVER computed/estimated by the app; local
-// suppliers never get a with-VAT line even if their quote mentions VAT.
-export function withVatAmount(q: ExtractedQuotation): number | null {
-  const international = q.countryOfOrigin != null && !isLocalCountry(q.countryOfOrigin);
-  return international && q.totalCostInclVat != null ? q.totalCostInclVat : null;
-}
+// The with-VAT rule now lives in workspace-types so the PDF, the .xlsx and the
+// legacy AcroForm build cannot drift apart. Re-exported here because this is where
+// callers (and the acceptance tests) have always imported it from.
+export { withVatAmount } from './workspace-types';
 
 function ApprovalDocument({
   analysis,
@@ -210,6 +274,7 @@ function ApprovalDocument({
   itemReview,
   supplierNames,
   prDescription,
+  currencyDisplay,
 }: {
   analysis: AnalysisResult;
   signatureRoles: string[];
@@ -221,6 +286,7 @@ function ApprovalDocument({
   itemReview?: ItemReview;
   supplierNames?: Record<string, ReviewedValue>;
   prDescription?: ReviewedValue;
+  currencyDisplay: TaCurrencyDisplay;
 }) {
   const qs = analysis.quotations;
   const qById = new Map(qs.map((q) => [q.id, q]));
@@ -245,6 +311,9 @@ function ApprovalDocument({
   const totalOf = (q: ExtractedQuotation) => reviewed.totals[q.id] ?? q.totalCost;
   const ai = aiRecommendation(analysis, fx);
   const supplierCurrencies = qs.map((q) => q.currency);
+  // Per-item aware lead times — one value when the offer shares one, else
+  // "Item #1 (2 weeks), Item #2 (6 weeks)". See per-item-field.ts.
+  const deliveries = suggestDeliveryTimes(qs);
 
   const pr = analysis.purchaseRequisition;
   const prNumber = pr?.requestNo ?? qs.find((q) => q.prNumber)?.prNumber ?? '';
@@ -292,6 +361,7 @@ function ApprovalDocument({
     cellBox: { borderRightWidth: 1, borderRightColor: C.border, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 2, paddingHorizontal: 3, justifyContent: 'center' },
     headCell: { backgroundColor: C.head, fontFamily: 'Helvetica-Bold', color: C.ink },
     supHead: { backgroundColor: C.head, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 2.5, paddingHorizontal: 3 },
+    supNo: { fontFamily: 'Helvetica-Bold', color: C.muted, fontSize: fs - 0.5, letterSpacing: 0.3 },
     supName: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs + 0.5 },
     ref: { color: C.muted, fontSize: fs - 0.5 },
     subLabel: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs - 0.5 },
@@ -408,15 +478,30 @@ function ApprovalDocument({
                 <Text style={[s.cellBox, s.headCell, { width: qtyLW, borderTopWidth: 1, borderTopColor: C.line }]}>Qty</Text>
                 <Text style={[s.cellBox, s.headCell, { width: uomW, borderTopWidth: 1, borderTopColor: C.line }]}>UOM</Text>
                 {group.map((sup) => {
+                  // Approvers discuss the form out loud ("supplier two is cheaper
+                  // but slower"), so every column carries a stable number as well
+                  // as the company name. The number is the supplier's position in
+                  // the whole analysis — NOT its position in this block — so it
+                  // stays the same when 5+ suppliers wrap onto a second page.
+                  const supNo = sup.colIndex + 1;
                   return (
                     <View key={sup.quotationId} style={[s.supHead, { width: supW }]}>
+                      <Text style={s.supNo}>{`SUPPLIER #${supNo}`}</Text>
                       <Text style={s.supName}>{nameOf(sup.quotationId, sup.supplier)}</Text>
                       <Text style={s.ref}>{sup.reference ? `REF# ${sup.reference}` : 'REF# —'}</Text>
                       <View style={[s.rowFlex, { marginTop: 2 }]}>
                         <Text style={[s.subLabel, { width: subDescW }]}>Description</Text>
                         <Text style={[s.subLabel, { width: subQtyW, textAlign: 'center' }]}>Qty</Text>
+                        {/* The header names exactly what the cells below print,
+                            for whatever combination the reviewer chose — it is
+                            derived from the same resolver, so "(EUR)" can never
+                            sit above SAR figures, and "(EUR / SAR)" appears only
+                            when both are really printed. */}
                         <Text style={[s.subLabel, { width: subPriceW, textAlign: 'right' }]}>
-                          {unitBasis ? `Unit Price / ${unitBasis} (SAR / USD)` : 'Unit Price (SAR / USD)'}
+                          {(() => {
+                            const cur = headerLabel(sup.currency, fx, currencyDisplay.lineItems);
+                            return unitBasis ? `Unit Price / ${unitBasis} (${cur})` : `Unit Price (${cur})`;
+                          })()}
                         </Text>
                       </View>
                     </View>
@@ -469,8 +554,15 @@ function ApprovalDocument({
                           {cell ? plain(cell.qty) : ''}
                         </Text>
                         <View style={[s.cellBox, { width: subPriceW, alignItems: 'flex-end' }]}>
+                          {/* Quoted currency by default; whatever the reviewer
+                              selected otherwise. See MoneyQuoted / ta-currency.ts. */}
                           {cell ? (
-                            <MoneyDual amount={cell.unitPrice} currency={cell.currency} fx={fx} />
+                            <MoneyQuoted
+                              amount={cell.unitPrice}
+                              currency={cell.currency}
+                              fx={fx}
+                              selection={currencyDisplay.lineItems}
+                            />
                           ) : (
                             <Text> </Text>
                           )}
@@ -483,42 +575,36 @@ function ApprovalDocument({
               })}
 
               {/* Total Price without VAT — ORIGINAL currency + SAR (primary) + USD,
-                  matching the company form (e.g. "EUR 36,388 / SAR 155,013"). */}
+                  matching the company form (e.g. "EUR 36,388 / SAR 155,013"). How
+                  many of those lines print is the reviewer's currency choice.
+
+                  This is the ONLY total the TA form carries. The form is a
+                  technical/commercial comparison between offers, and VAT is a
+                  pass-through that applies identically to whoever wins — including
+                  it made two suppliers look different on a number that was never a
+                  differentiator, and put a with-VAT figure next to a without-VAT one
+                  where a reader could sign against the wrong row. `withVatAmount()`
+                  is still exported and still correct; it simply is not printed here. */}
               <View style={s.rowFlex} wrap={false}>
                 <Text style={[s.cellBox, s.labelRow, { width: leftW, borderLeftWidth: 1, borderLeftColor: C.border }]}>Total Price without VAT</Text>
                 {group.map((sup) => {
                   const q = qById.get(sup.quotationId)!;
                   return (
                     <View key={sup.quotationId} style={{ width: supW, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3, alignItems: 'flex-end' }}>
-                      <MoneyDual amount={totalOf(q)} currency={q.currency} fx={fx} showOriginal />
+                      <MoneyDual amount={totalOf(q)} currency={q.currency} fx={fx} selection={currencyDisplay.totals} />
                     </View>
                   );
                 })}
               </View>
 
-              {/* Total Price with VAT — ONLY when an international supplier's own quote
-                  states a VAT amount. Never computed; local suppliers never shown. The
-                  row itself is omitted when no supplier in the block qualifies. */}
-              {group.some((sup) => withVatAmount(qById.get(sup.quotationId)!) != null) && (
-                <View style={s.rowFlex} wrap={false}>
-                  <Text style={[s.cellBox, s.labelRow, { width: leftW, borderLeftWidth: 1, borderLeftColor: C.border }]}>Total Price with VAT</Text>
-                  {group.map((sup) => {
-                    const q = qById.get(sup.quotationId)!;
-                    const withVat = withVatAmount(q);
-                    return (
-                      <View key={sup.quotationId} style={{ width: supW, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 3, paddingHorizontal: 3, alignItems: 'flex-end' }}>
-                        {withVat != null ? <MoneyDual amount={withVat} currency={q.currency} fx={fx} showOriginal /> : <Text> </Text>}
-                      </View>
-                    );
-                  })}
-                </View>
-              )}
-
               {/* Terms */}
               <TermRow label="Payment Terms" s={s} leftW={leftW} supW={supW} values={group.map((sup) => qById.get(sup.quotationId)!.paymentTerms ?? '')} />
               {/* Delivery Time — the supplier's ORIGINAL wording verbatim (e.g.
                   "4 to 5 weeks"), with the normalized day-count only as a faint
-                  parenthetical hint, never as a replacement. */}
+                  parenthetical hint, never as a replacement. When the items in one
+                  offer have DIFFERENT lead times the cell lists them per item
+                  ("Item #1 (2 weeks), Item #2 (6 weeks)") instead of printing one
+                  of them over the whole offer. */}
               <TermRow
                 label="Delivery Time"
                 s={s}
@@ -526,10 +612,13 @@ function ApprovalDocument({
                 supW={supW}
                 values={group.map((sup) => {
                   const q = qById.get(sup.quotationId)!;
-                  const raw = q.deliveryRaw?.trim() ?? '';
-                  if (!raw) return '';
+                  const text = deliveries[sup.quotationId] ?? '';
+                  if (!text || text === 'Not stated') return '';
+                  // The day-count hint only makes sense for a single lead time; a
+                  // per-item list already carries each item's own wording.
+                  if (text !== (q.deliveryRaw?.trim() ?? '')) return text;
                   const hint = deliveryNormalizedHint(q.deliveryRaw, q.deliveryDays);
-                  return hint ? `${raw}  (${hint})` : raw;
+                  return hint ? `${text}  (${hint})` : text;
                 })}
               />
               <TermRow label="Delivery Terms" s={s} leftW={leftW} supW={supW} values={group.map((sup) => qById.get(sup.quotationId)!.deliveryTerms ?? '')} />
@@ -736,6 +825,7 @@ export async function generateApprovalFormPdf(
       itemReview={options?.itemReview}
       supplierNames={options?.supplierNames}
       prDescription={options?.prDescription}
+      currencyDisplay={options?.currencyDisplay ?? TA_CURRENCY_DISPLAY_DEFAULT}
     />,
   ).toBlob();
 }

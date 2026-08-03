@@ -59,6 +59,15 @@ import {
   DEFAULT_SIGNATURE_ROLES,
   type TechnicalComment,
 } from '@/lib/workspace-types';
+import {
+  convertsAwayFromQuoted,
+  TA_CURRENCY_DISPLAY_DEFAULT,
+  TA_CURRENCY_LABEL,
+  TA_CURRENCY_ORDER,
+  type TaCurrency,
+  type TaCurrencyDisplay,
+  type TaCurrencySelection,
+} from '@/lib/ta-currency';
 
 interface SigRole {
   id: string;
@@ -414,6 +423,20 @@ export function ApprovalFormDownload({
   const supplierNames = useReviewedNames(supplierNameAi, NAMES_KEY, supKey);
   const prDescription = useReviewedNames(prDescriptionAi, PRDESC_KEY, supKey);
 
+  // Which currencies this form prints. Deliberately NOT persisted: it is a per-form
+  // decision (a three-currency sheet for one PR, SAR-only for the next), so it
+  // resets to the long-standing defaults every time rather than quietly carrying a
+  // previous PR's choice into a document someone signs.
+  const [currencyDisplay, setCurrencyDisplay] = useState<TaCurrencyDisplay>(TA_CURRENCY_DISPLAY_DEFAULT);
+
+  const quotedCurrencies = useMemo(
+    () => analysis.quotations.map((q) => q.currency ?? 'SAR'),
+    [analysis],
+  );
+  // Only offer the choice when there is something to choose — with every supplier
+  // quoting SAR, Original and SAR are the same figure.
+  const hasForeignCurrency = quotedCurrencies.some((c) => c.toUpperCase() !== 'SAR');
+
   useEffect(() => setRoles(loadRoles()), []);
   // Re-seed when the analysed suppliers change (or on reload) — overlay persisted edits.
   useEffect(() => {
@@ -469,6 +492,7 @@ export function ApprovalFormDownload({
         itemReview: items.review,
         supplierNames: supplierNames.values,
         prDescription: prDescription.values.pr,
+        currencyDisplay,
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -514,6 +538,7 @@ export function ApprovalFormDownload({
             itemReview: items.review,
             supplierNames: supplierNames.values,
             prDescription: prDescription.values.pr,
+            currencyDisplay,
           },
           fx: items.fx,
         }),
@@ -546,6 +571,10 @@ export function ApprovalFormDownload({
           items={items}
           supplierNames={supplierNames}
           prDescription={prDescription}
+          currencyDisplay={currencyDisplay}
+          onCurrencyDisplayChange={setCurrencyDisplay}
+          quotedCurrencies={quotedCurrencies}
+          hasForeignCurrency={hasForeignCurrency}
           comments={comments}
           suggestions={suggestions}
           onEdit={editComment}
@@ -1058,6 +1087,118 @@ function ToggleableFieldSection({
   );
 }
 
+// Which currencies this particular form prints — any combination of Original / SAR
+// / USD, chosen independently for the line items and the totals row. Per download:
+// the state lives in the component and resets to the default every time, because
+// silently carrying one PR's choice into the next produces a signed document
+// nobody chose the shape of.
+//
+// Line items and totals are separate controls because their DEFAULTS differ, and
+// both defaults matter: a unit price defaults to the supplier's own quoted figure
+// (that is what a reviewer checks against the quotation), while the totals row
+// defaults to all three (that is where offers are actually compared). One combined
+// control would have forced one of those to change.
+function CurrencyPicker({
+  label,
+  hint,
+  selection,
+  onChange,
+  warning,
+}: {
+  label: string;
+  hint: string;
+  selection: TaCurrencySelection;
+  onChange: (next: TaCurrencySelection) => void;
+  warning?: string | null;
+}) {
+  const toggle = (c: TaCurrency) => {
+    const next = selection.includes(c) ? selection.filter((x) => x !== c) : [...selection, c];
+    // A form with no currency at all is not a choice, it is a blank column — the
+    // last one standing cannot be unticked.
+    if (!next.length) return;
+    onChange(TA_CURRENCY_ORDER.filter((x) => next.includes(x)));
+  };
+  return (
+    <div className="rounded-lg border border-border p-3">
+      <div className="mb-1 text-sm font-semibold">{label}</div>
+      <p className="mb-2 text-[11px] text-muted-foreground">{hint}</p>
+      <div className="flex flex-wrap gap-2">
+        {TA_CURRENCY_ORDER.map((c) => {
+          const on = selection.includes(c);
+          const last = on && selection.length === 1;
+          return (
+            <label
+              key={c}
+              title={last ? 'At least one currency has to be shown' : undefined}
+              className={cn(
+                'inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-medium transition',
+                on ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted',
+                last && 'cursor-not-allowed opacity-80',
+              )}
+            >
+              <input
+                type="checkbox"
+                checked={on}
+                disabled={last}
+                onChange={() => toggle(c)}
+                className="h-3.5 w-3.5 accent-primary"
+              />
+              {TA_CURRENCY_LABEL[c]}
+            </label>
+          );
+        })}
+      </div>
+      {warning && <p className="mt-2 text-[11px] text-warning">{warning}</p>}
+    </div>
+  );
+}
+
+function CurrencySection({
+  display,
+  onChange,
+  quotedCurrencies,
+  hasForeignCurrency,
+}: {
+  display: TaCurrencyDisplay;
+  onChange: (next: TaCurrencyDisplay) => void;
+  quotedCurrencies: string[];
+  hasForeignCurrency: boolean;
+}) {
+  // With every supplier quoting SAR there is nothing to choose: Original and SAR
+  // resolve to the same figure and USD is the only real variation.
+  if (!hasForeignCurrency) return null;
+  const lineConverts = convertsAwayFromQuoted(quotedCurrencies, display.lineItems);
+  return (
+    <section className="mt-6">
+      <h3 className="mb-1 text-sm font-semibold">Currencies on this form</h3>
+      <p className="mb-2 text-[11px] text-muted-foreground">
+        Applies to this download only — nothing is saved, so the next form starts from the defaults again. The
+        conversion-rate stamp is printed in the header whenever a converted figure appears, so any restated number can
+        be traced back to a rate and a date. Column headings always name whatever is actually printed beneath them.
+      </p>
+      <div className="space-y-3">
+        <CurrencyPicker
+          label="Line items"
+          hint="The per-item unit prices. Defaults to the supplier's own quoted currency."
+          selection={display.lineItems}
+          onChange={(lineItems) => onChange({ ...display, lineItems })}
+          warning={
+            lineConverts
+              ? 'Line prices will be shown converted, not as the supplier quoted them. Anyone checking a line against the original quotation will see a different number there.'
+              : null
+          }
+        />
+        <CurrencyPicker
+          label="Total price row"
+          hint="The Total Price without VAT row. Defaults to quoted currency + SAR + USD."
+          selection={display.totals}
+          onChange={(totals) => onChange({ ...display, totals })}
+        />
+      </div>
+    </section>
+  );
+}
+
 // The form's header identity: the PR subject line and each supplier's printed
 // name, both AI-extracted and both routinely wrong in small ways that matter on a
 // signed document. Same pattern as Warranty / Country of Origin.
@@ -1116,6 +1257,10 @@ function CustomizeFormDialog({
   items,
   supplierNames,
   prDescription,
+  currencyDisplay,
+  onCurrencyDisplayChange,
+  quotedCurrencies,
+  hasForeignCurrency,
   comments,
   suggestions,
   onEdit,
@@ -1134,6 +1279,10 @@ function CustomizeFormDialog({
   items: ItemReviewApi;
   supplierNames: ReviewedNamesApi;
   prDescription: ReviewedNamesApi;
+  currencyDisplay: TaCurrencyDisplay;
+  onCurrencyDisplayChange: (d: TaCurrencyDisplay) => void;
+  quotedCurrencies: string[];
+  hasForeignCurrency: boolean;
   comments: Record<string, TechnicalComment>;
   suggestions: Record<string, TechnicalComment>;
   onEdit: (id: string, text: string) => void;
@@ -1200,6 +1349,14 @@ function CustomizeFormDialog({
 
         {/* ── Item notes (show/hide the orange annotations, per supplier column) ── */}
         <ItemNotesSection items={items} />
+
+        {/* ── Currencies (per-download, not saved) ── */}
+        <CurrencySection
+          display={currencyDisplay}
+          onChange={onCurrencyDisplayChange}
+          quotedCurrencies={quotedCurrencies}
+          hasForeignCurrency={hasForeignCurrency}
+        />
 
         {/* ── Technical Comments ── */}
         <section className="mt-6">
