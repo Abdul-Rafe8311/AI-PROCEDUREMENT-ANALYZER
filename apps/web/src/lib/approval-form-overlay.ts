@@ -208,14 +208,40 @@ function planPlacements(runs: TextRun[], pageCount: number): { placements: Place
     const lines = toLines(pageRuns);
 
     // How many supplier groups does this page carry? One "Description" sub-header each.
+    //
+    // A page can legitimately carry NONE. On A3 the whole grid fits on page 1 and
+    // the sign-off (Final Recommendation + signature blocks) flows onto page 2 by
+    // itself. This used to `continue` past such a page, which skipped the table
+    // work AND everything after it — so the sign-off page came out with no
+    // editable fields at all. The table work is now scoped to pages that have a
+    // table; the sign-off pass below runs on every page either way.
     const descHeaders = lines.filter((l) => l.str.trim() === 'Description');
-    const n = descHeaders.length;
-    if (!n) continue;
-    const cols = L.columnRanges(n);
-    const subHeaderY = Math.max(...descHeaders.map((l) => l.y));
 
-    // ── header meta block (page 1 only): the value beside each bold caption ──
-    for (const [caption, base] of [
+    // Group the sub-headers into BLOCKS by baseline. A page can carry more than one
+    // supplier block: on A3 the whole grid normally fits on page 1, as "Suppliers
+    // 1–4 of 5" stacked above "Suppliers 5–5 of 5". Counting every "Description" on
+    // the page and sizing ONE grid from the total is how a 5-column layout got
+    // computed for a page that actually holds a 4-column block above a 1-column one
+    // — which put the price sub-column at 17pt and filed quantities as prices.
+    const headerBands: TextRun[][] = [];
+    for (const h of [...descHeaders].sort((a, b) => b.y - a.y)) {
+      const cur = headerBands[headerBands.length - 1];
+      if (cur && Math.abs(cur[0].y - h.y) < 2) cur.push(h);
+      else headerBands.push([h]);
+    }
+
+    for (let bi = 0; bi < headerBands.length; bi++) {
+    const band = headerBands[bi];
+    const n = band.length;
+    const cols = L.columnRanges(n);
+    const subHeaderY = Math.max(...band.map((l) => l.y));
+    // This block ends just above the next block's sub-header — or at the foot of the
+    // page when it is the last one.
+    const blockFloor =
+      bi + 1 < headerBands.length ? Math.max(...headerBands[bi + 1].map((l) => l.y)) + 2 : -Infinity;
+
+    // ── header meta block (first block of page 1 only): the value beside each bold caption ──
+    if (bi === 0) for (const [caption, base] of [
       ['TA Date:', 'ta_date'],
       ['PR#:', 'pr_number'],
       ['Generated on:', 'generated_on'],
@@ -232,7 +258,7 @@ function planPlacements(runs: TextRun[], pageCount: number): { placements: Place
     }
 
     // ── table rows: anchors come from the leftmost block, which is never empty ──
-    const leftLines = lines.filter((l) => inCol(l, cols.leftBlock) && l.y < subHeaderY - 2);
+    const leftLines = lines.filter((l) => inCol(l, cols.leftBlock) && l.y < subHeaderY - 2 && l.y > blockFloor);
     const anchors = clusterRows(leftLines);
 
     const rows: { kind: 'item' | 'term'; label: string; band: ReturnType<typeof bandOf>; index: number }[] = [];
@@ -244,7 +270,7 @@ function planPlacements(runs: TextRun[], pageCount: number): { placements: Place
       else if (!rows.some((r) => r.kind === 'term')) rows.push({ kind: 'item', label: text, band: bandOf(a), index: itemIndex++ });
       else break; // past Technical Comments — AI box / signatures start here
     }
-    if (!rows.length) continue;
+    if (!rows.length) continue; // this block has no rows — try the next
     // The sub-header band ("Description | Qty | Unit Price (SAR / USD)") can wrap onto
     // a second line, which would otherwise read as row-1 data. Bound the table by the
     // LOWEST line of that band, not by the first row's own extent.
@@ -314,6 +340,7 @@ function planPlacements(runs: TextRun[], pageCount: number): { placements: Place
         }
       }
     }
+    } // end per-block loop
 
     // ── Final Recommendation: the ruled blank to the right of the caption ──
     const finalLabel = lines.find((l) => l.str.trim().startsWith('Final Recommendation'));

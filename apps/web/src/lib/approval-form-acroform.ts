@@ -18,8 +18,8 @@
 //
 // Within a page each supplier cell STACKS — the quoted description spans the full
 // column width, with Qty and Unit Price on a band beneath it. That is not a style
-// choice: at 4 suppliers per A4-landscape page a supplier column is ~140pt, and a
-// 30-character part code ("TWS.10(60)-200(140)-45-253MA-C") needs ~134pt at 8.5pt
+// choice: at 4 suppliers per page a supplier column is ~198pt on A3, and a
+// 30-character part code ("TWS.10(60)-200(140)-45-253MA-C") needs ~189pt at 12pt
 // type, so it only fits when it owns the full column width. Wrapping is
 // whitespace-only, so an identifier is never split.
 //
@@ -64,30 +64,34 @@ import {
 import type { ApprovalFormOptions } from './approval-form-pdf';
 
 // ── Page geometry ───────────────────────────────────────────────────────────
-const PAGE_W = 842; // A4 landscape
-const PAGE_H = 595;
-const M = 28; // page margin — content never runs to the page edge
+// A3 landscape, matching the flat renderer and the .xlsx export — all three builds
+// of this form print on the same paper. Every constant below is its former A4
+// value scaled by ~1.41 (the A4→A3 ratio), so the layout is unchanged and simply
+// larger; the A4 ancestor is kept in a comment.
+const PAGE_W = 1190.55; // A4 landscape: 842
+const PAGE_H = 841.89; // A4 landscape: 595
+const M = 40; // page margin — content never runs to the page edge (A4: 28)
 const CONTENT_W = PAGE_W - 2 * M;
-const FOOTER_H = 26; // reserved strip for the footer / FX stamp on every page
+const FOOTER_H = 37; // reserved strip for the footer / FX stamp on every page (A4: 26)
 
 // ── Spacing scale ───────────────────────────────────────────────────────────
-const PAD_X = 8; // horizontal cell padding — text never touches a border
-const PAD_Y = 6; // vertical cell padding
-const LEAD_RATIO = 1.35; // line height, as a multiple of the type size
-const ROW_MIN = 28; // minimum table row height
-const SECTION_GAP = 18; // space between major blocks
-const HEADER_GAP = 12; // space under a section header
+const PAD_X = 11; // horizontal cell padding — text never touches a border (A4: 8)
+const PAD_Y = 8; // vertical cell padding (A4: 6)
+const LEAD_RATIO = 1.35; // line height, as a multiple of the type size (unitless)
+const ROW_MIN = 40; // minimum table row height (A4: 28)
+const SECTION_GAP = 25; // space between major blocks (A4: 18)
+const HEADER_GAP = 17; // space under a section header (A4: 12)
 
 // ── Type scale ──────────────────────────────────────────────────────────────
-const T_TITLE = 18;
-const T_SECTION = 13;
-const T_TH = 10; // table column headers
-const T_TH_SUB = 8.5; // supplier sub-column headers
-const T_SUPPLIER = 11; // supplier name
-const T_BODY = 8.5;
-const T_BODY_MIN = 7.4; // floor when a long identifier must still fit its column
-const T_SECONDARY = 7.5; // quotation refs, status notes, hints
-const T_FOOTER = 7;
+const T_TITLE = 25; // A4: 18
+const T_SECTION = 18; // A4: 13
+const T_TH = 14; // table column headers (A4: 10)
+const T_TH_SUB = 12; // supplier sub-column headers (A4: 8.5)
+const T_SUPPLIER = 15.5; // supplier name — the column heading, bold (A4: 11)
+const T_BODY = 12; // A4: 8.5
+const T_BODY_MIN = 10.5; // floor when a long identifier must still fit its column (A4: 7.4)
+const T_SECONDARY = 10.5; // quotation refs, status notes, hints (A4: 7.5)
+const T_FOOTER = 10; // A4: 7
 
 // ── Colour system: dark blue / dark grey / light grey / soft blue only.
 // No bright colours, no gradients, and deliberately NO green — the form never
@@ -112,11 +116,11 @@ const C_WHITE = rgb(1, 1, 1);
 // all equal width. The PR-description column is sized to match a supplier column so
 // the same long text wraps to the same number of lines on both sides of the table —
 // which is what keeps rows from ballooning.
-const IDX_W = 24;
-const QTY_L_W = 46;
-const UOM_W = 36;
-const DESC_MIN = 132;
-const DESC_MAX = 420; // a short last group widens the PR column instead of leaving a gap
+const IDX_W = 34; // A4: 24
+const QTY_L_W = 65; // A4: 46
+const UOM_W = 51; // A4: 36
+const DESC_MIN = 187; // A4: 132
+const DESC_MAX = 594; // a short last group widens the PR column instead of leaving a gap (A4: 420)
 
 const money2 = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const plain = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? '' : n.toLocaleString('en-US'));

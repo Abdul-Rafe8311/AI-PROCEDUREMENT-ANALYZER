@@ -110,7 +110,7 @@ export interface ApprovalFormOptions {
 const { SUP_PER_GROUP, USABLE, PAGE_PAD_X, PAGE_PAD_Y, FS, IDX_W, PR_DESC_W, QTY_L_W, UOM_W, LEFT_W } = LAYOUT;
 
 /** Gutter between signature blocks — used for BOTH the width maths and the style. */
-const SIGN_GAP = 6;
+const SIGN_GAP = LAYOUT.SIGN_BOX_GAP;
 
 const plain = (n: number | null | undefined) =>
   n == null || !Number.isFinite(n) ? '' : n.toLocaleString('en-US');
@@ -158,7 +158,7 @@ function MoneyQuoted({
           style={
             i === 0
               ? { textAlign: 'right', color: C.ink }
-              : { textAlign: 'right', color: C.muted, fontSize: 5.5 }
+              : { textAlign: 'right', color: C.muted, fontSize: LAYOUT.TYPE.priceUsd }
           }
         >
           {`${l.code} ${money2(l.amount)}`}
@@ -198,7 +198,7 @@ function MoneyDual({
             {`${l.code} ${money2(l.amount)}`}
           </Text>
         ) : l.code === 'USD' ? (
-          <Text key={l.code} style={{ color: C.muted, textAlign: 'right', fontSize: 5.5 }}>
+          <Text key={l.code} style={{ color: C.muted, textAlign: 'right', fontSize: LAYOUT.TYPE.priceUsd }}>
             {`${l.code} ${money2(l.amount)}`}
           </Text>
         ) : (
@@ -348,7 +348,7 @@ function ApprovalDocument({
 
   const s = StyleSheet.create({
     page: { paddingVertical: PAGE_PAD_Y, paddingHorizontal: PAGE_PAD_X, fontSize: fs, color: C.body, fontFamily: 'Helvetica' },
-    title: { textAlign: 'center', fontSize: 11.5, fontFamily: 'Helvetica-Bold', color: C.ink, letterSpacing: 0.5, marginBottom: 3 },
+    title: { textAlign: 'center', fontSize: LAYOUT.TYPE_TITLE, fontFamily: 'Helvetica-Bold', color: C.ink, letterSpacing: 0.5, marginBottom: 4 },
     subNote: { textAlign: 'center', fontSize: fs - 0.5, color: C.muted, marginBottom: 4 },
     metaRow: { flexDirection: 'row', borderWidth: 1, borderColor: C.line },
     metaCell: { paddingVertical: 2.5, paddingHorizontal: 5, borderRightWidth: 1, borderRightColor: C.line },
@@ -361,26 +361,26 @@ function ApprovalDocument({
     cellBox: { borderRightWidth: 1, borderRightColor: C.border, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 2, paddingHorizontal: 3, justifyContent: 'center' },
     headCell: { backgroundColor: C.head, fontFamily: 'Helvetica-Bold', color: C.ink },
     supHead: { backgroundColor: C.head, borderRightWidth: 1, borderRightColor: C.line, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: 2.5, paddingHorizontal: 3 },
-    supNo: { fontFamily: 'Helvetica-Bold', color: C.muted, fontSize: fs - 0.5, letterSpacing: 0.3 },
-    supName: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs + 0.5 },
-    ref: { color: C.muted, fontSize: fs - 0.5 },
+    supNo: { fontFamily: 'Helvetica-Bold', color: C.muted, fontSize: LAYOUT.TYPE.ref, letterSpacing: 0.4 },
+    supName: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: LAYOUT.TYPE.supplierName },
+    ref: { color: C.muted, fontSize: LAYOUT.TYPE.ref },
     subLabel: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs - 0.5 },
     labelRow: { fontFamily: 'Helvetica-Bold', color: C.ink },
     notQuoted: { color: C.faint, fontFamily: 'Helvetica-Oblique' },
-    specDiffTag: { fontSize: fs - 1.5, fontFamily: 'Helvetica-Oblique', color: C.specDiff, marginTop: 1 },
+    specDiffTag: { fontSize: LAYOUT.TYPE.specDiff, fontFamily: 'Helvetica-Oblique', color: C.specDiff, marginTop: 1.5 },
     aiBox: { marginTop: 6, borderWidth: 1, borderColor: C.aiBorder, backgroundColor: C.aiBg, borderRadius: 3, paddingVertical: 5, paddingHorizontal: 7 },
     aiLabel: { fontSize: fs - 0.5, fontFamily: 'Helvetica-Bold', color: C.aiBorder, marginBottom: 2 },
     aiText: { color: C.aiBorder, fontFamily: 'Helvetica-Oblique' },
     finalRow: { marginTop: 7, flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
     signWrap: { marginTop: 8, flexDirection: 'column', gap: SIGN_GAP },
     signRow: { flexDirection: 'row', gap: SIGN_GAP },
-    signBox: { borderWidth: 1, borderColor: C.line, borderRadius: 3, paddingVertical: 4, paddingHorizontal: 5, minHeight: 48 },
+    signBox: { borderWidth: 1, borderColor: C.line, borderRadius: 3, paddingVertical: 6, paddingHorizontal: LAYOUT.SIGN_BOX_PAD, minHeight: LAYOUT.SIGN_BOX_MIN_H },
     signTitle: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs, marginBottom: 3 },
     checkRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 3, gap: 3 },
-    box: { width: 7, height: 7, borderWidth: 1, borderColor: C.line },
+    box: { width: 10, height: 10, borderWidth: 1, borderColor: C.line },
     sigLine: { marginTop: 5, borderTopWidth: 1, borderTopColor: C.border, paddingTop: 2, color: C.muted },
     footer: { position: 'absolute', bottom: 10, left: 16, right: 16, alignItems: 'center' },
-    footerLine: { fontSize: 6, color: C.faint, textAlign: 'center' },
+    footerLine: { fontSize: LAYOUT.TYPE_FOOTER, color: C.faint, textAlign: 'center' },
   });
 
   // Signature blocks are laid out as EXPLICIT rows of at most 4, not a flex-wrap
@@ -403,7 +403,7 @@ function ApprovalDocument({
 
   return (
     <Document title="Technical Approval Form" author="AI Procurement Copilot">
-      <Page size="A4" orientation="landscape" style={s.page} wrap>
+      <Page size={LAYOUT.PAGE_SIZE} orientation="landscape" style={s.page} wrap>
         <Text style={s.title}>TECHNICAL APPROVAL FORM</Text>
         {/* The item rows are anchored to the PR document. This note shows ONLY when
             the requisition produced no line items (the grid can't be built) — never
