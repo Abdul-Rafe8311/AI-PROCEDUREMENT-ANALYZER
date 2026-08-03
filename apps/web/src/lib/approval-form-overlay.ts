@@ -164,7 +164,16 @@ function resolveFaces(runs: TextRun[]): (id: string) => FontKind {
  * Work out where every editable widget goes, from the measured page.
  * `supplierCounts[p]` is how many supplier column-groups page `p` carries.
  */
-function planPlacements(runs: TextRun[], pageCount: number): { placements: Placement[]; skipped: string[] } {
+// `profile` is the column fit the RENDERER used, recovered from the document's
+// Keywords. Column widths are content-derived now, so the overlay cannot re-derive
+// them from `n` alone — without the stamp it would place widgets on the default
+// grid, and a document with unusually long descriptions would get its fields half a
+// column off. Documents without the stamp decode to DEFAULT_PROFILE.
+function planPlacements(
+  runs: TextRun[],
+  pageCount: number,
+  profile: L.ColumnProfile,
+): { placements: Placement[]; skipped: string[] } {
   const faceOf = resolveFaces(runs);
   const placements: Placement[] = [];
   const skipped: string[] = [];
@@ -233,7 +242,7 @@ function planPlacements(runs: TextRun[], pageCount: number): { placements: Place
     for (let bi = 0; bi < headerBands.length; bi++) {
     const band = headerBands[bi];
     const n = band.length;
-    const cols = L.columnRanges(n);
+    const cols = L.columnRanges(n, profile);
     const subHeaderY = Math.max(...band.map((l) => l.y));
     // This block ends just above the next block's sub-header — or at the foot of the
     // page when it is the last one.
@@ -433,7 +442,10 @@ export async function overlayEditableFields(bytes: Uint8Array): Promise<Uint8Arr
   const runs = await measureRuns(Uint8Array.from(bytes));
   const doc = await PDFDocument.load(bytes);
   const pages = doc.getPages();
-  const { placements } = planPlacements(runs, pages.length);
+  // The renderer stamped the column fit it used into Keywords — decode it so the
+  // widgets land on the columns actually drawn, not on the default grid.
+  const profile = L.decodeFit(doc.getKeywords());
+  const { placements } = planPlacements(runs, pages.length, profile);
   const checkboxes = planCheckboxes(runs);
 
   const form = doc.getForm();

@@ -10,6 +10,7 @@
 // behavior), so nothing regresses without a PR.
 
 import { type FxRates, toUsd } from './fx-rates';
+import { SUP_PER_GROUP } from './approval-form-layout';
 import { normalizeCell, reconcileToLineTotal, unitWarning } from './uom';
 import type {
   ExtractedQuotation,
@@ -280,8 +281,15 @@ export function buildComparisonModel(
   return { suppliers, rows: [...productRows, ...charges], hasPr };
 }
 
-/** Supplier-group chunk size for wrapping 5+ suppliers into stacked blocks. */
-export const SUPPLIERS_PER_GROUP = 4;
+/**
+ * Supplier-group chunk size for wrapping suppliers into stacked blocks.
+ *
+ * Imported from the layout module rather than duplicated: the PDF, the .xlsx and
+ * the legacy AcroForm build must agree about which supplier lands on which sheet,
+ * and this number moved from 4 to 3 when the body type went 8pt → 12pt. Keeping a
+ * second copy of it here is exactly how they would come to disagree.
+ */
+export const SUPPLIERS_PER_GROUP = SUP_PER_GROUP;
 
 /** Split supplier indices into groups so 5+ suppliers wrap into extra blocks. */
 export function supplierGroups<T>(items: T[], size = SUPPLIERS_PER_GROUP): T[][] {
