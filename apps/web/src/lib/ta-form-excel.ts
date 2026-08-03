@@ -27,7 +27,7 @@ import {
   suggestTechnicalComments,
   suggestWarranties,
 } from './item-matching';
-import { applyItemReview } from './item-review';
+import { applyItemReview, valueOf } from './item-review';
 import { buildComparisonModel, SUPPLIERS_PER_GROUP, supplierGroups } from './pr-comparison';
 import {
   type AnalysisResult,
@@ -177,7 +177,17 @@ export async function buildTaFormWorkbook(
 
   const pr = analysis.purchaseRequisition;
   const prNumber = pr?.requestNo ?? qs.find((q) => q.prNumber)?.prNumber ?? '';
-  const prSubject = resolvePrDescription(pr) || 'Not stated on the requisition';
+  // The reviewer's Customize-dialog edits win over the extracted values, exactly as
+  // they do on the PDF — the two downloads must never disagree about a name.
+  // Clearing the box is respected (matching the PDF); a BLANK supplier name is not,
+  // because an unlabelled price column is never what the reviewer meant.
+  const prSubject =
+    (options?.prDescription ? valueOf(options.prDescription).trim() : resolvePrDescription(pr)) ||
+    'Not stated on the requisition';
+  const nameOf = (quotationId: string, extracted: string) => {
+    const rv = options?.supplierNames?.[quotationId];
+    return (rv ? valueOf(rv).trim() : '') || extracted;
+  };
   const generatedOn = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
   const indexed = model.suppliers.map((s, i) => ({ ...s, colIndex: i }));
@@ -247,7 +257,7 @@ export async function buildTaFormWorkbook(
     for (const c of [1, 2, 3, 4]) ws.mergeCells(bandTop, c, bandTop + 1, c);
     group.forEach((sup, i) => {
       const c0 = 5 + i * 3;
-      put(bandTop, c0, `${sup.supplier}\nREF# ${sup.reference ?? '—'}`, { bold: true });
+      put(bandTop, c0, `${nameOf(sup.quotationId, sup.supplier)}\nREF# ${sup.reference ?? '—'}`, { bold: true });
       ws.mergeCells(bandTop, c0, bandTop, c0 + 2);
       put(bandTop + 1, c0, 'Description', { bold: true });
       put(bandTop + 1, c0 + 1, 'Qty', { bold: true, align: 'center' });

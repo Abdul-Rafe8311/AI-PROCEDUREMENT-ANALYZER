@@ -31,7 +31,7 @@ import {
   suggestWarranties,
 } from './item-matching';
 import { buildComparisonModel, supplierGroups } from './pr-comparison';
-import { applyItemReview, type ItemReview } from './item-review';
+import { applyItemReview, type ItemReview, type ReviewedValue, valueOf } from './item-review';
 import { trimSupplierDescription } from './supplier-desc';
 import * as LAYOUT from './approval-form-layout';
 import {
@@ -75,6 +75,13 @@ export interface ApprovalFormOptions {
   /** reviewer edits to the comparison table (description / qty / unit price per cell).
    *  The form prints `edited ?? extracted` — see item-review.ts. */
   itemReview?: ItemReview;
+  /** reviewer edit to a supplier's printed NAME, keyed by quotation id. Same audit
+   *  trail as every other reviewed field: `{ original, edited }`, and the form
+   *  prints `edited ?? original`. DISPLAY-ONLY — scoring, matching and the
+   *  recommendation all keep using the extracted name. */
+  supplierNames?: Record<string, ReviewedValue>;
+  /** reviewer edit to the PR Description header field (`edited ?? original`). */
+  prDescription?: ReviewedValue;
   /** Overlay editable AcroForm fields on the rendered layout. OFF by default: the
    *  form is a flat, printable document and all editing happens in the Customize
    *  form modal beforehand. Kept so a fillable build stays one option away. */
@@ -84,6 +91,9 @@ export interface ApprovalFormOptions {
 // Page geometry lives in the shared layout module so the pdf-lib field overlay
 // places its widgets on exactly the columns this renderer draws.
 const { SUP_PER_GROUP, USABLE, PAGE_PAD_X, PAGE_PAD_Y, FS, IDX_W, PR_DESC_W, QTY_L_W, UOM_W, LEFT_W } = LAYOUT;
+
+/** Gutter between signature blocks — used for BOTH the width maths and the style. */
+const SIGN_GAP = 6;
 
 const plain = (n: number | null | undefined) =>
   n == null || !Number.isFinite(n) ? '' : n.toLocaleString('en-US');
@@ -198,6 +208,8 @@ function ApprovalDocument({
   fx,
   selectedSupplier,
   itemReview,
+  supplierNames,
+  prDescription,
 }: {
   analysis: AnalysisResult;
   signatureRoles: string[];
@@ -207,6 +219,8 @@ function ApprovalDocument({
   fx: FxRates | null;
   selectedSupplier: string | null;
   itemReview?: ItemReview;
+  supplierNames?: Record<string, ReviewedValue>;
+  prDescription?: ReviewedValue;
 }) {
   const qs = analysis.quotations;
   const qById = new Map(qs.map((q) => [q.id, q]));
@@ -237,7 +251,19 @@ function ApprovalDocument({
   // What's being procured: the PR header "Description"/"Subject" field when present,
   // else DERIVED from the item table (single-item PRs carry the subject in the item
   // description — e.g. PR 12601707's conversion kit). Blank only if truly absent.
-  const prSubject = resolvePrDescription(pr);
+  // The reviewer's own wording wins when they edited it in the Customize dialog.
+  // Clearing the box is respected — the header then prints "Not provided", the same
+  // as it does for a requisition that genuinely carries no subject. (Same as
+  // Warranty / Country of Origin: a human clear is a decision, not a mistake.)
+  const prSubject = prDescription ? valueOf(prDescription).trim() : resolvePrDescription(pr);
+  // A supplier's printed name is `edited ?? extracted`, but a BLANK edit falls back
+  // to the extracted name rather than printing an unlabelled column — an anonymous
+  // price column on a signed form is never what the reviewer meant.
+  const nameOf = (quotationId: string, extracted: string) => {
+    const rv = supplierNames?.[quotationId];
+    const v = rv ? valueOf(rv).trim() : '';
+    return v || extracted;
+  };
   // PDF creation date — auto-fills BOTH the TA Date field and the "Generated on"
   // note (and footer), per the company form (TA Date = the date the form was
   // produced for approval).
@@ -276,7 +302,8 @@ function ApprovalDocument({
     aiLabel: { fontSize: fs - 0.5, fontFamily: 'Helvetica-Bold', color: C.aiBorder, marginBottom: 2 },
     aiText: { color: C.aiBorder, fontFamily: 'Helvetica-Oblique' },
     finalRow: { marginTop: 7, flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
-    signWrap: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
+    signWrap: { marginTop: 8, flexDirection: 'column', gap: SIGN_GAP },
+    signRow: { flexDirection: 'row', gap: SIGN_GAP },
     signBox: { borderWidth: 1, borderColor: C.line, borderRadius: 3, paddingVertical: 4, paddingHorizontal: 5, minHeight: 48 },
     signTitle: { fontFamily: 'Helvetica-Bold', color: C.ink, fontSize: fs, marginBottom: 3 },
     checkRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 3, gap: 3 },
@@ -286,8 +313,17 @@ function ApprovalDocument({
     footerLine: { fontSize: 6, color: C.faint, textAlign: 'center' },
   });
 
+  // Signature blocks are laid out as EXPLICIT rows of at most 4, not a flex-wrap
+  // run: a wrapping run is one tall View that react-pdf will happily break mid-box
+  // across a page, which is what left the 5th block (E&I / Electrical Engineer)
+  // stranded and stripped the "Date:" line off the blocks above it. Each row — and
+  // each box inside it — is `wrap={false}`, so a block is either wholly on this
+  // page or wholly on the next, always with its Approved/Denied, Signature and Date
+  // lines together.
   const perRow = Math.min(signatureRoles.length || 1, 4);
-  const signW = (USABLE - (perRow - 1) * 6) / perRow;
+  const signW = (USABLE - (perRow - 1) * SIGN_GAP) / perRow;
+  const signRows: string[][] = [];
+  for (let i = 0; i < signatureRoles.length; i += perRow) signRows.push(signatureRoles.slice(i, i + perRow));
 
   const idxW = IDX_W;
   const prDescW = PR_DESC_W;
@@ -374,7 +410,7 @@ function ApprovalDocument({
                 {group.map((sup) => {
                   return (
                     <View key={sup.quotationId} style={[s.supHead, { width: supW }]}>
-                      <Text style={s.supName}>{sup.supplier}</Text>
+                      <Text style={s.supName}>{nameOf(sup.quotationId, sup.supplier)}</Text>
                       <Text style={s.ref}>{sup.reference ? `REF# ${sup.reference}` : 'REF# —'}</Text>
                       <View style={[s.rowFlex, { marginTop: 2 }]}>
                         <Text style={[s.subLabel, { width: subDescW }]}>Description</Text>
@@ -420,7 +456,9 @@ function ApprovalDocument({
                           {cell?.foc && (
                             <Text style={s.specDiffTag}>FOC — supplied free of charge, no cost</Text>
                           )}
-                          {cell?.unitWarning && <Text style={s.specDiffTag}>{cell.unitWarning}</Text>}
+                          {cell?.unitWarning && !cell.unitWarningCleared && (
+                            <Text style={s.specDiffTag}>{cell.unitWarning}</Text>
+                          )}
                           {cell?.matchState === 'quoted_spec_diff' && !cell.specDiffCleared && (
                             <Text style={s.specDiffTag}>
                               spec differs{cell.specDiffNote ? `: ${cell.specDiffNote}` : ''}
@@ -546,19 +584,23 @@ function ApprovalDocument({
         </View>
 
         {/* Signature blocks — user-configured count / names / order. */}
-        {signatureRoles.length > 0 && (
+        {signRows.length > 0 && (
           <View style={s.signWrap}>
-            {signatureRoles.map((role, i) => (
-              <View key={`${role}-${i}`} style={[s.signBox, { width: signW }]}>
-                <Text style={s.signTitle}>{role}</Text>
-                <View style={s.checkRow}>
-                  <View style={s.box} />
-                  <Text>Approved</Text>
-                  <View style={[s.box, { marginLeft: 6 }]} />
-                  <Text>Denied</Text>
-                </View>
-                <Text style={s.sigLine}>Signature:</Text>
-                <Text style={[s.sigLine, { marginTop: 4 }]}>Date:</Text>
+            {signRows.map((rowRoles, r) => (
+              <View key={`sigrow-${r}`} style={s.signRow} wrap={false}>
+                {rowRoles.map((role, i) => (
+                  <View key={`${role}-${r}-${i}`} style={[s.signBox, { width: signW }]} wrap={false}>
+                    <Text style={s.signTitle}>{role}</Text>
+                    <View style={s.checkRow}>
+                      <View style={s.box} />
+                      <Text>Approved</Text>
+                      <View style={[s.box, { marginLeft: 6 }]} />
+                      <Text>Denied</Text>
+                    </View>
+                    <Text style={s.sigLine}>Signature:</Text>
+                    <Text style={[s.sigLine, { marginTop: 4 }]}>Date:</Text>
+                  </View>
+                ))}
               </View>
             ))}
           </View>
@@ -692,6 +734,8 @@ export async function generateApprovalFormPdf(
       fx={fx}
       selectedSupplier={options?.selectedSupplier ?? null}
       itemReview={options?.itemReview}
+      supplierNames={options?.supplierNames}
+      prDescription={options?.prDescription}
     />,
   ).toBlob();
 }

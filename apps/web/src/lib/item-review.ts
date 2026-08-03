@@ -19,8 +19,11 @@
 // form uses. The reviewer never edits a converted figure directly, so a corrected
 // price can never drift out of step with the stamped rate.
 //
-// A "spec differs" flag is the matcher's factual finding, not a value — editing a
-// description never silently clears it; the reviewer has to clear it explicitly.
+// A "spec differs" flag — and the "cannot be converted to <unit>" unit warning
+// beside it — are the matcher's factual FINDINGS, not values. Editing a
+// description never silently clears one; the reviewer has to hide it explicitly,
+// per cell, and hiding it changes nothing else on the form (in particular it never
+// re-derives the supplier's total — see `editedSuppliers`).
 // A row the supplier never quoted stays "Not Quoted" until the reviewer explicitly
 // adds a quoted line for it, so an edit can never invent a quotation.
 //
@@ -66,7 +69,27 @@ export interface ReviewedCell {
   specDiffNote: string | null;
   specDiff: boolean;
   specDiffCleared: boolean;
+  /** the unit-normalisation warning ("cannot be converted to Each"), when one applies */
+  unitWarningNote: string | null;
+  unitWarning: boolean;
+  unitWarningCleared: boolean;
 }
+
+/** The annotation notes a cell can print under its description, each independently hideable. */
+export type CellNoteKind = 'specDiff' | 'unitWarning';
+
+/** Does this cell carry that note at all (before any reviewer decision)? */
+export const hasNote = (c: ReviewedCell, kind: CellNoteKind): boolean =>
+  kind === 'specDiff' ? c.specDiff : c.unitWarning;
+/** The note's text, or null when the cell doesn't carry it. */
+export const noteText = (c: ReviewedCell, kind: CellNoteKind): string | null =>
+  kind === 'specDiff' ? c.specDiffNote : c.unitWarningNote;
+/** Has the reviewer hidden that note on this cell? */
+export const noteCleared = (c: ReviewedCell, kind: CellNoteKind): boolean =>
+  kind === 'specDiff' ? c.specDiffCleared : c.unitWarningCleared;
+/** Return a copy of the cell with that note shown/hidden. */
+export const withNoteCleared = (c: ReviewedCell, kind: CellNoteKind, cleared: boolean): ReviewedCell =>
+  kind === 'specDiff' ? { ...c, specDiffCleared: cleared } : { ...c, unitWarningCleared: cleared };
 
 /** The full review, keyed by `cellKey(rowKey, quotationId)`. */
 export type ItemReview = Record<string, ReviewedCell>;
@@ -77,6 +100,7 @@ export interface CellOverride {
   qty?: string;
   unitPrice?: string;
   specDiffCleared?: boolean;
+  unitWarningCleared?: boolean;
   /** the reviewer deliberately turned a "Not Quoted" row into a quoted one */
   added?: boolean;
 }
@@ -134,6 +158,9 @@ export function buildItemReview(
         specDiffNote: cell?.specDiffNote ?? null,
         specDiff: cell?.matchState === 'quoted_spec_diff',
         specDiffCleared: o.specDiffCleared ?? false,
+        unitWarningNote: cell?.unitWarning ?? null,
+        unitWarning: !!cell?.unitWarning,
+        unitWarningCleared: o.unitWarningCleared ?? false,
       };
     });
   }
@@ -149,23 +176,38 @@ export function toStore(review: ItemReview): ItemReviewStore {
     if (c.qty.edited != null) o.qty = c.qty.edited;
     if (c.unitPrice.edited != null) o.unitPrice = c.unitPrice.edited;
     if (c.specDiffCleared) o.specDiffCleared = true;
+    if (c.unitWarningCleared) o.unitWarningCleared = true;
     if (c.added) o.added = true;
     if (Object.keys(o).length) out[k] = o;
   }
   return out;
 }
 
-/** True when the reviewer has touched anything in this cell. */
+/**
+ * True when the reviewer changed a PRINTED VALUE (description / qty / unit price)
+ * or deliberately added a quoted line. Hiding an annotation note is NOT a value
+ * edit — see `cellEdited`.
+ */
+export const cellValueEdited = (c: ReviewedCell): boolean =>
+  isEdited(c.description) || isEdited(c.qty) || isEdited(c.unitPrice) || c.added;
+
+/** True when the reviewer has touched anything in this cell, notes included. */
 export const cellEdited = (c: ReviewedCell): boolean =>
-  isEdited(c.description) || isEdited(c.qty) || isEdited(c.unitPrice) || c.specDiffCleared || c.added;
+  cellValueEdited(c) || c.specDiffCleared || c.unitWarningCleared;
 
 /** How many cells the reviewer has edited. */
 export const editedCount = (review: ItemReview): number => Object.values(review).filter(cellEdited).length;
 
-/** Suppliers with at least one edited cell. */
+/**
+ * Suppliers whose printed VALUES the reviewer changed — the set whose Total Price
+ * without VAT gets recomputed. Deliberately keyed on `cellValueEdited`, not
+ * `cellEdited`: merely HIDING a "spec differs" / unit-conversion note is an
+ * annotation decision and must never silently re-derive a supplier's total from
+ * the line items when their quotation states one.
+ */
 export function editedSuppliers(review: ItemReview): Set<string> {
   const out = new Set<string>();
-  for (const c of Object.values(review)) if (cellEdited(c)) out.add(c.quotationId);
+  for (const c of Object.values(review)) if (cellValueEdited(c)) out.add(c.quotationId);
   return out;
 }
 
@@ -208,6 +250,11 @@ export function applyItemReview(
         // A row the supplier never quoted stays "Not Quoted" until the reviewer
         // deliberately adds a line for it — an edit alone never invents a quote.
         if (!cell && !c.added) return cell;
+        // Hiding a note is not a value edit: leave every printed figure exactly as
+        // extracted and only carry the reviewer's show/hide decisions through.
+        if (!cellValueEdited(c)) {
+          return { ...cell!, specDiffCleared: c.specDiffCleared, unitWarningCleared: c.unitWarningCleared };
+        }
         const unitPrice = parseNum(valueOf(c.unitPrice));
         const next: SupplierCell = {
           ...(cell ?? {
@@ -226,6 +273,7 @@ export function applyItemReview(
           // rate the rest of the form uses — never typed in by hand.
           unitPriceUsd: unitPrice != null && fx ? toUsd(unitPrice, c.currency, fx) : null,
           specDiffCleared: c.specDiffCleared,
+          unitWarningCleared: c.unitWarningCleared,
         };
         return next;
       }),

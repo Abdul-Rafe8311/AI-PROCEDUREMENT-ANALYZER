@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/dialog';
 import {
   buildApprovalFields,
+  resolvePrDescription,
   suggestOrigins,
   suggestTechnicalComments,
   suggestWarranties,
@@ -35,17 +36,22 @@ import { buildComparisonModel } from '@/lib/pr-comparison';
 import { useFxRates } from '@/lib/use-fx-rates';
 import {
   buildItemReview,
+  type CellNoteKind,
   cellEdited,
   cellKey,
   editedCount,
+  hasNote,
   isEdited,
   type ItemReview,
   type ItemReviewStore,
+  noteCleared,
+  noteText,
   type ReviewedCell,
   type ReviewedValue,
   rowKeyOf,
   toStore,
   valueOf,
+  withNoteCleared,
 } from '@/lib/item-review';
 import {
   type AnalysisResult,
@@ -65,6 +71,8 @@ const COMMENTS_KEY = 'approval:comments:v1';
 const WARRANTY_KEY = 'approval:warranty:v1';
 const ORIGIN_KEY = 'approval:origin:v1';
 const ITEMS_KEY = 'approval:items:v1';
+const NAMES_KEY = 'approval:supplierNames:v1';
+const PRDESC_KEY = 'approval:prDescription:v1';
 
 // A persisted per-supplier override for a toggleable field: `enabled` overrides the
 // default-ON toggle; a `text` string (incl. "") is the human's edit/clear. Absent
@@ -190,6 +198,71 @@ function useToggleableField(
   return { values, edit, toggle, reset };
 }
 
+// ── Header fields the reviewer can rename ──────────────────────────────────
+// Supplier names and the PR Description are AI-EXTRACTED from the uploaded
+// documents, and extraction gets them wrong often enough to matter: a quote's
+// letterhead says "Supply Wave Trading Est." where the company's own records say
+// "Supply Wave Trading Establishment", and a requisition's subject line is
+// routinely blank or a fragment. Both are printed on a form that gets signed, so
+// both are reviewable — with the SAME audit trail as every other reviewed field
+// (`{ original, edited }`, badge, reset), and the extracted value never
+// overwritten. These are DISPLAY-ONLY: scoring, item matching and the
+// recommendation all keep reading the extracted name.
+type NameStore = Record<string, string>;
+
+function loadNameStore(key: string, supKey: string): NameStore {
+  if (typeof window === 'undefined') return {};
+  try {
+    const all = JSON.parse(window.localStorage.getItem(key) ?? '{}');
+    const forKey = all?.[supKey];
+    return forKey && typeof forKey === 'object' ? forKey : {};
+  } catch {
+    return {};
+  }
+}
+function saveNameStore(key: string, supKey: string, store: NameStore) {
+  if (typeof window === 'undefined') return;
+  try {
+    const all = JSON.parse(window.localStorage.getItem(key) ?? '{}');
+    all[supKey] = store;
+    window.localStorage.setItem(key, JSON.stringify(all));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Reviewed `{ original, edited }` values keyed by id, persisted per analysis. */
+function useReviewedNames(originals: Record<string, string>, storageKey: string, supKey: string) {
+  const build = (edits: NameStore): Record<string, ReviewedValue> => {
+    const out: Record<string, ReviewedValue> = {};
+    for (const [id, original] of Object.entries(originals)) {
+      out[id] = { original, edited: typeof edits[id] === 'string' ? edits[id] : null };
+    }
+    return out;
+  };
+  const [values, setValues] = useState<Record<string, ReviewedValue>>(() => build(loadNameStore(storageKey, supKey)));
+  // Re-seed when the analysed suppliers change (or on reload) — overlay persisted edits.
+  useEffect(() => {
+    setValues(build(loadNameStore(storageKey, supKey)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supKey, JSON.stringify(originals)]);
+
+  const edit = (id: string, text: string) => {
+    setValues((prev) => ({ ...prev, [id]: { original: prev[id]?.original ?? '', edited: text } }));
+    const store = loadNameStore(storageKey, supKey);
+    store[id] = text;
+    saveNameStore(storageKey, supKey, store);
+  };
+  const reset = (id: string) => {
+    setValues((prev) => ({ ...prev, [id]: { original: prev[id]?.original ?? '', edited: null } }));
+    const store = loadNameStore(storageKey, supKey);
+    delete store[id];
+    saveNameStore(storageKey, supKey, store);
+  };
+  return { values, edit, reset };
+}
+type ReviewedNamesApi = ReturnType<typeof useReviewedNames>;
+
 // ── Comparison Table review ────────────────────────────────────────────────
 // Same audit-trail pattern as the Technical Comments, applied per FIELD: the
 // extracted original is kept beside the reviewer's edit, the badge says which one
@@ -243,10 +316,29 @@ function useItemReview(analysis: AnalysisResult, supKey: string) {
         qty: { ...c.qty, edited: null },
         unitPrice: { ...c.unitPrice, edited: null },
         specDiffCleared: false,
+        unitWarningCleared: false,
         added: false,
       })),
-    /** Explicitly dismiss / restore the matcher's spec-differs flag. */
-    setSpecDiffCleared: (key: string, cleared: boolean) => patch(key, (c) => ({ ...c, specDiffCleared: cleared })),
+    /** Show / hide ONE annotation note on ONE cell. */
+    setNoteCleared: (key: string, kind: CellNoteKind, cleared: boolean) =>
+      patch(key, (c) => withNoteCleared(c, kind, cleared)),
+    /**
+     * Show / hide one kind of note across EVERY cell of one supplier's column in a
+     * single click — the notes are stored per line-item-per-supplier, so hiding a
+     * supplier's "spec differs" annotations otherwise meant opening each item row
+     * and clicking it once per row.
+     */
+    setSupplierNotesCleared: (quotationId: string, kind: CellNoteKind, cleared: boolean) => {
+      const next = { ...review };
+      let changed = false;
+      for (const [k, c] of Object.entries(review)) {
+        if (c.quotationId !== quotationId || !hasNote(c, kind)) continue;
+        if (noteCleared(c, kind) === cleared) continue;
+        next[k] = withNoteCleared(c, kind, cleared);
+        changed = true;
+      }
+      if (changed) commit(next);
+    },
     /** Deliberately turn a "Not Quoted" row into a quoted one (never implicit). */
     addQuotedLine: (key: string, add: boolean) => patch(key, (c) => ({ ...c, added: add })),
   };
@@ -310,6 +402,18 @@ export function ApprovalFormDownload({
   // prints is reviewable before it goes into the PDF.
   const items = useItemReview(analysis, supKey);
 
+  // Header fields extraction gets wrong often enough to be worth reviewing.
+  const supplierNameAi = useMemo(
+    () => Object.fromEntries(analysis.quotations.map((q) => [q.id, q.supplierName ?? ''])),
+    [analysis],
+  );
+  const prDescriptionAi = useMemo(
+    () => ({ pr: resolvePrDescription(analysis.purchaseRequisition) }),
+    [analysis],
+  );
+  const supplierNames = useReviewedNames(supplierNameAi, NAMES_KEY, supKey);
+  const prDescription = useReviewedNames(prDescriptionAi, PRDESC_KEY, supKey);
+
   useEffect(() => setRoles(loadRoles()), []);
   // Re-seed when the analysed suppliers change (or on reload) — overlay persisted edits.
   useEffect(() => {
@@ -363,6 +467,8 @@ export function ApprovalFormDownload({
         // The reviewer's corrections to the grid — the form prints these, falling
         // back to the extracted value wherever they left a field untouched.
         itemReview: items.review,
+        supplierNames: supplierNames.values,
+        prDescription: prDescription.values.pr,
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -406,6 +512,8 @@ export function ApprovalFormDownload({
             countriesOfOrigin: origin.values,
             selectedSupplier,
             itemReview: items.review,
+            supplierNames: supplierNames.values,
+            prDescription: prDescription.values.pr,
           },
           fx: items.fx,
         }),
@@ -436,6 +544,8 @@ export function ApprovalFormDownload({
         <CustomizeFormDialog
           analysis={analysis}
           items={items}
+          supplierNames={supplierNames}
+          prDescription={prDescription}
           comments={comments}
           suggestions={suggestions}
           onEdit={editComment}
@@ -566,6 +676,143 @@ function ReviewField({
   );
 }
 
+// Every annotation the form can print in orange under a supplier's item
+// description. Each is a separate factual finding, so each gets its own toggle.
+const NOTE_KINDS: { kind: CellNoteKind; label: string; hint: string }[] = [
+  {
+    kind: 'specDiff',
+    label: 'spec differs',
+    hint: 'the supplier quoted a different grade / size than the PR asked for',
+  },
+  {
+    kind: 'unitWarning',
+    label: 'unit warning',
+    hint: 'the supplier’s unit could not be converted to the PR’s unit, so the figures are shown as quoted',
+  },
+];
+
+// One show/hide pill for one annotation note. Shown = the form prints it.
+function NoteToggle({
+  label,
+  note,
+  cleared,
+  onToggle,
+  count,
+}: {
+  label: string;
+  note?: string | null;
+  cleared: boolean;
+  onToggle: () => void;
+  /** how many cells this pill covers, when it is a whole-column toggle */
+  count?: number;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={!cleared}
+      title={
+        cleared
+          ? `Hidden on the form — click to show the "${label}" note again`
+          : `Shown on the form${note ? `: ${note}` : ''} — click to hide it`
+      }
+      className={cn(
+        'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition',
+        cleared
+          ? 'border-border text-muted-foreground hover:bg-muted'
+          : 'border-warning/40 bg-warning/10 text-warning hover:bg-warning/15',
+      )}
+    >
+      {cleared ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+      {label}
+      {count != null && <span className="opacity-70">({count})</span>}
+    </button>
+  );
+}
+
+/**
+ * Item notes, grouped BY SUPPLIER COLUMN — the control the reviewer actually wants.
+ *
+ * The notes themselves live per line-item-per-supplier (one flag on each cell of
+ * the comparison grid), so a supplier with four flagged rows had four separate
+ * toggles, each buried inside its own collapsed item row in the Comparison Table
+ * above. That is why toggling "the Supply Wave one" left the note printed: it hid
+ * exactly one of several. This section lists every supplier that carries notes and
+ * gives each a single Show all / Hide all per note kind, with the per-row toggles
+ * still available underneath for a mixed choice.
+ */
+function ItemNotesSection({ items }: { items: ItemReviewApi }) {
+  const { model, review } = items;
+  // Which (supplier × note kind) combinations actually exist in the data?
+  const bySupplier = model.suppliers
+    .map((sup) => {
+      const cells = Object.entries(review)
+        .filter(([, c]) => c.quotationId === sup.quotationId)
+        .sort((a, b) => a[1].rowIndex - b[1].rowIndex);
+      const kinds = NOTE_KINDS.map(({ kind, label, hint }) => {
+        const withNote = cells.filter(([, c]) => hasNote(c, kind));
+        const shown = withNote.filter(([, c]) => !noteCleared(c, kind)).length;
+        return { kind, label, hint, cells: withNote, shown };
+      }).filter((k) => k.cells.length > 0);
+      return { sup, kinds };
+    })
+    .filter((s) => s.kinds.length > 0);
+
+  if (!bySupplier.length) return null;
+
+  return (
+    <section className="mt-6">
+      <h3 className="mb-1 text-sm font-semibold">Item notes</h3>
+      <p className="mb-2 text-[11px] text-muted-foreground">
+        The orange notes the form prints under a supplier&apos;s item description. They are the matcher&apos;s factual
+        findings, recorded per item per supplier — hide them per supplier column, or per item below. Hiding a note only
+        removes it from the form: the extracted data, the scoring and every printed figure are unchanged.
+      </p>
+      <ul className="space-y-3">
+        {bySupplier.map(({ sup, kinds }) => (
+          <li key={sup.quotationId} className="rounded-lg border border-border p-3">
+            <div className="mb-2 text-sm font-semibold">{sup.supplier}</div>
+            <ul className="space-y-2.5">
+              {kinds.map(({ kind, label, hint, cells, shown }) => (
+                <li key={kind}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] text-muted-foreground">
+                      <span className="font-medium text-foreground">{label}</span> — {hint} · on {cells.length} item
+                      {cells.length === 1 ? '' : 's'}, {shown} shown
+                    </span>
+                    <NoteToggle
+                      label={shown > 0 ? `Hide all` : `Show all`}
+                      cleared={shown === 0}
+                      count={cells.length}
+                      onToggle={() => items.setSupplierNotesCleared(sup.quotationId, kind, shown > 0)}
+                    />
+                  </div>
+                  <ul className="mt-1.5 space-y-1">
+                    {cells.map(([key, c]) => (
+                      <li key={key} className="flex items-center justify-between gap-2 rounded-md bg-muted/30 px-2 py-1">
+                        <span className="min-w-0 truncate text-[11px] text-muted-foreground" title={noteText(c, kind) ?? ''}>
+                          <span className="font-medium text-foreground">{c.isCharge ? c.rowLabel : `Item ${c.rowIndex}`}</span>
+                          {noteText(c, kind) ? ` — ${noteText(c, kind)}` : ''}
+                        </span>
+                        <NoteToggle
+                          label={noteCleared(c, kind) ? 'Hidden' : 'Shown'}
+                          note={noteText(c, kind)}
+                          cleared={noteCleared(c, kind)}
+                          onToggle={() => items.setNoteCleared(key, kind, !noteCleared(c, kind))}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 // The comparison grid the form prints, made editable one PR item row at a time.
 function ComparisonTableSection({ items }: { items: ItemReviewApi }) {
   const { model, review, fx } = items;
@@ -625,26 +872,17 @@ function ComparisonTableSection({ items }: { items: ItemReviewApi }) {
                         <div className="mb-2 flex items-center justify-between gap-2">
                           <span className="text-sm font-semibold">{sup.supplier}</span>
                           <div className="flex items-center gap-2">
-                            {/* The matcher's finding survives an edit — only an explicit clear removes it. */}
-                            {c.specDiff && (
-                              <button
-                                type="button"
-                                onClick={() => items.setSpecDiffCleared(key, !c.specDiffCleared)}
-                                title={
-                                  c.specDiffCleared
-                                    ? 'Hidden on the form — click to show the spec-differs flag again'
-                                    : `Shown on the form${c.specDiffNote ? `: ${c.specDiffNote}` : ''} — click to clear it`
-                                }
-                                className={cn(
-                                  'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition',
-                                  c.specDiffCleared
-                                    ? 'border-border text-muted-foreground hover:bg-muted'
-                                    : 'border-warning/40 bg-warning/10 text-warning hover:bg-warning/15',
-                                )}
-                              >
-                                {c.specDiffCleared ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                                spec differs
-                              </button>
+                            {/* The matcher's findings survive an edit — only an explicit clear removes one. */}
+                            {NOTE_KINDS.map(({ kind, label }) =>
+                              hasNote(c, kind) ? (
+                                <NoteToggle
+                                  key={kind}
+                                  label={label}
+                                  note={noteText(c, kind)}
+                                  cleared={noteCleared(c, kind)}
+                                  onToggle={() => items.setNoteCleared(key, kind, !noteCleared(c, kind))}
+                                />
+                              ) : null,
                             )}
                             {cellEdited(c) && (
                               <button
@@ -820,9 +1058,64 @@ function ToggleableFieldSection({
   );
 }
 
+// The form's header identity: the PR subject line and each supplier's printed
+// name, both AI-extracted and both routinely wrong in small ways that matter on a
+// signed document. Same pattern as Warranty / Country of Origin.
+function HeaderFieldsSection({
+  quotations,
+  supplierNames,
+  prDescription,
+}: {
+  quotations: AnalysisResult['quotations'];
+  supplierNames: ReviewedNamesApi;
+  prDescription: ReviewedNamesApi;
+}) {
+  const prValue = prDescription.values.pr;
+  return (
+    <section className="mt-6">
+      <h3 className="mb-1 text-sm font-semibold">Form header &amp; supplier names</h3>
+      <p className="mb-2 text-[11px] text-muted-foreground">
+        Extracted from the requisition and the quotes. Correct anything that reads wrong — the form prints your version;
+        the extracted value is kept beside it and one click restores it. Renaming a supplier changes the printed column
+        heading only: matching, scoring and the recommendation all keep using the extracted name.
+      </p>
+      <div className="space-y-3">
+        {prValue && (
+          <div className="rounded-lg border border-border p-3">
+            <ReviewField
+              label="PR Description"
+              value={prValue}
+              placeholder="e.g. Anchors for Kiln department"
+              onEdit={(t) => prDescription.edit('pr', t)}
+              onReset={() => prDescription.reset('pr')}
+            />
+          </div>
+        )}
+        {quotations.map((q) => {
+          const v = supplierNames.values[q.id];
+          if (!v) return null;
+          return (
+            <div key={q.id} className="rounded-lg border border-border p-3">
+              <ReviewField
+                label="Supplier name"
+                value={v}
+                placeholder="the supplier's full legal name"
+                onEdit={(t) => supplierNames.edit(q.id, t)}
+                onReset={() => supplierNames.reset(q.id)}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function CustomizeFormDialog({
   analysis,
   items,
+  supplierNames,
+  prDescription,
   comments,
   suggestions,
   onEdit,
@@ -839,6 +1132,8 @@ function CustomizeFormDialog({
 }: {
   analysis: AnalysisResult;
   items: ItemReviewApi;
+  supplierNames: ReviewedNamesApi;
+  prDescription: ReviewedNamesApi;
   comments: Record<string, TechnicalComment>;
   suggestions: Record<string, TechnicalComment>;
   onEdit: (id: string, text: string) => void;
@@ -893,8 +1188,18 @@ function CustomizeFormDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {/* ── Form header & supplier names (editable, AI-extracted) ── */}
+        <HeaderFieldsSection
+          quotations={analysis.quotations}
+          supplierNames={supplierNames}
+          prDescription={prDescription}
+        />
+
         {/* ── Comparison Table (edit the line-item data the form prints) ── */}
         <ComparisonTableSection items={items} />
+
+        {/* ── Item notes (show/hide the orange annotations, per supplier column) ── */}
+        <ItemNotesSection items={items} />
 
         {/* ── Technical Comments ── */}
         <section className="mt-6">

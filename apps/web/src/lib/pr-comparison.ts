@@ -59,6 +59,8 @@ export interface SupplierCell {
   // ── reviewer override (Technical Approval Form only; see item-review.ts) ──
   /** the reviewer explicitly dismissed the "spec differs" flag for this cell */
   specDiffCleared?: boolean;
+  /** the reviewer explicitly dismissed the unit-conversion warning for this cell */
+  unitWarningCleared?: boolean;
 }
 
 export interface ComparisonRow {
