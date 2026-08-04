@@ -403,7 +403,24 @@ export function matchSupplierItems(
     return { prIndex: j, state, supplierItem: line, score: prScore[j], mappedBy: prBy[j], note };
   });
 
-  const extraLines = products.filter((_, i) => !lineUsed[i]);
+  // A supplier may answer ONE PR item with SEVERAL positions. Saudi Fal's
+  // S1262128249 quotes the single support-renewal line of PR 12602527 as
+  // "GUARDIAN-AND-FMR-PORTABLE." (16,430) + "Reactivation Fee" (6,735) = 23,165.
+  // Only the first claimed the PR row; the second fell into extraLines, which NO
+  // renderer prints — so the form showed 16,430 against a correct 23,165 total and
+  // never mentioned the fee.
+  //
+  // With a SINGLE-item PR there is nowhere else an unplaced product line can
+  // belong, so it attaches to that item as a sub-line and the grid folds it into
+  // the item's cell. Multi-item PRs are deliberately untouched: there an unplaced
+  // line is genuinely ambiguous ("Reactivation Fee" resembles no row's wording),
+  // and guessing a row would be worse than reporting it as extra.
+  const unplaced = products.filter((_, i) => !lineUsed[i]);
+  const foldIntoSingleItem =
+    prItems.length === 1 && unplaced.length > 0 && prItemMatches[0].supplierItem != null;
+  if (foldIntoSingleItem) prItemMatches[0].additionalItems = unplaced;
+
+  const extraLines = foldIntoSingleItem ? [] : unplaced;
   const matchCount = prItemMatches.filter((p) => p.state === 'quoted_match').length;
   const specDiffCount = prItemMatches.filter((p) => p.state === 'quoted_spec_diff').length;
   const notQuotedCount = prItemMatches.filter((p) => p.state === 'not_quoted').length;

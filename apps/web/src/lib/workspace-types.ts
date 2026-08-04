@@ -240,6 +240,15 @@ export interface PrItemMatch {
   state: PrItemMatchState;
   /** the supplier's own quoted line mapped here — null iff not_quoted */
   supplierItem: LineItem | null;
+  /**
+   * FURTHER quoted lines that fulfil this SAME PR item. A supplier may answer one
+   * requisition line with several positions — Saudi Fal's S1262128249 quotes the
+   * single support-renewal item of PR 12602527 as "GUARDIAN-AND-FMR-PORTABLE."
+   * (16,430) plus a "Reactivation Fee" (6,735). Those extra positions belong to the
+   * PR item, not beside it, and the comparison grid folds them into its one cell.
+   * Absent/empty in the ordinary one-line-per-item case.
+   */
+  additionalItems?: LineItem[];
   /** 0..1 description similarity of the mapped line (0 when not_quoted) */
   score: number;
   /** how the line was mapped: by description/spec; by embedded DIMENSION code

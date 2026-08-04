@@ -119,8 +119,10 @@ function lowestUsdOf(cells: (SupplierCell | null)[]): number | null {
 // supplier's cell is the item it quoted for that row — its OWN wording, qty and
 // unit price — shown whether the match is a clean match OR a spec-diff, so the
 // buyer sees exactly what was quoted. A cell is null only when the supplier didn't
-// quote that PR item at all (→ "Not Quoted"). The match model already assigns one
-// quoted line per PR item (description match, else exact-quantity fallback).
+// quote that PR item at all (→ "Not Quoted"). The match model assigns one quoted
+// line per PR item (description match, else exact-quantity fallback), plus any
+// FURTHER positions the supplier used to fulfil that same item — those are folded
+// into the one cell below rather than dropped.
 function prRows(
   pr: PurchaseRequisition,
   quotations: ExtractedQuotation[],
@@ -144,7 +146,7 @@ function prRows(
         it.quantity,
         li.foc ? 0 : li.totalPrice,
       );
-      return {
+      const cell: SupplierCell = {
         description: li.name,
         qty: n.qty,
         unitPrice: n.unitPrice,
@@ -160,6 +162,28 @@ function prRows(
         unitWarning: unitWarning(n, it.unit ?? ''),
         lineTotal: li.foc ? 0 : n.lineTotal,
         ...(li.foc ? { foc: true } : {}),
+      };
+
+      // Several quoted positions answer this ONE PR line (see matchSupplierItems):
+      // they become ONE cell — descriptions joined, line totals summed, unit price
+      // re-derived from the combined total so qty x unit price still reconciles
+      // against the supplier's stated total. Showing only the first position while
+      // the total carried both is what hid Saudi Fal's reactivation fee.
+      const subs = pm?.additionalItems ?? [];
+      if (subs.length === 0) return cell;
+      const amountOf = (x: { foc?: boolean; totalPrice: number | null; unitPrice: number | null; quantity: number | null }) =>
+        x.foc ? 0 : x.totalPrice ?? (x.unitPrice ?? 0) * (x.quantity ?? 1);
+      const combined = (cell.lineTotal ?? 0) + subs.reduce((s, x) => s + amountOf(x), 0);
+      const qty = cell.qty ?? it.quantity ?? 1;
+      const unitPrice = qty ? combined / qty : combined;
+      return {
+        ...cell,
+        description: [li.name, ...subs.map((s) => s.name)].join(' + '),
+        unitPrice,
+        unitPriceUsd: cellUsd(unitPrice, li.currency, fx),
+        lineTotal: combined,
+        // a combined cell is never "free of charge" as a whole
+        ...(cell.foc && combined > 0 ? { foc: false } : {}),
       };
     });
     return {
