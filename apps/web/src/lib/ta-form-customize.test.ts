@@ -207,11 +207,11 @@ test('HEADER: an untouched or blanked field falls back to the extracted value', 
   assert.ok(blanked.includes('Not provided'), 'a cleared PR description prints as "Not provided"');
 });
 
-test('HEADER: renaming a supplier never moves the recommendation or the scoring', async () => {
-  const before = await formText({});
-  const after = await formText({
-    supplierNames: { [supplyWave.id]: { original: supplyWave.supplierName, edited: 'ZZZ Renamed Co' } },
-  });
-  const aiLine = (s: string) => s.slice(s.indexOf('AI SUGGESTED —'), s.indexOf('AI SUGGESTED —') + 160);
-  assert.equal(aiLine(after), aiLine(before));
+// The form carries no system-generated recommendation callout: it runs from the
+// comparison grid straight to the human "Final Recommendation" line.
+test('RECOMMENDATION: no AI-suggested recommendation box is printed', async () => {
+  const text = await formText({});
+  assert.ok(!text.includes('AI SUGGESTED —'), 'no AI-suggested recommendation box');
+  assert.ok(!text.includes('system-generated, NOT an approval'), 'no system-generated badge');
+  assert.ok(text.includes('Final Recommendation') || text.includes('FINAL RECOMMENDATION'), 'Final Recommendation survives');
 });

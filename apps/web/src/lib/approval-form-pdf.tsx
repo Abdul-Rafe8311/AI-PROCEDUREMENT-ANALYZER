@@ -21,8 +21,7 @@
 // and order vary per document — nothing is hardcoded.
 
 import { Document, Page, Text, View, StyleSheet, pdf } from '@react-pdf/renderer';
-import { scoreSuppliers } from './analysis-engine';
-import { type FxRates, getFxRates, sarPerUnit, toSar, toUsd } from './fx-rates';
+import { type FxRates, getFxRates, sarPerUnit, toUsd } from './fx-rates';
 import {
   buildApprovalFields,
   resolvePrDescription,
@@ -39,7 +38,6 @@ import {
   type AnalysisResult,
   type ApprovalFieldValue,
   DEFAULT_SIGNATURE_ROLES,
-  DEFAULT_WEIGHTS,
   deliveryNormalizedHint,
   type ExtractedQuotation,
   type TechnicalComment,
@@ -61,7 +59,6 @@ const C = {
   border: '#cbd5e1',
   head: '#e2e8f0',
   specDiff: '#b45309', // amber-700 — factual "spec differs" grade-mismatch flag
-  aiBg: '#eef2ff',
   aiBorder: '#6366f1', // indigo — AI-suggested (system-generated) content only
 };
 
@@ -230,34 +227,6 @@ function fxStampText(fx: FxRates, currencies: string[]): string {
   return `${bits.join('   ·   ')} — rate as of ${when} (${fx.live ? 'live' : 'cached'})`;
 }
 
-// AI-SUGGESTED recommendation shown as a clearly-labelled, visually-separate block
-// (indigo/italic, "NOT an approval"). It never writes into the human Technical
-// Comments / Final Recommendation fields — those stay blank for the team to sign.
-function aiRecommendation(analysis: AnalysisResult, fx: FxRates | null): string {
-  const scored = scoreSuppliers(analysis.quotations, analysis.risks, DEFAULT_WEIGHTS);
-  const best = scored[0];
-  if (!best) return '';
-  const name = best.quotation.supplierName;
-  const rec = analysis.recommendation;
-  const bits: string[] = [];
-  if (rec.lowestCost?.supplier === name && best.quotation.totalCost != null) {
-    const sar = fx ? toSar(best.quotation.totalCost, best.quotation.currency, fx) : null;
-    const cost = sar != null ? `SAR ${money2(sar)}` : `${best.quotation.currency} ${money2(best.quotation.totalCost)}`;
-    bits.push(`lowest total cost (${cost})`);
-  }
-  if (rec.fastestDelivery?.supplier === name && best.quotation.deliveryDays != null) {
-    const del = best.quotation.deliveryRaw?.trim() || `${best.quotation.deliveryDays} days`;
-    bits.push(`faster delivery (${del})`);
-  }
-  const reason =
-    bits.length > 0
-      ? bits.join(' and ')
-      : analysis.quotations.length === 1
-        ? `only supplier analyzed; procurement score ${Math.round(best.overall * 100)}/100`
-        : `highest procurement score (${Math.round(best.overall * 100)}/100)`;
-  return `${name} — ${reason}.`;
-}
-
 // The with-VAT rule now lives in workspace-types so the PDF, the .xlsx and the
 // legacy AcroForm build cannot drift apart. Re-exported here because this is where
 // callers (and the acceptance tests) have always imported it from.
@@ -309,7 +278,6 @@ function ApprovalDocument({
   // total for any supplier they edited, so the printed total always agrees with the
   // printed lines (freight included). Untouched suppliers keep their stated total.
   const totalOf = (q: ExtractedQuotation) => reviewed.totals[q.id] ?? q.totalCost;
-  const ai = aiRecommendation(analysis, fx);
   const supplierCurrencies = qs.map((q) => q.currency);
   // Per-item aware lead times — one value when the offer shares one, else
   // "Item #1 (2 weeks), Item #2 (6 weeks)". See per-item-field.ts.
@@ -368,8 +336,6 @@ function ApprovalDocument({
     labelRow: { fontFamily: 'Helvetica-Bold', color: C.ink },
     notQuoted: { color: C.faint, fontFamily: 'Helvetica-Oblique' },
     specDiffTag: { fontSize: LAYOUT.TYPE.specDiff, fontFamily: 'Helvetica-Oblique', color: C.specDiff, marginTop: 1.5 },
-    aiBox: { marginTop: 6, borderWidth: 1, borderColor: C.aiBorder, backgroundColor: C.aiBg, borderRadius: 3, paddingVertical: 5, paddingHorizontal: 7 },
-    aiLabel: { fontSize: fs - 0.5, fontFamily: 'Helvetica-Bold', color: C.aiBorder, marginBottom: 2 },
     aiText: { color: C.aiBorder, fontFamily: 'Helvetica-Oblique' },
     finalRow: { marginTop: 7, flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
     signWrap: { marginTop: 8, flexDirection: 'column', gap: SIGN_GAP },
@@ -646,16 +612,6 @@ function ApprovalDocument({
             </View>
           );
         })}
-
-        {/* AI-SUGGESTED recommendation — clearly labelled, system-generated, NOT an
-            approval. Kept SEPARATE from the human Technical Comments / Final
-            Recommendation fields, which stay blank below. */}
-        {ai ? (
-          <View style={s.aiBox}>
-            <Text style={s.aiLabel}>AI SUGGESTED — system-generated, NOT an approval</Text>
-            <Text style={s.aiText}>{ai}</Text>
-          </View>
-        ) : null}
 
         {/* Final Recommendation — the HUMAN's selection when one was made (never
             AI-written); otherwise blank for the team to complete by hand. */}

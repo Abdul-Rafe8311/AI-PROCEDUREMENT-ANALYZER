@@ -18,8 +18,7 @@
 // blank gaps punched through the table. Every cell of every merged range is
 // therefore styled individually here, the same lesson the tender sheet taught.
 
-import { scoreSuppliers } from './analysis-engine';
-import { type FxRates, sarPerUnit, toSar, toUsd } from './fx-rates';
+import { type FxRates, sarPerUnit, toUsd } from './fx-rates';
 import {
   buildApprovalFields,
   resolvePrDescription,
@@ -34,7 +33,6 @@ import {
   type AnalysisResult,
   type ApprovalFieldValue,
   DEFAULT_SIGNATURE_ROLES,
-  DEFAULT_WEIGHTS,
   deliveryNormalizedHint,
   type ExtractedQuotation,
 } from './workspace-types';
@@ -95,25 +93,6 @@ function fxStampText(fx: FxRates, currencies: string[]): string {
   const d = new Date(fx.asOf);
   if (!Number.isNaN(d.getTime())) when = d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
   return `${bits.join('   ·   ')} — rate as of ${when} (${fx.live ? 'live' : 'cached'})`;
-}
-
-function aiRecommendation(analysis: AnalysisResult, fx: FxRates | null): string {
-  const best = scoreSuppliers(analysis.quotations, analysis.risks, DEFAULT_WEIGHTS)[0];
-  if (!best) return '';
-  const name = best.quotation.supplierName;
-  const rec = analysis.recommendation;
-  const bits: string[] = [];
-  if (rec.lowestCost?.supplier === name && best.quotation.totalCost != null) {
-    const sar = fx ? toSar(best.quotation.totalCost, best.quotation.currency, fx) : null;
-    bits.push(`lowest total cost (${sar != null ? `SAR ${money2(sar)}` : `${best.quotation.currency} ${money2(best.quotation.totalCost)}`})`);
-  }
-  if (rec.fastestDelivery?.supplier === name && best.quotation.deliveryDays != null) {
-    bits.push(`faster delivery (${best.quotation.deliveryRaw?.trim() || `${best.quotation.deliveryDays} days`})`);
-  }
-  const reason = bits.length
-    ? bits.join(' and ')
-    : `highest procurement score (${Math.round(best.overall * 100)}/100)`;
-  return `${name} — ${reason}.`;
 }
 
 /**
@@ -414,18 +393,9 @@ export async function buildTaFormWorkbook(
     // Freeze the left reference columns and everything down to the sub-header row.
     ws.views = [{ state: 'frozen', xSplit: 4, ySplit: bandTop + 1 }];
 
-    // ── last sheet only: AI note, Final Recommendation, signatures, footer ──
+    // ── last sheet only: Final Recommendation, signatures, footer ──
     if (gi === groups.length - 1) {
       row++;
-      const ai = aiRecommendation(analysis, fx);
-      if (ai) {
-        put(row, 1, `AI SUGGESTED — system-generated, NOT an approval: ${ai}`, { color: AI_INK });
-        ws.mergeCells(row, 1, row, lastCol);
-        borderRange(ws, row, 1, row, lastCol);
-        ws.getRow(row).height = rowHeight([ai]);
-        row += 2;
-      }
-
       put(row, 1, 'Final Recommendation', { bold: true });
       ws.mergeCells(row, 1, row, 2);
       put(row, 3, options?.selectedSupplier ? `${options.selectedSupplier} (selected by reviewer)` : '');
