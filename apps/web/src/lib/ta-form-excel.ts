@@ -73,6 +73,45 @@ const lineHeight = (size = FS_BODY) => Math.round(size * 1.35);
 // is asserted rather than looked up — the number is the spec's, not a guess.
 const PAPER_A3 = 8 as unknown as import('exceljs').PaperSize;
 
+// ── Pagination ──────────────────────────────────────────────────────────────
+/** A3 landscape is 297mm tall. */
+const A3_LANDSCAPE_H_PT = (297 / 25.4) * 72; // 841.9pt
+/** Print margins, inches. The form is a grid — paper is better spent on cells. */
+const MARGIN_IN = 0.25;
+/** ExcelJS's default when a row has no explicit height. */
+const DEFAULT_ROW_PT = 15;
+/**
+ * How far past one page the content may reach and still be squeezed onto it.
+ * 1.25 lets Excel scale to ~80% — 12pt body type prints at ~9.6pt, still legible
+ * round a table. Anything longer is genuinely a multi-page form and is left to
+ * flow; crushing a 40-item requisition onto one sheet would be unreadable.
+ */
+const MAX_SHRINK = 1.25;
+
+/**
+ * Decide how many pages TALL a sheet may be, and pin the print area to the content.
+ *
+ * `fitToWidth: 1` + `fitToHeight: 0` means "one page wide, as many pages tall as it
+ * takes, and NEVER shrink vertically". So a sheet that overran the paper by a few
+ * percent — the single-supplier sheet measured 11.31in against 10.89in of usable
+ * A3 — emitted a second page carrying nothing but the signature tail. Excel will
+ * gladly scale that away, but only when it is given a height budget.
+ *
+ * Measuring the content and asking for ONE page tall when it nearly fits is what
+ * turns that wasted sheet back into a single page, while longer forms keep flowing
+ * (their header rows repeat via `printTitlesRow`).
+ */
+function fitSheetToPages(ws: import('exceljs').Worksheet, lastRow: number, lastCol: number): void {
+  let pt = 0;
+  for (let r = 1; r <= lastRow; r++) pt += ws.getRow(r).height ?? DEFAULT_ROW_PT;
+  const usable = A3_LANDSCAPE_H_PT - 2 * MARGIN_IN * 72;
+  const pages = pt / usable;
+  ws.pageSetup.fitToHeight = pages <= MAX_SHRINK ? 1 : 0;
+  // An explicit print area stops any stray formatting outside the form from
+  // extending the used range — a classic source of phantom blank pages.
+  ws.pageSetup.printArea = `A1:${ws.getColumn(lastCol).letter}${lastRow}`;
+}
+
 const money2 = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const plain = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? '' : n.toLocaleString('en-US'));
 
@@ -206,9 +245,10 @@ export async function buildTaFormWorkbook(
     // A3 landscape, fitted to ONE page wide. The form is printed and signed round a
     // table, so it has to be legible on paper — at 12pt body text the grid no longer
     // fits A4, and letting Excel spill supplier columns onto a second sheet of paper
-    // is what makes a comparison form useless. Height is left unbounded (`undefined`)
-    // so a long requisition flows onto further pages instead of being scaled to
-    // nothing; the header rows repeat on each via `printTitlesRow`.
+    // is what makes a comparison form useless. The HEIGHT budget is not decided here:
+    // `fitSheetToPages` measures the finished sheet and sets `fitToHeight` from it,
+    // so a form that nearly fits is scaled onto one page while a long requisition
+    // still flows, its header rows repeating via `printTitlesRow`.
     const ws = wb.addWorksheet(title.slice(0, 31), {
       pageSetup: {
         paperSize: PAPER_A3,
@@ -217,7 +257,10 @@ export async function buildTaFormWorkbook(
         fitToWidth: 1,
         fitToHeight: 0,
         horizontalCentered: true,
-        margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 },
+        margins: {
+          left: MARGIN_IN, right: MARGIN_IN, top: MARGIN_IN, bottom: MARGIN_IN,
+          header: MARGIN_IN / 2, footer: MARGIN_IN / 2,
+        },
       },
     });
     const lastCol = 4 + n * 3; // #, PR desc, Qty, UOM, then 3 sub-columns each
@@ -440,6 +483,9 @@ export async function buildTaFormWorkbook(
         row++;
       }
     }
+
+    // Everything is written: now size the paper to it.
+    fitSheetToPages(ws, row - 1, lastCol);
   });
 
   return wb;

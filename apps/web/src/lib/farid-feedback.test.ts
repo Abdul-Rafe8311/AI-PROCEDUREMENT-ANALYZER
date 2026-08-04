@@ -206,7 +206,14 @@ test('EXCEL: the workbook is set up for A3 landscape, fitted to one page wide', 
     assert.equal(ws.pageSetup.orientation, 'landscape');
     assert.equal(ws.pageSetup.fitToPage, true);
     assert.equal(ws.pageSetup.fitToWidth, 1, 'never spills supplier columns onto another sheet');
-    assert.equal(ws.pageSetup.fitToHeight, 0, 'height flows onto further pages instead of shrinking');
+  }
+  // The HEIGHT budget is no longer a constant. It was a flat 0 ("flow, never
+  // shrink"), which cost a whole sheet of paper whenever a form overran the page
+  // by a few percent — see ta-form-pagination.test.ts. It is now measured per
+  // sheet: one page when the content nearly fits, unbounded when it truly doesn't.
+  // Both of this fixture's sheets fit.
+  for (const ws of wb.worksheets) {
+    assert.equal(ws.pageSetup.fitToHeight, 1, `"${ws.name}" fits one page tall`);
   }
 });
 
