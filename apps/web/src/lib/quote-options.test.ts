@@ -37,10 +37,13 @@ const faoz = (): LlmSupplier => ({
   deliveryTime: '35 Days', deliveryTerms: null, countryOfOrigin: null,
   supplierCountry: 'Saudi Arabia', paymentTerms: '100% after completion',
   warranty: null, validUntil: null,
+  // The document's Option column reads A, B, 2 — and that 2 is the Bolt's ROW
+  // NUMBER, not a third alternative. The fixture carries it exactly as the page
+  // prints it, because reading it as "Option 2" is the bug this pins.
   lineItems: [
     line({ name: `${COVER}, Material: AISI 4140.`, unitPrice: 22000, totalPrice: 22000, optionLabel: 'A' }),
     line({ name: `${COVER}, Material: ST-52`, unitPrice: 8000, totalPrice: 8000, optionLabel: 'B' }),
-    line({ name: BOLT, unitPrice: 850, totalPrice: 850 }),
+    line({ name: BOLT, unitPrice: 850, totalPrice: 850, optionLabel: '2' }),
   ] as LlmSupplier['lineItems'],
 });
 
@@ -113,6 +116,50 @@ test('DETECT: an option label written into the NAME is found and stripped', () =
   assert.equal(out[0].supplierName, `${FAOZ}, OPTION # A`);
   assert.ok(!out[0].lineItems[0].name.startsWith('Option A'), 'the label is stripped from the description');
   assert.ok(out[0].lineItems[0].name.startsWith('Supply and fabrication'), 'the description survives intact');
+});
+
+// ── the row-number trap ─────────────────────────────────────────────────────
+
+test('ROW NUMBER: the Bolt’s "2" is numbering, not a third option', () => {
+  const out = splitSupplierOptions(faoz());
+  assert.equal(out.length, 2, 'two columns — A and B, never a phantom "OPTION # 2"');
+  assert.deepEqual(out.map((s) => s.supplierName), [`${FAOZ}, OPTION # A`, `${FAOZ}, OPTION # B`]);
+});
+
+test('ROW NUMBER: the numbered row stays a SHARED line under both options', () => {
+  const [a, b] = splitSupplierOptions(faoz());
+  for (const [label, s] of [['A', a], ['B', b]] as const) {
+    const bolt = s.lineItems.find((l) => l.name.startsWith('Bolt'));
+    assert.ok(bolt, `Option ${label} still carries the Bolt`);
+    assert.equal(bolt!.unitPrice, 850, `Option ${label} prices the Bolt at 850`);
+  }
+});
+
+test('ROW NUMBER: a document numbering EVERY row is not an option split at all', () => {
+  // 1 / 2 / 3 against three unrelated items — pure numbering, no alternatives.
+  const s = faoz();
+  s.lineItems = [
+    line({ name: `${COVER}, Material: AISI 4140.`, unitPrice: 22000, totalPrice: 22000, optionLabel: '1' }),
+    line({ name: BOLT, unitPrice: 850, totalPrice: 850, optionLabel: '2' }),
+    line({ name: 'Gasket, Part No=901, ident No=146340.11 for VRM sealing, Material: NBR', unitPrice: 120, totalPrice: 120, optionLabel: '3' }),
+  ] as LlmSupplier['lineItems'];
+  const out = splitSupplierOptions(s);
+  assert.equal(out.length, 1, 'no two rows describe the same item ⇒ no options');
+  assert.equal(out[0], s, 'passed through untouched');
+});
+
+test('ROW NUMBER: numeric labels DO split when they mark real alternatives', () => {
+  // "Option 1 / Option 2" on the same part is a genuine split — the rule keys on
+  // same-item-different-label, not on the label being a letter.
+  const s = faoz();
+  s.lineItems = [
+    line({ name: `${COVER}, Material: AISI 4140.`, unitPrice: 22000, totalPrice: 22000, optionLabel: '1' }),
+    line({ name: `${COVER}, Material: ST-52`, unitPrice: 8000, totalPrice: 8000, optionLabel: '2' }),
+    line({ name: BOLT, unitPrice: 850, totalPrice: 850, optionLabel: '3' }),
+  ] as LlmSupplier['lineItems'];
+  const out = splitSupplierOptions(s);
+  assert.equal(out.length, 2, 'the two covers split; the Bolt does not');
+  assert.deepEqual(out.map((x) => x.totalAmount), [22850, 8850], 'the Bolt is shared into both');
 });
 
 test('DETECT: "option a" and "OPTION # A" are the SAME option, not two', () => {
