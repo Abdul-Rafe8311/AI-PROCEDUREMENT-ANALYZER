@@ -63,7 +63,7 @@ function wordTokens(str: string): Set<string> {
  * differences ("Tws.10(60)" vs "tws 10 60") irrelevant while keeping the code's
  * identity, so the same item lines up and a changed grade/dimension does not.
  */
-function specCodes(str: string): Set<string> {
+export function specCodes(str: string): Set<string> {
   const codes = new Set<string>();
   const re = /[a-z]*\d[a-z0-9().\-/]*/gi;
   for (const m of str.matchAll(re)) {

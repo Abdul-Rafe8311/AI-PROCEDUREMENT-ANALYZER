@@ -67,6 +67,14 @@ export interface LineItem {
   countryOfOrigin?: string | null;
   /** per-line delivery / lead-time wording as written ("2 weeks", "ex stock") */
   deliveryText?: string | null;
+  /**
+   * The label printed against this line in an "Option" / "Alt" column, VERBATIM.
+   * Carried through extraction UNJUDGED, because an option label and a plain row
+   * number are indistinguishable here — FAOZ's column reads "A", "B", "2", where
+   * A/B are alternatives and 2 is just the second row. Which is which is decided
+   * later, against the requisition, in quote-options.ts.
+   */
+  optionLabel?: string | null;
 }
 
 /** A grand total exactly as stated in the document, with its own currency. */

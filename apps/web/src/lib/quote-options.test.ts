@@ -1,15 +1,18 @@
-// One quotation offering several priced ALTERNATIVES → one supplier column each.
+// One quotation offering several priced ALTERNATIVES → one supplier column each,
+// decided against the company requisition.
 //
-// FAOZ INDUST'L. EQUIPS CO., quote QT 000030292 against PR 12602262:
+// FAOZ INDUST'L. EQUIPS CO., quote QT 000030292 against PR 12602262. The Option
+// column reads A, B, 2:
 //
-//   Option A  cover (roller stop inside) … Material: AISI 4140   1 PC  22,000.00
-//   Option B  cover (roller stop inside) … Material: ST-52       1 PC   8,000.00
-//   2         Bolt part no 874 …          Material: 42CrMo4      1 PC      850.00
+//   A  cover part no 866, ident no. 146328.02 … AISI 4140  1 PC  22,000.00
+//   B  cover part no 866, ident no. 146328.02 … ST-52      1 PC   8,000.00
+//   2  Bolt  part no 874, ident no. 146332.06 … 42CrMo4    1 PC      850.00
 //
-// A and B are mutually exclusive; the Bolt is payable either way. The form must
-// show "FAOZ …, OPTION # A" and "FAOZ …, OPTION # B" as separate supplier columns
-// — same REF#, own totals (22,850 / 8,850), Bolt at 850 under both — and keep
-// numbering them SUPPLIER #1, #2, with the next real supplier at #3.
+// A and B are alternatives for PR item 1. The 2 is the second ROW, answering PR
+// item 2 — not an option. Comparing the supplier's lines to each other cannot
+// tell those apart: cover and bolt share "for grinding roller stop - inside for
+// VRM" and score 0.714 on terse wording, which produced a phantom third column.
+// The requisition's part/ident numbers settle it.
 //
 // Fixture data through the real pipeline. No network, no LLM, no API key.
 
@@ -17,173 +20,164 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyFxRates, assembleAnalysis } from './analysis-engine';
 import { purchaseRequisitionFromLlm, quotationsFromLlmSuppliers, type LlmSupplier } from './extraction-server';
-import { splitQuoteOptions, splitSupplierOptions } from './quote-options';
+import { splitQuotationOptions } from './quote-options';
 import { buildComparisonModel } from './pr-comparison';
 import { buildFreshAnalysis, FX } from '../../scripts/ta-form-fixture';
+import type { ExtractedQuotation } from './workspace-types';
 
 const FAOZ = "FAOZ INDUST'L. EQUIPS CO.";
 const REF = 'QT 000030292';
-const COVER = 'Supply and fabrication of cover (roller stop inside) part no 866, ident no. 146328.02 for grinding roller stop-inside for VRM';
-const BOLT = 'Bolt, Part No=874, ident No=146332.06 for grinding roller stop - inside for VRM, Material: 42CrMo4';
+
+// The requisition's own wording — the authority on which items exist.
+const PR_COVER = 'COVER (ROLLER STOP INSIDE), PART NO 866, IDENT NO. 146328.02 FOR GRINDING ROLLER STOP - INSIDE FOR VRM';
+const PR_BOLT = 'BOLT, PART NO=874, IDENT NO=146332.06 FOR GRINDING ROLLER STOP - INSIDE FOR VRM';
+
+const pr = purchaseRequisitionFromLlm(
+  { requestNo: '12602262', description: 'COVER (ROLLER STOP INSIDE) and bolt for VRM 3', items: [
+    { itemCode: '404602799866', description: PR_COVER, quantity: 1, unit: 'EA' },
+    { itemCode: '404602799874', description: PR_BOLT, quantity: 1, unit: 'EA' },
+  ] },
+  'NCC_Print_Purchase_Requisition_050826.pdf',
+)!;
 
 const line = (o: Record<string, unknown>) => ({
   name: '', quantity: 1, unitPrice: null, totalPrice: null, category: 'product',
   uom: 'PC', availableInDays: null, ...o,
 });
 
-const faoz = (): LlmSupplier => ({
+const base = (o: Partial<LlmSupplier> = {}): LlmSupplier => ({
   supplierName: FAOZ, reference: REF, prNumber: '12602262', currency: 'SAR',
   totalAmount: null, vatAmount: null, totalWithoutVat: null, totalsByCurrency: null,
   deliveryTime: '35 Days', deliveryTerms: null, countryOfOrigin: null,
   supplierCountry: 'Saudi Arabia', paymentTerms: '100% after completion',
-  warranty: null, validUntil: null,
-  // The document's Option column reads A, B, 2 — and that 2 is the Bolt's ROW
-  // NUMBER, not a third alternative. The fixture carries it exactly as the page
-  // prints it, because reading it as "Option 2" is the bug this pins.
+  warranty: null, validUntil: null, lineItems: [], ...o,
+});
+
+/** FAOZ exactly as the page prints it — the Bolt carries the row number "2". */
+const faoz = (coverA: string, coverB: string, bolt: string): LlmSupplier => base({
   lineItems: [
-    line({ name: `${COVER}, Material: AISI 4140.`, unitPrice: 22000, totalPrice: 22000, optionLabel: 'A' }),
-    line({ name: `${COVER}, Material: ST-52`, unitPrice: 8000, totalPrice: 8000, optionLabel: 'B' }),
-    line({ name: BOLT, unitPrice: 850, totalPrice: 850, optionLabel: '2' }),
+    line({ name: coverA, unitPrice: 22000, totalPrice: 22000, optionLabel: 'A' }),
+    line({ name: coverB, unitPrice: 8000, totalPrice: 8000, optionLabel: 'B' }),
+    line({ name: bolt, unitPrice: 850, totalPrice: 850, optionLabel: '2' }),
   ] as LlmSupplier['lineItems'],
 });
 
-const thwainy = (): LlmSupplier => ({
-  ...faoz(),
+const FULL = faoz(`${PR_COVER}, Material AISI 4140`, `${PR_COVER}, Material St-52`, `${PR_BOLT}, Mat. 42CrMo4`);
+// The wording that defeated similarity matching: no codes, shared trailing phrase.
+const TERSE = faoz(
+  'Cover for grinding roller stop - inside for VRM, part no 866, AISI 4140',
+  'Cover for grinding roller stop - inside for VRM, part no 866, ST-52',
+  'Bolt for grinding roller stop - inside for VRM, part no 874, 42CrMo4',
+);
+
+const thwainy = base({
   supplierName: 'Thwainy Trading Est.', reference: 'TH-4471', totalAmount: 19500,
   lineItems: [
-    line({ name: `${COVER}, Material: AISI 4140.`, unitPrice: 18650, totalPrice: 18650 }),
-    line({ name: BOLT, unitPrice: 850, totalPrice: 850 }),
+    line({ name: `${PR_COVER}, AISI 4140`, unitPrice: 18650, totalPrice: 18650 }),
+    line({ name: `${PR_BOLT}, 42CrMo4`, unitPrice: 850, totalPrice: 850 }),
   ] as LlmSupplier['lineItems'],
 });
 
-const pr = purchaseRequisitionFromLlm(
-  { requestNo: '12602262', description: 'COVER (ROLLER STOP INSIDE) and bolt for VRM 3', items: [
-    { itemCode: '866', description: 'COVER (ROLLER STOP INSIDE), PART NO 866, IDENT NO. 146328.02 FOR GRINDING ROLLER STOP - INSIDE FOR VRM', quantity: 1, unit: 'EA' },
-    { itemCode: '874', description: 'BOLT, PART NO=874, IDENT NO=146332.06 FOR GRINDING ROLLER STOP - INSIDE FOR VRM', quantity: 1, unit: 'EA' },
-  ] },
-  'requisition-12602262.pdf',
-)!;
+const quotesOf = (suppliers: LlmSupplier[]): ExtractedQuotation[] =>
+  quotationsFromLlmSuppliers(suppliers, 'QT_NO_30292.pdf', { currency: 'SAR', confidence: 0.99 });
 
-const analysisOf = (suppliers: LlmSupplier[]) =>
-  applyFxRates(
-    assembleAnalysis(quotationsFromLlmSuppliers(suppliers, 'QT_NO_30292.pdf', { currency: 'SAR', confidence: 0.99 }), false, pr),
-    FX,
-  );
+const analysisOf = (suppliers: LlmSupplier[], withPr = true) =>
+  applyFxRates(assembleAnalysis(quotesOf(suppliers), false, withPr ? pr : null), FX);
 
-// ── 1. the split itself ─────────────────────────────────────────────────────
+// ── 1. the requisition decides: two options, and a Bolt that is not one ─────
 
-test('SPLIT: two options become two suppliers, labelled as on the form', () => {
-  const [a, b, ...rest] = splitSupplierOptions(faoz());
-  assert.equal(rest.length, 0, 'exactly two');
-  assert.equal(a.supplierName, `${FAOZ}, OPTION # A`);
-  assert.equal(b.supplierName, `${FAOZ}, OPTION # B`);
+test('PR-ANCHORED: the two covers split; the Bolt’s "2" is row numbering', () => {
+  const out = splitQuotationOptions(quotesOf([FULL]), pr);
+  assert.deepEqual(out.map((q) => q.supplierName), [`${FAOZ}, OPTION # A`, `${FAOZ}, OPTION # B`]);
 });
 
-test('SPLIT: both options carry the SAME reference — it is one document', () => {
-  for (const s of splitSupplierOptions(faoz())) assert.equal(s.reference, REF);
+test('PR-ANCHORED: it holds on the TERSE wording that defeated similarity', () => {
+  // Cover-vs-bolt scores 0.714 here — above any usable text threshold. The part
+  // numbers 866 / 874 in the requisition are what keep them apart.
+  const out = splitQuotationOptions(quotesOf([TERSE]), pr);
+  assert.equal(out.length, 2, 'still two columns, never three');
+  assert.deepEqual(out.map((q) => q.supplierName), [`${FAOZ}, OPTION # A`, `${FAOZ}, OPTION # B`]);
 });
 
-test('SPLIT: each option gets its own item PLUS the shared, unlabelled ones', () => {
-  const [a, b] = splitSupplierOptions(faoz());
-  assert.deepEqual(a.lineItems.map((l) => l.unitPrice), [22000, 850], 'Option A: its cover + the bolt');
-  assert.deepEqual(b.lineItems.map((l) => l.unitPrice), [8000, 850], 'Option B: its cover + the bolt');
-});
-
-test('SPLIT: totals are recomputed per option, never the document’s single total', () => {
-  const [a, b] = splitSupplierOptions(faoz());
-  assert.equal(a.totalAmount, 22850, '22,000 + 850');
-  assert.equal(b.totalAmount, 8850, '8,000 + 850');
-});
-
-test('SPLIT: terms that describe the QUOTE are shared by both options', () => {
-  for (const s of splitSupplierOptions(faoz())) {
-    assert.equal(s.deliveryTime, '35 Days');
-    assert.equal(s.paymentTerms, '100% after completion');
-    assert.equal(s.currency, 'SAR');
+test('PR-ANCHORED: the Bolt is shared into BOTH option columns at 850', () => {
+  for (const src of [FULL, TERSE]) {
+    const out = splitQuotationOptions(quotesOf([src]), pr);
+    for (const q of out) {
+      const bolt = q.lineItems.find((l) => /bolt/i.test(l.name));
+      assert.ok(bolt, `${q.supplierName} carries the Bolt`);
+      assert.equal(bolt!.unitPrice, 850);
+    }
   }
 });
 
-// ── 2. detection: labels, and the absence of them ───────────────────────────
-
-test('DETECT: an option label written into the NAME is found and stripped', () => {
-  const s = faoz();
-  s.lineItems = s.lineItems.map((l, i) => ({
-    ...l, optionLabel: null,
-    name: i === 0 ? `Option A — ${COVER}, AISI 4140` : i === 1 ? `OPTION # B: ${COVER}, ST-52` : l.name,
-  })) as LlmSupplier['lineItems'];
-  const out = splitSupplierOptions(s);
-  assert.equal(out.length, 2, 'split on the in-name labels');
-  assert.equal(out[0].supplierName, `${FAOZ}, OPTION # A`);
-  assert.ok(!out[0].lineItems[0].name.startsWith('Option A'), 'the label is stripped from the description');
-  assert.ok(out[0].lineItems[0].name.startsWith('Supply and fabrication'), 'the description survives intact');
+test('PR-ANCHORED: each column totals only its own option plus the shared lines', () => {
+  const out = splitQuotationOptions(quotesOf([FULL]), pr);
+  assert.deepEqual(out.map((q) => q.totalCost), [22850, 8850], '22,000+850 and 8,000+850');
 });
 
-// ── the row-number trap ─────────────────────────────────────────────────────
-
-test('ROW NUMBER: the Bolt’s "2" is numbering, not a third option', () => {
-  const out = splitSupplierOptions(faoz());
-  assert.equal(out.length, 2, 'two columns — A and B, never a phantom "OPTION # 2"');
-  assert.deepEqual(out.map((s) => s.supplierName), [`${FAOZ}, OPTION # A`, `${FAOZ}, OPTION # B`]);
+test('PR-ANCHORED: both options keep the one REF# — it is a single document', () => {
+  for (const q of splitQuotationOptions(quotesOf([FULL]), pr)) assert.equal(q.reference, REF);
 });
 
-test('ROW NUMBER: the numbered row stays a SHARED line under both options', () => {
-  const [a, b] = splitSupplierOptions(faoz());
-  for (const [label, s] of [['A', a], ['B', b]] as const) {
-    const bolt = s.lineItems.find((l) => l.name.startsWith('Bolt'));
-    assert.ok(bolt, `Option ${label} still carries the Bolt`);
-    assert.equal(bolt!.unitPrice, 850, `Option ${label} prices the Bolt at 850`);
-  }
+test('PR-ANCHORED: two lines on one PR item at the SAME price are not options', () => {
+  const same = faoz(`${PR_COVER}, AISI 4140`, `${PR_COVER}, ST-52`, `${PR_BOLT}, 42CrMo4`);
+  same.lineItems[1].unitPrice = 22000;
+  same.lineItems[1].totalPrice = 22000;
+  const out = splitQuotationOptions(quotesOf([same]), pr);
+  assert.equal(out.length, 1, 'no price difference ⇒ no choice to make');
 });
 
-test('ROW NUMBER: a document numbering EVERY row is not an option split at all', () => {
-  // 1 / 2 / 3 against three unrelated items — pure numbering, no alternatives.
-  const s = faoz();
-  s.lineItems = [
-    line({ name: `${COVER}, Material: AISI 4140.`, unitPrice: 22000, totalPrice: 22000, optionLabel: '1' }),
-    line({ name: BOLT, unitPrice: 850, totalPrice: 850, optionLabel: '2' }),
-    line({ name: 'Gasket, Part No=901, ident No=146340.11 for VRM sealing, Material: NBR', unitPrice: 120, totalPrice: 120, optionLabel: '3' }),
-  ] as LlmSupplier['lineItems'];
-  const out = splitSupplierOptions(s);
-  assert.equal(out.length, 1, 'no two rows describe the same item ⇒ no options');
-  assert.equal(out[0], s, 'passed through untouched');
+test('PR-ANCHORED: UNLABELLED lines on one PR item are additive, not alternatives', () => {
+  // Saudi Fal's S1262128249 shape: two differently-priced lines on ONE requisition
+  // item, but both payable — a product plus a reactivation fee, summing to the
+  // quote's own total. Structurally identical to an option pair; only the absence
+  // of labels tells them apart, and the additive reading is the one that preserves
+  // the money. (The combining itself is pinned in multi-position-item.test.ts.)
+  const additive = base({ lineItems: [
+    line({ name: `${PR_COVER}, AISI 4140`, unitPrice: 16430, totalPrice: 16430 }),
+    line({ name: `${PR_COVER} — reactivation fee`, unitPrice: 6735, totalPrice: 6735 }),
+  ] as LlmSupplier['lineItems'] });
+  assert.equal(splitQuotationOptions(quotesOf([additive]), pr).length, 1, 'no labels ⇒ no split');
 });
 
-test('ROW NUMBER: numeric labels DO split when they mark real alternatives', () => {
-  // "Option 1 / Option 2" on the same part is a genuine split — the rule keys on
-  // same-item-different-label, not on the label being a letter.
-  const s = faoz();
-  s.lineItems = [
-    line({ name: `${COVER}, Material: AISI 4140.`, unitPrice: 22000, totalPrice: 22000, optionLabel: '1' }),
-    line({ name: `${COVER}, Material: ST-52`, unitPrice: 8000, totalPrice: 8000, optionLabel: '2' }),
-    line({ name: BOLT, unitPrice: 850, totalPrice: 850, optionLabel: '3' }),
-  ] as LlmSupplier['lineItems'];
-  const out = splitSupplierOptions(s);
-  assert.equal(out.length, 2, 'the two covers split; the Bolt does not');
-  assert.deepEqual(out.map((x) => x.totalAmount), [22850, 8850], 'the Bolt is shared into both');
+// ── 2. the no-PR fallback ───────────────────────────────────────────────────
+
+test('NO PR: labelled alternatives still split when no requisition was uploaded', () => {
+  const out = splitQuotationOptions(quotesOf([FULL]), null);
+  assert.equal(out.length, 2, 'the document’s own A/B labels are used');
+  assert.deepEqual(out.map((q) => q.totalCost), [22850, 8850]);
 });
 
-test('DETECT: "option a" and "OPTION # A" are the SAME option, not two', () => {
-  const s = faoz();
-  s.lineItems[0].optionLabel = 'option a';
-  s.lineItems[1].optionLabel = 'OPTION # a';
-  assert.equal(splitSupplierOptions(s).length, 1, 'one label ⇒ no split');
+test('NO PR: a lone row number is not treated as an alternative', () => {
+  // Only the Bolt is labelled — one label, nothing to choose between.
+  const s = base({ lineItems: [
+    line({ name: `${PR_COVER}, AISI 4140`, unitPrice: 22000, totalPrice: 22000 }),
+    line({ name: `${PR_BOLT}, 42CrMo4`, unitPrice: 850, totalPrice: 850, optionLabel: '2' }),
+  ] as LlmSupplier['lineItems'] });
+  assert.equal(splitQuotationOptions(quotesOf([s]), null).length, 1);
 });
 
-test('DETECT: an ordinary quotation is passed through untouched', () => {
-  const t = thwainy();
-  const out = splitSupplierOptions(t);
+// ── 3. nothing else is disturbed ────────────────────────────────────────────
+
+test('PASS-THROUGH: an ordinary quotation is returned by identity', () => {
+  const qs = quotesOf([thwainy]);
+  const out = splitQuotationOptions(qs, pr);
   assert.equal(out.length, 1);
-  assert.equal(out[0], t, 'the very same object — nothing rebuilt');
+  assert.equal(out[0], qs[0], 'the very same object — nothing rebuilt');
 });
 
-test('DETECT: the 5-supplier fixture still yields exactly 5 columns', () => {
-  assert.equal(buildFreshAnalysis().quotations.length, 5, 'no existing quote is split');
+test('PASS-THROUGH: the 5-supplier fixture still yields exactly 5 columns', () => {
+  assert.equal(buildFreshAnalysis().quotations.length, 5);
 });
 
-// ── 3. the form: columns, numbering, pricing ────────────────────────────────
+test('PASS-THROUGH: extraction alone no longer splits — the PR decides, later', () => {
+  assert.equal(quotesOf([FULL]).length, 1, 'one document, one quotation at extraction');
+});
 
-test('FORM: the options occupy real supplier slots, and the next supplier follows', () => {
-  const analysis = analysisOf([faoz(), thwainy()]);
+// ── 4. the form ─────────────────────────────────────────────────────────────
+
+test('FORM: options take real supplier slots, and the next supplier follows', () => {
+  const analysis = analysisOf([FULL, thwainy]);
   assert.deepEqual(
     analysis.quotations.map((q) => q.supplierName),
     [`${FAOZ}, OPTION # A`, `${FAOZ}, OPTION # B`, 'Thwainy Trading Est.'],
@@ -191,52 +185,43 @@ test('FORM: the options occupy real supplier slots, and the next supplier follow
   );
 });
 
-test('FORM: each option column prices its own cover, and BOTH show the bolt', () => {
-  const analysis = analysisOf([faoz(), thwainy()]);
+test('FORM: the grid prices each option separately and the Bolt identically', () => {
+  const analysis = analysisOf([FULL, thwainy]);
   const model = buildComparisonModel(analysis.quotations, analysis.purchaseRequisition, analysis.prMatch, { prOnly: true, fx: FX });
   const [cover, bolt] = model.rows.filter((r) => r.kind === 'pr');
-  assert.deepEqual(cover.cells.map((c) => c?.unitPrice), [22000, 8000, 18650], 'the cover differs per option');
-  assert.deepEqual(bolt.cells.map((c) => c?.unitPrice), [850, 850, 850], 'the bolt is 850 under both options');
+  assert.deepEqual(cover.cells.map((c) => c?.unitPrice), [22000, 8000, 18650]);
+  assert.deepEqual(bolt.cells.map((c) => c?.unitPrice), [850, 850, 850]);
 });
 
-test('FORM: both PR items are quoted in BOTH option columns', () => {
-  const analysis = analysisOf([faoz(), thwainy()]);
-  for (const sm of analysis.prMatch!.bySupplier) {
-    assert.equal(sm.notQuotedCount, 0, `${sm.supplier} quotes every PR item`);
+test('FORM: exactly two PR rows — the Bolt never becomes a third item', () => {
+  const analysis = analysisOf([FULL, thwainy]);
+  const model = buildComparisonModel(analysis.quotations, analysis.purchaseRequisition, analysis.prMatch, { prOnly: true, fx: FX });
+  assert.equal(model.rows.filter((r) => r.kind === 'pr').length, 2);
+});
+
+test('FORM: every PR item is quoted in every column', () => {
+  for (const sm of analysisOf([FULL, thwainy]).prMatch!.bySupplier) {
+    assert.equal(sm.notQuotedCount, 0, `${sm.supplier} quotes both PR items`);
   }
 });
 
-test('FORM: the two options carry their own totals', () => {
-  const analysis = analysisOf([faoz(), thwainy()]);
-  const [a, b] = analysis.quotations;
-  assert.equal(a.totalCost, 22850);
-  assert.equal(b.totalCost, 8850);
-});
+// ── 5. scoring: options compete as separate suppliers ───────────────────────
 
-// ── 4. scoring: options compete like any other supplier ─────────────────────
-
-test('SCORE: the cheaper option wins the row highlight against ALL suppliers', () => {
-  const analysis = analysisOf([faoz(), thwainy()]);
+test('SCORE: the cheaper option takes the row highlight against ALL columns', () => {
+  const analysis = analysisOf([FULL, thwainy]);
   const model = buildComparisonModel(analysis.quotations, analysis.purchaseRequisition, analysis.prMatch, { prOnly: true, fx: FX });
   const cover = model.rows.filter((r) => r.kind === 'pr')[0];
-  // Option B (8,000) is the cheapest cover across every column, including Thwainy's
-  // 18,650 — so it takes the "lowest" highlight exactly as a third supplier would.
-  assert.equal(cover.lowestUsd, cover.cells[1]!.unitPriceUsd, 'Option B is the lowest on the row');
-  assert.ok(cover.cells[1]!.unitPriceUsd! < cover.cells[0]!.unitPriceUsd!, 'and it is cheaper than Option A');
+  assert.equal(cover.lowestUsd, cover.cells[1]!.unitPriceUsd, 'Option B at 8,000 is lowest');
+  assert.ok(cover.cells[1]!.unitPriceUsd! < cover.cells[0]!.unitPriceUsd!);
 });
 
 test('SCORE: the options are ranked as separate suppliers overall', () => {
-  const analysis = analysisOf([faoz(), thwainy()]);
-  const names = analysis.quotations.map((q) => q.supplierName);
-  assert.equal(new Set(names).size, 3, 'three distinct supplier identities');
-  assert.equal(analysis.recommendation.lowestCost?.supplier, `${FAOZ}, OPTION # B`, 'the cheapest total wins on cost');
+  const analysis = analysisOf([FULL, thwainy]);
+  assert.equal(new Set(analysis.quotations.map((q) => q.supplierName)).size, 3);
+  assert.equal(analysis.recommendation.lowestCost?.supplier, `${FAOZ}, OPTION # B`);
 });
 
-// ── 5. the batch helper ─────────────────────────────────────────────────────
-
-test('BATCH: splitting is idempotent — an already-split set is left alone', () => {
-  const once = splitQuoteOptions([faoz(), thwainy()]);
-  const twice = splitQuoteOptions(once);
-  assert.deepEqual(twice.map((s) => s.supplierName), once.map((s) => s.supplierName));
-  assert.equal(once.length, 3);
+test('SCORE: each option column gets its own distinct id', () => {
+  const ids = analysisOf([FULL, thwainy]).quotations.map((q) => q.id);
+  assert.equal(new Set(ids).size, ids.length, 'ids are unique — id-keyed joins stay sound');
 });

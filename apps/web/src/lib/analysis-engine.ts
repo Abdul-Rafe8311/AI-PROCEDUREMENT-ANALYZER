@@ -12,6 +12,7 @@ import {
 } from './workspace-types';
 import { type FxRates, toUsd as toUsdLive } from './fx-rates';
 import { matchQuotationsToPr } from './item-matching';
+import { splitQuotationOptions } from './quote-options';
 import type {
   StaleAnalysis,
   AnalysisResult,
@@ -381,9 +382,16 @@ export function assembleAnalysis(
   simulated: boolean,
   purchaseRequisition: PurchaseRequisition | null = null,
 ): AnalysisResult {
+  // A quotation offering several priced ALTERNATIVES for one requisition item
+  // becomes one supplier column per option ("FAOZ …, OPTION # A" / "… # B"), so
+  // the buyer compares them side by side like any two suppliers. This happens
+  // HERE rather than at extraction because deciding whether an "Option" column
+  // marks real alternatives or is plain row numbering needs the requisition — and
+  // this is where it first meets the quotations. See quote-options.ts.
+  const withOptions = splitQuotationOptions(rawQuotations, purchaseRequisition);
   // De-duplicate ids up front so every id-keyed join below (matching, comments,
   // warranties, origins) addresses exactly one supplier — see the note above.
-  const quotations = ensureUniqueQuotationIds(rawQuotations);
+  const quotations = ensureUniqueQuotationIds(withOptions);
   const prMatch: PrMatchResult | null =
     purchaseRequisition && purchaseRequisition.items.length && quotations.length
       ? matchQuotationsToPr(quotations, purchaseRequisition)

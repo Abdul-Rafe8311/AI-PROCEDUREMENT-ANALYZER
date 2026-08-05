@@ -3,7 +3,6 @@
 // the document — no sample/placeholder data here.
 
 import { normalizeDelivery } from './analysis-engine';
-import { splitQuoteOptions } from './quote-options';
 import {
   EXTRACTION_MODEL,
   extractJsonFromMedia,
@@ -502,12 +501,12 @@ function normalizeSuppliers(parsed: unknown): LlmSupplier[] {
       : parsed && typeof parsed === 'object'
         ? [parsed] // single-supplier object → array of one
         : [];
-  // A quote offering several priced ALTERNATIVES for the same item becomes one
-  // supplier per option ("FAOZ …, OPTION # A" / "… # B"), so the buyer compares
-  // them side by side like any two suppliers. Ordinary quotes pass straight
-  // through untouched. This is the single choke point both parse paths share, and
-  // it runs BEFORE mapSupplier assigns ids and column positions.
-  return splitQuoteOptions(asArray.filter((s): s is LlmSupplier => !!s && typeof s === 'object'));
+  // NOTE: the option split does NOT happen here. Deciding whether a quote's
+  // "Option" column marks real alternatives needs the company requisition, which
+  // only enters the pipeline at assembleAnalysis — see quote-options.ts. Doing it
+  // here meant guessing from the supplier's own wording, and a PR uploaded
+  // afterwards could never correct the guess.
+  return asArray.filter((s): s is LlmSupplier => !!s && typeof s === 'object');
 }
 
 // Shared structured-extraction schema + rules. Used by BOTH the digital-text
@@ -903,6 +902,10 @@ function mapSupplier(
         ...(foc ? { foc: true } : {}),
         ...(liOrigin ? { countryOfOrigin: liOrigin } : {}),
         ...(liDelivery ? { deliveryText: liDelivery } : {}),
+        // Carried through VERBATIM and unjudged. Whether "A"/"B"/"2" marks a real
+        // alternative or is plain row numbering can only be decided against the
+        // requisition, which does not exist yet at extraction time.
+        ...(li.optionLabel?.trim() ? { optionLabel: li.optionLabel.trim() } : {}),
       };
     })
     .filter((li) => {
@@ -1089,12 +1092,8 @@ export function quotationsFromLlmSuppliers(
   opts?: { scanned?: boolean },
 ): ExtractedQuotation[] {
   const confCap = opts?.scanned ? SCAN_CONF : undefined;
-  // Same option split the live parse paths apply (see normalizeSuppliers), so this
-  // seam maps exactly what production maps. Idempotent: a supplier that has already
-  // been split carries no option labels and passes straight through.
-  const split = splitQuoteOptions(suppliers);
-  return split.map((s, i) =>
-    mapSupplier(s, { id: `q_0_${i}`, fileName, detected, index: i, count: split.length, confCap }),
+  return suppliers.map((s, i) =>
+    mapSupplier(s, { id: `q_0_${i}`, fileName, detected, index: i, count: suppliers.length, confCap }),
   );
 }
 
