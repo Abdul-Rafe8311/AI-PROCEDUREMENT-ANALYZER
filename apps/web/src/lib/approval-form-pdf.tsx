@@ -31,6 +31,7 @@ import {
   suggestWarranties,
 } from './item-matching';
 import { buildComparisonModel, supplierGroups } from './pr-comparison';
+import { formSuppliers, type SupplierNumbering } from './form-suppliers';
 import { applyItemReview, type ItemReview, type ReviewedValue, valueOf } from './item-review';
 import { trimSupplierDescription } from './supplier-desc';
 import * as LAYOUT from './approval-form-layout';
@@ -96,6 +97,15 @@ export interface ApprovalFormOptions {
    *  ta-currency.ts. Omitted = the long-standing behaviour: line items as quoted,
    *  totals in quoted + SAR + USD. */
   currencyDisplay?: TaCurrencyDisplay;
+  /** quotation ids the reviewer has hidden from THIS printout. A display filter,
+   *  never a delete — the supplier stays in the analysis and can be brought back.
+   *  A hidden column is also out of the "lowest price" comparison, since it is not
+   *  on the page to be compared against. See form-suppliers.ts. */
+  hiddenSuppliers?: string[];
+  /** how columns are numbered once some are hidden: 'renumber' closes the gap
+   *  (#1 #2 #3, the default), 'original' keeps the pre-hide numbers (#1 #3 #4) so
+   *  an earlier printout still cross-references. */
+  supplierNumbering?: SupplierNumbering;
   /** Overlay editable AcroForm fields on the rendered layout. OFF by default: the
    *  form is a flat, printable document and all editing happens in the Customize
    *  form modal beforehand. Kept so a fillable build stays one option away. */
@@ -233,7 +243,9 @@ function fxStampText(fx: FxRates, currencies: string[]): string {
 export { withVatAmount } from './workspace-types';
 
 function ApprovalDocument({
-  analysis,
+  analysis: fullAnalysis,
+  hiddenSuppliers,
+  supplierNumbering,
   signatureRoles,
   comments,
   warranties,
@@ -246,6 +258,8 @@ function ApprovalDocument({
   currencyDisplay,
 }: {
   analysis: AnalysisResult;
+  hiddenSuppliers?: string[];
+  supplierNumbering?: SupplierNumbering;
   signatureRoles: string[];
   comments: Record<string, TechnicalComment>;
   warranties: Record<string, ApprovalFieldValue>;
@@ -257,6 +271,10 @@ function ApprovalDocument({
   prDescription?: ReviewedValue;
   currencyDisplay: TaCurrencyDisplay;
 }) {
+  // Hidden columns are dropped BEFORE the comparison model is built, so they take
+  // no part in the "lowest price" highlight — they are not on the page to be
+  // compared against. `displayNo` carries the reviewer's numbering choice.
+  const { analysis, displayNo } = formSuppliers(fullAnalysis, { hiddenSuppliers, supplierNumbering });
   const qs = analysis.quotations;
   const qById = new Map(qs.map((q) => [q.id, q]));
   // Show a Warranty / Country of Origin row only if AT LEAST ONE supplier has that
@@ -431,7 +449,9 @@ function ApprovalDocument({
             <View key={gi} wrap={false}>
               {groups.length > 1 && (
                 <Text style={s.blockLabel}>
-                  Suppliers {group[0].colIndex + 1}–{group[group.length - 1].colIndex + 1} of {model.suppliers.length}
+                  Suppliers {displayNo[group[0].quotationId] ?? group[0].colIndex + 1}–
+                  {displayNo[group[group.length - 1].quotationId] ?? group[group.length - 1].colIndex + 1} of{' '}
+                  {model.suppliers.length}
                 </Text>
               )}
 
@@ -446,10 +466,11 @@ function ApprovalDocument({
                 {group.map((sup) => {
                   // Approvers discuss the form out loud ("supplier two is cheaper
                   // but slower"), so every column carries a stable number as well
-                  // as the company name. The number is the supplier's position in
-                  // the whole analysis — NOT its position in this block — so it
-                  // stays the same when 5+ suppliers wrap onto a second page.
-                  const supNo = sup.colIndex + 1;
+                  // as the company name. The number spans the WHOLE form — not
+                  // this block — so it survives 5+ suppliers wrapping onto a
+                  // second page, and it honours the reviewer's numbering choice
+                  // when columns are hidden (see form-suppliers.ts).
+                  const supNo = displayNo[sup.quotationId] ?? sup.colIndex + 1;
                   return (
                     <View key={sup.quotationId} style={[s.supHead, { width: supW }]}>
                       <Text style={s.supNo}>{`SUPPLIER #${supNo}`}</Text>
@@ -772,6 +793,8 @@ export async function generateApprovalFormPdf(
   return pdf(
     <ApprovalDocument
       analysis={analysis}
+      hiddenSuppliers={options?.hiddenSuppliers}
+      supplierNumbering={options?.supplierNumbering}
       signatureRoles={roles}
       comments={comments}
       warranties={warranties}

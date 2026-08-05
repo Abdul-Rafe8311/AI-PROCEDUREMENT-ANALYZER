@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDown,
@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { cn, isChunkLoadError, STALE_BUILD_MESSAGE } from '@/lib/utils';
 import { analysisFingerprint } from '@/lib/analysis-fingerprint';
+import type { SupplierNumbering } from '@/lib/form-suppliers';
 import {
   Dialog,
   DialogContent,
@@ -83,6 +84,31 @@ const ORIGIN_KEY = 'approval:origin:v1';
 const ITEMS_KEY = 'approval:items:v1';
 const NAMES_KEY = 'approval:supplierNames:v1';
 const PRDESC_KEY = 'approval:prDescription:v1';
+const VISIBILITY_KEY = 'approval:supplierVisibility:v1';
+
+/** Persisted per analysis: hidden supplier ids + the column-numbering choice. */
+type VisibilityStore = { hidden?: string[]; numbering?: SupplierNumbering };
+
+function loadVisibility(supKey: string): VisibilityStore {
+  if (typeof window === 'undefined') return {};
+  try {
+    const all = JSON.parse(window.localStorage.getItem(VISIBILITY_KEY) ?? '{}');
+    const forKey = all?.[supKey];
+    return forKey && typeof forKey === 'object' ? forKey : {};
+  } catch {
+    return {};
+  }
+}
+function saveVisibility(supKey: string, store: VisibilityStore) {
+  if (typeof window === 'undefined') return;
+  try {
+    const all = JSON.parse(window.localStorage.getItem(VISIBILITY_KEY) ?? '{}');
+    all[supKey] = store;
+    window.localStorage.setItem(VISIBILITY_KEY, JSON.stringify(all));
+  } catch {
+    /* ignore */
+  }
+}
 
 // A persisted per-supplier override for a toggleable field: `enabled` overrides the
 // default-ON toggle; a `text` string (incl. "") is the human's edit/clear. Absent
@@ -430,6 +456,47 @@ export function ApprovalFormDownload({
   // previous PR's choice into a document someone signs.
   const [currencyDisplay, setCurrencyDisplay] = useState<TaCurrencyDisplay>(TA_CURRENCY_DISPLAY_DEFAULT);
 
+  // Which suppliers this form shows, and how the columns are numbered once some
+  // are hidden. Persisted per supplier-set (the existing `supKey`) like the other
+  // per-analysis choices, so reopening the same PR keeps the reviewer's selection;
+  // a different PR starts clean because the key changes with the supplier ids.
+  const [hiddenSuppliers, setHiddenSuppliers] = useState<string[]>([]);
+  const [supplierNumbering, setSupplierNumbering] = useState<SupplierNumbering>('renumber');
+  useEffect(() => {
+    const store = loadVisibility(supKey);
+    // Only ids still present in this analysis — a stale id could otherwise hide a
+    // column that no longer exists, or worse, hide all of them.
+    const live = new Set(analysis.quotations.map((q) => q.id));
+    setHiddenSuppliers((store.hidden ?? []).filter((id) => live.has(id)));
+    setSupplierNumbering(store.numbering === 'original' ? 'original' : 'renumber');
+  }, [supKey, analysis]);
+
+  const toggleSupplier = useCallback(
+    (quotationId: string) => {
+      setHiddenSuppliers((prev) => {
+        const next = prev.includes(quotationId)
+          ? prev.filter((id) => id !== quotationId)
+          : [...prev, quotationId];
+        saveVisibility(supKey, { hidden: next, numbering: supplierNumbering });
+        return next;
+      });
+    },
+    [supKey, supplierNumbering],
+  );
+  const changeNumbering = useCallback(
+    (next: SupplierNumbering) => {
+      setSupplierNumbering(next);
+      saveVisibility(supKey, { hidden: hiddenSuppliers, numbering: next });
+    },
+    [supKey, hiddenSuppliers],
+  );
+
+  // Unreachable from the dialog (the last visible supplier cannot be unticked),
+  // but a persisted selection could in principle arrive covering everything — and
+  // a form with no price columns must never be produced.
+  const noneVisible =
+    analysis.quotations.length > 0 && analysis.quotations.every((q) => hiddenSuppliers.includes(q.id));
+
   const quotedCurrencies = useMemo(
     () => analysis.quotations.map((q) => q.currency ?? 'SAR'),
     [analysis],
@@ -503,6 +570,8 @@ export function ApprovalFormDownload({
         supplierNames: supplierNames.values,
         prDescription: prDescription.values.pr,
         currencyDisplay,
+        hiddenSuppliers,
+        supplierNumbering,
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -549,6 +618,8 @@ export function ApprovalFormDownload({
             supplierNames: supplierNames.values,
             prDescription: prDescription.values.pr,
             currencyDisplay,
+            hiddenSuppliers,
+            supplierNumbering,
           },
           fx: items.fx,
           // Which analysis this download is FOR. The route rebuilds the same value
@@ -594,6 +665,10 @@ export function ApprovalFormDownload({
           prDescription={prDescription}
           currencyDisplay={currencyDisplay}
           onCurrencyDisplayChange={setCurrencyDisplay}
+          hiddenSuppliers={hiddenSuppliers}
+          onToggleSupplier={toggleSupplier}
+          supplierNumbering={supplierNumbering}
+          onSupplierNumberingChange={changeNumbering}
           quotedCurrencies={quotedCurrencies}
           hasForeignCurrency={hasForeignCurrency}
           comments={comments}
@@ -613,7 +688,8 @@ export function ApprovalFormDownload({
         <button
           type="button"
           onClick={handleDownload}
-          disabled={loading}
+          disabled={loading || noneVisible}
+          title={noneVisible ? 'At least one supplier has to be shown on the form' : undefined}
           className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-2 text-sm font-semibold text-foreground shadow-sm transition hover:bg-muted/60 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ClipboardCheck className="h-4 w-4" />}
@@ -622,7 +698,8 @@ export function ApprovalFormDownload({
         <button
           type="button"
           onClick={handleDownloadExcel}
-          disabled={xlsxLoading}
+          disabled={xlsxLoading || noneVisible}
+          title={noneVisible ? 'At least one supplier has to be shown on the form' : undefined}
           className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-2 text-sm font-medium text-foreground shadow-sm transition hover:bg-muted/60 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {xlsxLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
@@ -1174,6 +1251,117 @@ function CurrencyPicker({
   );
 }
 
+/**
+ * Which supplier columns this form prints, and how they are numbered.
+ *
+ * Hiding is a DISPLAY FILTER, never a delete: the supplier stays in the analysis,
+ * the box can be re-ticked, and nothing about the underlying data changes. A
+ * hidden column also drops out of the "lowest price" comparison, because it is
+ * not on the page to be compared against.
+ *
+ * The last visible column cannot be unticked — a form with no prices on it is not
+ * a form. Same rule, and same wording, as the currency picker above.
+ */
+function SupplierVisibilitySection({
+  quotations,
+  hidden,
+  onToggle,
+  numbering,
+  onNumbering,
+  nameOf,
+}: {
+  quotations: AnalysisResult['quotations'];
+  hidden: string[];
+  onToggle: (quotationId: string) => void;
+  numbering: SupplierNumbering;
+  onNumbering: (next: SupplierNumbering) => void;
+  nameOf: (q: AnalysisResult['quotations'][number]) => string;
+}) {
+  if (quotations.length < 2) return null;
+  const hiddenSet = new Set(hidden);
+  const visibleCount = quotations.filter((q) => !hiddenSet.has(q.id)).length;
+  return (
+    <section className="mt-6">
+      <h3 className="mb-1 text-sm font-semibold">Suppliers on this form</h3>
+      <p className="mb-2 text-[11px] text-muted-foreground">
+        Untick a supplier to leave it off this printout. It stays in the analysis and can be brought back at any time —
+        nothing is deleted. A hidden supplier is also left out of the lowest-price comparison on the form, since it is
+        not there to be compared against.
+      </p>
+      <ul className="space-y-2">
+        {quotations.map((q, i) => {
+          const on = !hiddenSet.has(q.id);
+          const last = on && visibleCount === 1;
+          return (
+            <li key={q.id}>
+              <label
+                title={last ? 'At least one supplier has to be shown' : undefined}
+                className={cn(
+                  'flex cursor-pointer items-center gap-2 rounded-lg border p-3 transition',
+                  on ? 'border-border' : 'border-dashed border-border bg-muted/30',
+                  last && 'cursor-not-allowed opacity-80',
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={on}
+                  disabled={last}
+                  onChange={() => onToggle(q.id)}
+                  className="h-3.5 w-3.5 accent-primary"
+                />
+                <span className={cn('text-sm font-semibold', !on && 'text-muted-foreground line-through')}>
+                  {nameOf(q)}
+                </span>
+                <span className="ml-auto text-[11px] text-muted-foreground">
+                  {q.reference ? `REF# ${q.reference}` : `Supplier ${i + 1}`}
+                </span>
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+
+      {/* Only a live question once something is actually hidden. */}
+      {visibleCount < quotations.length && (
+        <div className="mt-3 rounded-lg border border-border p-3">
+          <div className="mb-1 text-sm font-semibold">Column numbering</div>
+          <p className="mb-2 text-[11px] text-muted-foreground">
+            A hidden column leaves a gap in “SUPPLIER #1, #2, #3”. Close it up, or keep the original numbers so the form
+            still lines up with a printout someone is already holding.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                ['renumber', 'Renumber (#1, #2, #3)'],
+                ['original', 'Keep original numbers (#1, #3, #4)'],
+              ] as const
+            ).map(([value, label]) => (
+              <label
+                key={value}
+                className={cn(
+                  'inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-medium transition',
+                  numbering === value
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border text-muted-foreground hover:bg-muted',
+                )}
+              >
+                <input
+                  type="radio"
+                  name="ta-supplier-numbering"
+                  checked={numbering === value}
+                  onChange={() => onNumbering(value)}
+                  className="h-3.5 w-3.5 accent-primary"
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function CurrencySection({
   display,
   onChange,
@@ -1280,6 +1468,10 @@ function CustomizeFormDialog({
   prDescription,
   currencyDisplay,
   onCurrencyDisplayChange,
+  hiddenSuppliers,
+  onToggleSupplier,
+  supplierNumbering,
+  onSupplierNumberingChange,
   quotedCurrencies,
   hasForeignCurrency,
   comments,
@@ -1302,6 +1494,10 @@ function CustomizeFormDialog({
   prDescription: ReviewedNamesApi;
   currencyDisplay: TaCurrencyDisplay;
   onCurrencyDisplayChange: (d: TaCurrencyDisplay) => void;
+  hiddenSuppliers: string[];
+  onToggleSupplier: (quotationId: string) => void;
+  supplierNumbering: SupplierNumbering;
+  onSupplierNumberingChange: (n: SupplierNumbering) => void;
   quotedCurrencies: string[];
   hasForeignCurrency: boolean;
   comments: Record<string, TechnicalComment>;
@@ -1363,6 +1559,19 @@ function CustomizeFormDialog({
           quotations={analysis.quotations}
           supplierNames={supplierNames}
           prDescription={prDescription}
+        />
+
+        {/* ── Which suppliers appear, and how their columns are numbered ── */}
+        <SupplierVisibilitySection
+          quotations={analysis.quotations}
+          hidden={hiddenSuppliers}
+          onToggle={onToggleSupplier}
+          numbering={supplierNumbering}
+          onNumbering={onSupplierNumberingChange}
+          nameOf={(q) => {
+            const rv = supplierNames.values[q.id];
+            return (rv ? valueOf(rv).trim() : '') || q.supplierName;
+          }}
         />
 
         {/* ── Comparison Table (edit the line-item data the form prints) ── */}

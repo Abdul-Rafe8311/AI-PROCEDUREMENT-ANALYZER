@@ -29,6 +29,7 @@ import {
 } from './item-matching';
 import { applyItemReview, valueOf } from './item-review';
 import { buildComparisonModel, SUPPLIERS_PER_GROUP, supplierGroups } from './pr-comparison';
+import { formSuppliers } from './form-suppliers';
 import {
   type AnalysisResult,
   type ApprovalFieldValue,
@@ -185,19 +186,31 @@ const rowHeight = (texts: string[], size = FS_BODY) =>
  * a default changes there, change it here too.
  */
 export async function buildTaFormWorkbook(
-  analysis: AnalysisResult,
+  fullAnalysis: AnalysisResult,
   options?: ApprovalFormOptions & { fx: FxRates | null },
 ): Promise<import('exceljs').Workbook> {
   const roles = options?.signatureRoles?.length ? options.signatureRoles : DEFAULT_SIGNATURE_ROLES;
+  // These are all keyed by quotation id, so deriving them over the FULL set is
+  // harmless — a hidden supplier's entry is simply never looked up.
   const comments =
     options?.technicalComments ??
-    suggestTechnicalComments(analysis.prMatch, analysis.purchaseRequisition, analysis.quotations);
+    suggestTechnicalComments(fullAnalysis.prMatch, fullAnalysis.purchaseRequisition, fullAnalysis.quotations);
   const warranties =
-    options?.warranties ?? buildApprovalFields(analysis.quotations, suggestWarranties(analysis.quotations));
+    options?.warranties ?? buildApprovalFields(fullAnalysis.quotations, suggestWarranties(fullAnalysis.quotations));
   const origins =
-    options?.countriesOfOrigin ?? buildApprovalFields(analysis.quotations, suggestOrigins(analysis.quotations));
+    options?.countriesOfOrigin ??
+    buildApprovalFields(fullAnalysis.quotations, suggestOrigins(fullAnalysis.quotations));
   const fx = options?.fx ?? null;
 
+  // Hidden columns are dropped BEFORE the comparison model is built, so they take
+  // no part in the "lowest price" highlight — they are not on the page to be
+  // compared against. `displayNo` carries the reviewer's numbering choice. Shared
+  // with the PDF so the two downloads can never disagree about the columns.
+  const { analysis: shown, displayNo } = formSuppliers(fullAnalysis, {
+    hiddenSuppliers: options?.hiddenSuppliers,
+    supplierNumbering: options?.supplierNumbering,
+  });
+  const analysis = shown;
   const qs = analysis.quotations;
   const qById = new Map(qs.map((q) => [q.id, q]));
   const reviewed = applyItemReview(
@@ -240,7 +253,7 @@ export async function buildTaFormWorkbook(
     const n = group.length;
     const title =
       groups.length > 1
-        ? `Suppliers ${group[0].colIndex + 1}-${group[n - 1].colIndex + 1} of ${model.suppliers.length}`
+        ? `Suppliers ${displayNo[group[0].quotationId] ?? group[0].colIndex + 1}-${displayNo[group[n - 1].quotationId] ?? group[n - 1].colIndex + 1} of ${model.suppliers.length}`
         : 'Technical Approval Form';
     // A3 landscape, fitted to ONE page wide. The form is printed and signed round a
     // table, so it has to be legible on paper — at 12pt body text the grid no longer
@@ -328,7 +341,7 @@ export async function buildTaFormWorkbook(
       ws.getCell(bandTop, c0).value = {
         richText: [
           {
-            text: `SUPPLIER #${sup.colIndex + 1} — ${nameOf(sup.quotationId, sup.supplier)}`,
+            text: `SUPPLIER #${displayNo[sup.quotationId] ?? sup.colIndex + 1} — ${nameOf(sup.quotationId, sup.supplier)}`,
             font: { name: FONT, size: FS_SUPPLIER, bold: true, color: { argb: INK } },
           },
           {
