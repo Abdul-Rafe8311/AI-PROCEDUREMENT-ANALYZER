@@ -138,6 +138,24 @@ export default function WorkspacePage() {
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Persistence is best-effort, but its failure must not be INVISIBLE: when a
+  // session cannot be saved the workspace still works, yet nothing reaches history
+  // and a reload restores an OLDER session instead. The reviewer has to know that.
+  const [persistWarning, setPersistWarning] = useState<string | null>(null);
+
+  // ── Auto-restore guards ───────────────────────────────────────────────────
+  // The mount effect below keys on `user?.id`, which starts null and changes when
+  // Supabase auth resolves — often AFTER an upload has already been analysed. It
+  // used to call setAnalysis() unconditionally at that point, silently replacing a
+  // freshly-analysed session with whatever was newest in history: the comparison
+  // table became a different PR, and anything exported after that moment was the
+  // wrong document.
+  //
+  // Auto-restore is therefore for an EMPTY workspace only, and runs at most once
+  // per mount. Opening a session from the History menu is a deliberate act and is
+  // never blocked by either guard.
+  const autoRestoredRef = useRef(false);
+  const liveWorkRef = useRef(false);
 
   // The human's chosen supplier — overrides the AI anchor for the dashboard and
   // the TA form's Final Recommendation. AI suggests, human decides: this never
@@ -314,6 +332,10 @@ export default function WorkspacePage() {
       const items = user ? await loadUserHistory(user.id) : [];
       if (cancelled) return;
       setHistory(items);
+      // Auth resolving is a reason to refresh the history LIST, never a reason to
+      // replace what the reviewer is working on.
+      if (autoRestoredRef.current || liveWorkRef.current || analysis) return;
+      autoRestoredRef.current = true;
       const lastId =
         typeof window !== 'undefined' ? window.localStorage.getItem(LAST_ANALYSIS_KEY) : null;
       const target = items[0]?.id ?? lastId;
@@ -383,8 +405,17 @@ export default function WorkspacePage() {
       }
       setAnalysisId(id);
       return { id, docs };
-    } catch {
-      return null; // degrade silently to in-session mode
+    } catch (err) {
+      // Still degrade to in-session mode — a save failure must not cost the
+      // reviewer their analysis — but SAY SO. Silence here is what let a stale
+      // history pointer look authoritative: this run never reaches the history
+      // list, so the next reload restores somebody's older session instead.
+      console.error('[workspace] could not save this session', err);
+      setAnalysisId(null);
+      setPersistWarning(
+        'This session could not be saved. Your analysis and downloads work as normal, but it will NOT appear in history and a reload will not bring it back.',
+      );
+      return null;
     } finally {
       setUploading(false);
     }
@@ -393,7 +424,11 @@ export default function WorkspacePage() {
   async function handleAnalyze() {
     if (!files.length && !prFile) return;
     setError(null);
+    setPersistWarning(null);
     setDocs([]);
+    // From here on this workspace holds the reviewer's own work: auth resolving
+    // late must never restore an older session over the top of it.
+    liveWorkRef.current = true;
     const persisted = await persistUpload();
 
     try {
@@ -758,6 +793,14 @@ export default function WorkspacePage() {
           {error && (
             <div className="mx-auto max-w-2xl whitespace-pre-wrap rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
               {error}
+            </div>
+          )}
+
+          {/* The analysis itself succeeded — this warns that it was not SAVED, so
+              the reviewer does not count on finding it again later. */}
+          {persistWarning && (
+            <div className="mx-auto max-w-2xl whitespace-pre-wrap rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+              {persistWarning}
             </div>
           )}
 

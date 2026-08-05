@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { taFormWorkbookBuffer } from '@/lib/ta-form-excel';
+import { analysisFingerprint } from '@/lib/analysis-fingerprint';
 import type { ApprovalFormOptions } from '@/lib/approval-form-pdf';
 import type { FxRates } from '@/lib/fx-rates';
 import type { AnalysisResult } from '@/lib/workspace-types';
@@ -30,6 +31,8 @@ interface Body {
   options?: ApprovalFormOptions;
   fx?: FxRates | null;
   fileName?: string;
+  /** which analysis the CLIENT believes it is exporting — see analysis-fingerprint.ts */
+  fingerprint?: string;
 }
 
 export async function POST(req: Request) {
@@ -45,6 +48,20 @@ export async function POST(req: Request) {
     return fail(400, 'No analysis to export.', 'body.analysis.quotations was empty or missing');
   }
 
+  // The form gets signed, so a workbook built from anything other than the
+  // analysis the reviewer was looking at is a serious failure — and a silent one,
+  // since the file looks well-formed either way. The client states which analysis
+  // it believes it is exporting; if that is not what arrived, refuse rather than
+  // return a plausible wrong document.
+  const fingerprint = analysisFingerprint(analysis);
+  if (body.fingerprint && body.fingerprint !== fingerprint) {
+    return fail(
+      409,
+      'This export did not match the analysis on screen. Please try the download again.',
+      `client expected ${body.fingerprint}, body contained ${fingerprint}`,
+    );
+  }
+
   try {
     const buffer = await taFormWorkbookBuffer(analysis, { ...(body.options ?? {}), fx: body.fx ?? null });
     const safe = (body.fileName || `technical-approval-form-${new Date().toISOString().slice(0, 10)}`)
@@ -57,6 +74,9 @@ export async function POST(req: Request) {
         'Content-Disposition': `attachment; filename="${safe || 'ta-form'}.xlsx"`,
         'Content-Length': String(buffer.length),
         'Cache-Control': 'no-store',
+        // Echoed so the client can confirm what it received was built from what
+        // it sent, without opening the workbook.
+        'X-Analysis-Fingerprint': fingerprint,
       },
     });
   } catch (err) {

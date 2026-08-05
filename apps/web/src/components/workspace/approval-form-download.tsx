@@ -17,6 +17,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { cn, isChunkLoadError, STALE_BUILD_MESSAGE } from '@/lib/utils';
+import { analysisFingerprint } from '@/lib/analysis-fingerprint';
 import {
   Dialog,
   DialogContent,
@@ -472,6 +473,15 @@ export function ApprovalFormDownload({
   const hasSuggestions = Object.keys(suggestions).length > 0;
   const unreviewed = analysis.quotations.filter((q) => comments[q.id]?.aiSuggested).length;
 
+  // Which analysis these downloads are FOR. The .xlsx crosses a network boundary
+  // (ExcelJS needs Node), so the route re-derives this from the body it received
+  // and refuses on a mismatch — a signed form must never be silently wrong.
+  const fingerprint = analysisFingerprint(analysis);
+  // …and the requisition number goes in BOTH filenames, so downloads from
+  // different sessions are distinguishable in a Downloads folder.
+  const prNo = analysis.purchaseRequisition?.requestNo?.trim() ?? '';
+  const prTag = prNo ? `-PR${prNo.replace(/[^\w-]+/g, '')}` : '';
+
   async function handleDownload() {
     if (loading) return;
     setError(null);
@@ -497,7 +507,7 @@ export function ApprovalFormDownload({
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `technical-approval-form-${new Date().toISOString().slice(0, 10)}.pdf`;
+      a.download = `technical-approval-form${prTag}-${new Date().toISOString().slice(0, 10)}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -541,16 +551,27 @@ export function ApprovalFormDownload({
             currencyDisplay,
           },
           fx: items.fx,
+          // Which analysis this download is FOR. The route rebuilds the same value
+          // from the body it received and refuses on a mismatch, so a wrong-but-
+          // plausible workbook can never be produced silently.
+          fingerprint,
         }),
       });
       if (!res.ok) {
         throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${res.status}`);
       }
+      // Confirm what came back was built from what we sent, without opening it.
+      const echoed = res.headers.get('X-Analysis-Fingerprint');
+      if (echoed && echoed !== fingerprint) {
+        throw new Error('The downloaded file did not match the analysis on screen. Please try the download again.');
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `technical-approval-form-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      // The PR number goes in the filename so two downloads from different
+      // sessions are told apart in a Downloads folder without opening them.
+      a.download = `technical-approval-form${prTag}-${new Date().toISOString().slice(0, 10)}.xlsx`;
       document.body.appendChild(a);
       a.click();
       a.remove();
