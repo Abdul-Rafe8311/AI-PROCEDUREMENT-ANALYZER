@@ -3,6 +3,7 @@
 // the document — no sample/placeholder data here.
 
 import { normalizeDelivery } from './analysis-engine';
+import { splitQuoteOptions } from './quote-options';
 import {
   EXTRACTION_MODEL,
   extractJsonFromMedia,
@@ -376,6 +377,11 @@ interface LlmLineItem {
   countryOfOrigin?: string | null;
   /** delivery / lead-time stated FOR THIS LINE, verbatim ("2 weeks", "ex stock") */
   deliveryText?: string | null;
+  /** the ALTERNATIVE this line belongs to, when the quote prices the same item
+   *  several ways ("A"/"B" from an Option column, "1"/"2" from Alt rows). Null for
+   *  an ordinary line, which is part of every option. Drives the split into one
+   *  supplier column per option — see quote-options.ts */
+  optionLabel?: string | null;
 }
 
 /** Does this text mark a line as supplied free of charge? */
@@ -496,7 +502,12 @@ function normalizeSuppliers(parsed: unknown): LlmSupplier[] {
       : parsed && typeof parsed === 'object'
         ? [parsed] // single-supplier object → array of one
         : [];
-  return asArray.filter((s): s is LlmSupplier => !!s && typeof s === 'object');
+  // A quote offering several priced ALTERNATIVES for the same item becomes one
+  // supplier per option ("FAOZ …, OPTION # A" / "… # B"), so the buyer compares
+  // them side by side like any two suppliers. Ordinary quotes pass straight
+  // through untouched. This is the single choke point both parse paths share, and
+  // it runs BEFORE mapSupplier assigns ids and column positions.
+  return splitQuoteOptions(asArray.filter((s): s is LlmSupplier => !!s && typeof s === 'object'));
 }
 
 // Shared structured-extraction schema + rules. Used by BOTH the digital-text
@@ -523,8 +534,20 @@ const EXTRACTION_SYSTEM_PROMPT = [
   '                 totalPrice: number|null, category: string|null, uom: string|null,',
   '                 availableInDays: number|null, totalPriceText: string|null,',
   '                 focText: string|null, countryOfOrigin: string|null,',
-  '                 deliveryText: string|null }[]',
+  '                 deliveryText: string|null, optionLabel: string|null }[]',
   '  }[] }',
+  '',
+  'PRICING OPTIONS. A quotation sometimes prices the SAME item several ways and',
+  'lets the buyer choose — an "Option" column reading A / B, rows labelled',
+  '"Option 1" / "Option 2" / "Alternative", or the same part number repeated in a',
+  'different material, grade or brand at a different price. Capture EVERY such',
+  'alternative as its OWN line item and put its label in optionLabel ("A", "B",',
+  '"1", "2"). NEVER drop an alternative, never merge two alternatives into one',
+  'line, and never average or add their prices together — they are mutually',
+  'exclusive choices, not two things being bought. A line that is part of the',
+  'offer regardless of which option is chosen (an ordinary item, freight, a fee)',
+  'keeps optionLabel null. If the document offers no alternatives at all, every',
+  'optionLabel is null — that is the normal case.',
   '',
   'COUNTRY OF ORIGIN is a fact about the GOODS, never about the seller. It is the',
   'manufacturing / production country: "Country of Origin", "Origin", "Made in",',
@@ -1066,8 +1089,12 @@ export function quotationsFromLlmSuppliers(
   opts?: { scanned?: boolean },
 ): ExtractedQuotation[] {
   const confCap = opts?.scanned ? SCAN_CONF : undefined;
-  return suppliers.map((s, i) =>
-    mapSupplier(s, { id: `q_0_${i}`, fileName, detected, index: i, count: suppliers.length, confCap }),
+  // Same option split the live parse paths apply (see normalizeSuppliers), so this
+  // seam maps exactly what production maps. Idempotent: a supplier that has already
+  // been split carries no option labels and passes straight through.
+  const split = splitQuoteOptions(suppliers);
+  return split.map((s, i) =>
+    mapSupplier(s, { id: `q_0_${i}`, fileName, detected, index: i, count: split.length, confCap }),
   );
 }
 
