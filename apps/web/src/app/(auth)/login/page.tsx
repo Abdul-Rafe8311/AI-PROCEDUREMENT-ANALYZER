@@ -13,7 +13,7 @@ function LoginForm() {
   const { signIn, ready, user } = useAuth();
   const router = useRouter();
   const params = useSearchParams();
-  const redirect = params.get('redirect') || '/workspace';
+  const redirect = params?.get('redirect') || '/workspace';
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
