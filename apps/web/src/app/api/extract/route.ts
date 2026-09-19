@@ -10,6 +10,30 @@ function asFile(entry: FormDataEntryValue | null): File | null {
     : null;
 }
 
+// A single base64-encoded attachment, as a caller with no multipart/form-data
+// support (e.g. workflow code in a sandboxed runtime with no Buffer/FormData —
+// see the email-intake automation) can send it instead.
+interface Base64File {
+  name?: string;
+  filename?: string;
+  type?: string;
+  mimeType?: string;
+  /** standard (not url-safe) base64, no data: prefix */
+  base64: string;
+}
+
+function fileFromBase64(f: Base64File | undefined | null, fallbackName: string): File | null {
+  if (!f?.base64) return null;
+  try {
+    const buffer = Buffer.from(f.base64, 'base64');
+    return new File([buffer], f.name || f.filename || fallbackName, {
+      type: f.type || f.mimeType || 'application/octet-stream',
+    });
+  } catch {
+    return null;
+  }
+}
+
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
@@ -31,35 +55,59 @@ function fail(status: number, message: string, detail?: string) {
 // Never substitutes sample data — returns a clear, specific error on failure.
 export async function POST(req: Request) {
   const contentType = req.headers.get('content-type') ?? '';
-  if (!contentType.includes('multipart/form-data')) {
-    return fail(400, 'Upload must be multipart/form-data.', `got content-type: "${contentType}"`);
-  }
+  const isJson = contentType.includes('application/json');
 
-  let form: FormData;
-  try {
-    form = await req.formData();
-  } catch (err) {
-    return fail(400, 'Could not read the uploaded form data.', (err as Error).message);
-  }
+  let files: File[];
+  let prFile: File | null;
 
-  const entries = form.getAll('files');
-  // Optional second document type: the company's own Purchase Requisition (PR).
-  const prFile = asFile(form.get('pr'));
-  if (entries.length === 0 && !prFile) {
-    return fail(
-      400,
-      'No file received.',
-      `form fields present: [${[...form.keys()].join(', ') || 'none'}] — expected field "files" (and/or "pr")`,
-    );
-  }
+  if (isJson) {
+    // JSON + base64 path — for callers with no multipart/form-data support
+    // (e.g. a fastn workflow sandbox with no Buffer/FormData global). Same
+    // downstream pipeline as the multipart path below.
+    let body: { files?: Base64File[]; pr?: Base64File };
+    try {
+      body = await req.json();
+    } catch (err) {
+      return fail(400, 'Could not read the JSON body.', (err as Error).message);
+    }
+    const entries = Array.isArray(body.files) ? body.files : [];
+    files = entries
+      .map((f, i) => fileFromBase64(f, `upload-${i + 1}`))
+      .filter((f): f is File => f !== null);
+    prFile = fileFromBase64(body.pr, 'purchase-requisition');
+    if (files.length === 0 && !prFile) {
+      return fail(400, 'No file received.', 'expected JSON field "files" (array) and/or "pr", each with a "base64" string');
+    }
+  } else if (contentType.includes('multipart/form-data')) {
+    let form: FormData;
+    try {
+      form = await req.formData();
+    } catch (err) {
+      return fail(400, 'Could not read the uploaded form data.', (err as Error).message);
+    }
 
-  const files = entries.map(asFile).filter((f): f is File => f !== null);
-  if (files.length === 0 && !prFile) {
-    return fail(
-      400,
-      'No valid file in the upload.',
-      `"files" entries were not file-like: [${entries.map((e) => typeof e).join(', ')}]`,
-    );
+    const entries = form.getAll('files');
+    // Optional second document type: the company's own Purchase Requisition (PR).
+    const prFileEntry = asFile(form.get('pr'));
+    if (entries.length === 0 && !prFileEntry) {
+      return fail(
+        400,
+        'No file received.',
+        `form fields present: [${[...form.keys()].join(', ') || 'none'}] — expected field "files" (and/or "pr")`,
+      );
+    }
+
+    files = entries.map(asFile).filter((f): f is File => f !== null);
+    prFile = prFileEntry;
+    if (files.length === 0 && !prFile) {
+      return fail(
+        400,
+        'No valid file in the upload.',
+        `"files" entries were not file-like: [${entries.map((e) => typeof e).join(', ')}]`,
+      );
+    }
+  } else {
+    return fail(400, 'Upload must be multipart/form-data or application/json.', `got content-type: "${contentType}"`);
   }
 
   try {
