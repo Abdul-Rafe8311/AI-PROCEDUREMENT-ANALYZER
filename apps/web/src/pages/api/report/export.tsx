@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import type { NextApiRequest, NextApiResponse } from 'next';
 import { pdf } from '@react-pdf/renderer';
 import { applyFxRates } from '@/lib/analysis-engine';
 import { ReportDocument } from '@/lib/report-pdf-document';
@@ -11,20 +11,26 @@ import type { AnalysisResult } from '@/lib/workspace-types';
 // for callers with no browser — e.g. an automated pipeline that receives the
 // analysis JSON from /api/extract and needs the PDF back to attach to an email.
 //
+// This is a PAGES ROUTER route (not an App Router Route Handler) on purpose:
+// see report-pdf-document.tsx's top comment for why @react-pdf/renderer's
+// reconciler breaks under App Router's RSC module condition.
+//
 // No FX lookup is performed here: fx travels in the body (optional), exactly
 // like /api/ta-form/export-excel, and a missing rate degrades to "amounts in
-// each supplier's own currency" rather than failing. Node runtime — react-pdf
-// needs it.
+// each supplier's own currency" rather than failing.
 
-export const runtime = 'nodejs';
-export const maxDuration = 30;
+export const config = {
+  api: {
+    bodyParser: { sizeLimit: '15mb' },
+  },
+};
 
 const isDev = process.env.NODE_ENV !== 'production';
 const log = (...args: unknown[]) => console.error('[api/report/export]', ...args);
 
-function fail(status: number, message: string, detail?: string) {
+function fail(res: NextApiResponse, status: number, message: string, detail?: string) {
   log(`${status}: ${message}${detail ? ` — ${detail}` : ''}`);
-  return NextResponse.json({ error: message, ...(isDev && detail ? { detail } : {}) }, { status });
+  res.status(status).json({ error: message, ...(isDev && detail ? { detail } : {}) });
 }
 
 interface Body {
@@ -33,17 +39,16 @@ interface Body {
   fileName?: string;
 }
 
-export async function POST(req: Request) {
-  let body: Body;
-  try {
-    body = await req.json();
-  } catch (err) {
-    return fail(400, 'Could not read the request body.', (err as Error).message);
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return fail(res, 405, 'Method not allowed.');
   }
 
+  const body = req.body as Body;
   const analysis = body?.analysis;
   if (!analysis?.quotations?.length) {
-    return fail(400, 'No analysis to export.', 'body.analysis.quotations was empty or missing');
+    return fail(res, 400, 'No analysis to export.', 'body.analysis.quotations was empty or missing');
   }
 
   try {
@@ -51,7 +56,7 @@ export async function POST(req: Request) {
     const withFx = applyFxRates(analysis, fx);
 
     const instance = pdf(<ReportDocument analysis={withFx} fx={fx} />);
-    // In Node, toBuffer() resolves to a Readable stream (despite the name) —
+    // toBuffer() resolves to a Readable stream in Node (despite the name) —
     // collect it into an actual Buffer before returning.
     const stream = await instance.toBuffer();
     const chunks: Buffer[] = [];
@@ -69,24 +74,21 @@ export async function POST(req: Request) {
     // sandboxed runtime whose fetch() exposes no arrayBuffer()/blob()) asks
     // for base64-in-JSON instead — see /api/extract's JSON upload path and
     // /api/ta-form/export-excel's matching Accept: application/json branch.
-    if (req.headers.get('accept')?.includes('application/json')) {
-      return NextResponse.json({
+    if (req.headers.accept?.includes('application/json')) {
+      return res.status(200).json({
         fileName: `${safe || 'procurement-report'}.pdf`,
         contentType,
         base64: buffer.toString('base64'),
       });
     }
 
-    return new NextResponse(new Uint8Array(buffer), {
-      status: 200,
-      headers: {
-        'Content-Type': contentType,
-        'Content-Disposition': `attachment; filename="${safe || 'procurement-report'}.pdf"`,
-        'Content-Length': String(buffer.length),
-        'Cache-Control': 'no-store',
-      },
-    });
+    res.status(200);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${safe || 'procurement-report'}.pdf"`);
+    res.setHeader('Content-Length', String(buffer.length));
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(buffer);
   } catch (err) {
-    return fail(500, 'Could not build the report PDF.', (err as Error).stack ?? (err as Error).message);
+    fail(res, 500, 'Could not build the report PDF.', (err as Error).stack ?? (err as Error).message);
   }
 }

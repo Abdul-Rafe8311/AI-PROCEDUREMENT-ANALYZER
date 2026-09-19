@@ -1,9 +1,18 @@
-// Shared, isomorphic (client + server) React-PDF document for the Procurement
-// Analysis Report. Split out of report-pdf.tsx (which is 'use client' and keeps
-// @react-pdf/renderer out of the main browser bundle) so the SAME document can
-// also be rendered server-side, in a route, for automated delivery (e.g. an
-// email-driven pipeline that never touches the browser). No 'use client' here —
-// this file must be importable from a Node route handler.
+// Shared React-PDF document for the Procurement Analysis Report. Split out of
+// report-pdf.tsx (which stays 'use client' and keeps @react-pdf/renderer out
+// of the main browser bundle) so the SAME document can also be rendered from
+// the automated-delivery endpoint at pages/api/report/export.ts.
+//
+// That endpoint is a Pages Router API route, not an App Router Route Handler,
+// specifically because of this component: App Router compiles any module
+// reachable from src/app/ under the RSC ("react-server") condition unless it
+// is 'use client', and 'use client' exports become inert "client references"
+// that server code is forbidden to call directly — neither state lets a route
+// handler actually construct <ReportDocument /> and hand it to @react-pdf's
+// reconciler (it throws React error #31, "object with keys {$$typeof, type,
+// key, props, ...} is not a valid element"). Pages Router has no RSC
+// condition at all, so this plain (undirected) component works there exactly
+// as it does in the browser bundle.
 
 import {
   Document,
