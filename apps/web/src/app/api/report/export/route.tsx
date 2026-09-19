@@ -63,10 +63,24 @@ export async function POST(req: Request) {
     const safe = (body.fileName || `procurement-report-${new Date().toISOString().slice(0, 10)}`)
       .replace(/[^\w.-]+/g, '-')
       .replace(/^-+|-+$/g, '');
+    const contentType = 'application/pdf';
+
+    // A caller that cannot read a binary response (e.g. workflow code in a
+    // sandboxed runtime whose fetch() exposes no arrayBuffer()/blob()) asks
+    // for base64-in-JSON instead — see /api/extract's JSON upload path and
+    // /api/ta-form/export-excel's matching Accept: application/json branch.
+    if (req.headers.get('accept')?.includes('application/json')) {
+      return NextResponse.json({
+        fileName: `${safe || 'procurement-report'}.pdf`,
+        contentType,
+        base64: buffer.toString('base64'),
+      });
+    }
+
     return new NextResponse(new Uint8Array(buffer), {
       status: 200,
       headers: {
-        'Content-Type': 'application/pdf',
+        'Content-Type': contentType,
         'Content-Disposition': `attachment; filename="${safe || 'procurement-report'}.pdf"`,
         'Content-Length': String(buffer.length),
         'Cache-Control': 'no-store',

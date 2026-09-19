@@ -67,10 +67,25 @@ export async function POST(req: Request) {
     const safe = (body.fileName || `technical-approval-form-${new Date().toISOString().slice(0, 10)}`)
       .replace(/[^\w.-]+/g, '-')
       .replace(/^-+|-+$/g, '');
+    const contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+    // A caller that cannot read a binary response (e.g. workflow code in a
+    // sandboxed runtime whose fetch() exposes no arrayBuffer()/blob()) asks
+    // for base64-in-JSON instead of the raw file — see /api/extract's JSON
+    // path for the matching upload-side accommodation.
+    if (req.headers.get('accept')?.includes('application/json')) {
+      return NextResponse.json({
+        fileName: `${safe || 'ta-form'}.xlsx`,
+        contentType,
+        base64: buffer.toString('base64'),
+        analysisFingerprint: fingerprint,
+      });
+    }
+
     return new NextResponse(new Uint8Array(buffer), {
       status: 200,
       headers: {
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Type': contentType,
         'Content-Disposition': `attachment; filename="${safe || 'ta-form'}.xlsx"`,
         'Content-Length': String(buffer.length),
         'Cache-Control': 'no-store',
