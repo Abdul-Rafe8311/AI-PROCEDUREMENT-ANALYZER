@@ -65,7 +65,7 @@ graph TD
     | `extract` | `apikey` + quota (AD-5) |
     | `chat`, `doc-answer` | `feature:chat` |
     | `tender-sheet/fill`, `tender-sheet/export` | `feature:tender_sheet` |
-    | `ta-form/export-excel` | `jwt` |
+    | `ta-form/export-excel` | interim `public` (Fastn calls it unauthenticated); `apikey` from Story 2.1 |
     | `approve` GET, `dashboard` GET | `token-link` (unguessable emailed token, unchanged) [ADOPTED] |
     | `dashboard` POST (Fastn) | `token-link` unchanged in v1 (see Deferred) |
     | `fx`, `intake` | `public` |
