@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Check, Lock } from 'lucide-react';
 import { apiFetch } from '@/lib/api-fetch';
 import { useAuth } from '@/lib/auth-context';
@@ -9,6 +10,7 @@ import { formatQuotaDate } from '@/lib/entitlements/quota-window';
 import { comparisonRows, planColumns, PLAN_NAMES, type Cell, type PlanPrices } from '@/lib/plan-matrix';
 import { planNotice } from '@/lib/plan-notice';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -137,6 +139,14 @@ export function PlansView() {
       {notice && (
         <p role="status" className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm">
           {notice.text}
+          {notice.kind === 'ending' && current !== 'free' && (
+            <>
+              {' '}
+              <Link href={`/plans/pay?plan=${current}`} className="font-medium underline underline-offset-2">
+                Renew {PLAN_NAMES[current]}
+              </Link>
+            </>
+          )}
         </p>
       )}
 
@@ -163,6 +173,15 @@ export function PlansView() {
                     <Flag on={c.tender} label="Tender sheet" />
                   </li>
                 </ul>
+                {isCurrent ? (
+                  <Button type="button" variant="outline" disabled className="min-h-[44px] w-full">
+                    Current plan
+                  </Button>
+                ) : c.id !== 'free' ? (
+                  <Button asChild variant="outline" className="min-h-[44px] w-full">
+                    <Link href={`/plans/pay?plan=${c.id}`}>Choose {c.name}</Link>
+                  </Button>
+                ) : null}
               </CardContent>
             </Card>
           );

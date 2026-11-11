@@ -2,6 +2,7 @@
 export const PLAN_IDS = ['free', 'plus', 'pro', 'max'] as const;
 export type PlanId = (typeof PLAN_IDS)[number];
 export type PaidPlanId = Exclude<PlanId, 'free'>;
+export const PAID_PLAN_IDS: readonly PaidPlanId[] = ['plus', 'pro', 'max'];
 
 export const PLAN_RANK: Record<PlanId, number> = { free: 0, plus: 1, pro: 2, max: 3 };
 
