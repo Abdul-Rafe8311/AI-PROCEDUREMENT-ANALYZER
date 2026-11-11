@@ -3,6 +3,8 @@
 // gracefully and the comparison chat keeps working.
 
 import { apiFetch } from './api-fetch';
+import { parsePlanRequired } from './feature-lock';
+import { showFeatureLock } from './feature-lock-store';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
 
@@ -175,6 +177,8 @@ export async function answerFromChunks(
       body: JSON.stringify({ question, fileName, chunks }),
     });
     if (!res.ok) {
+      const feature = parsePlanRequired(res.status, await res.json().catch(() => null));
+      if (feature) showFeatureLock(feature);
       console.warn(`[rag] answerFromChunks HTTP ${res.status} — falling back to raw passage.`);
       return null;
     }

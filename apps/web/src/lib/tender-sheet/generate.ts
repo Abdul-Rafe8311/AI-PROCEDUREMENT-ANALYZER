@@ -9,6 +9,7 @@
 
 import type { AnalysisResult } from '../workspace-types';
 import { commercialAnswersFromQuotation } from './extract';
+import { PlanRequiredError, parsePlanRequired } from '../feature-lock';
 import { seedTenderTemplate } from './seed';
 import { apiFetch } from '../api-fetch';
 import { mergeAiAnswers, type TenderAnswers, type TenderSheet } from './types';
@@ -56,13 +57,20 @@ export async function generateTenderSheet(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ template, quotation: q }),
       });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const feature = parsePlanRequired(res.status, body);
+        if (feature) throw new PlanRequiredError(feature);
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
       const { answers: next } = (await res.json()) as { answers: TenderAnswers };
       if (next && Object.keys(next).length) {
         filled += Object.keys(next).length;
         answers = mergeAiAnswers(answers, next);
       }
     } catch (err) {
+      // A locked plan is not a per-supplier failure: stop and let the panel show the dialog.
+      if (err instanceof PlanRequiredError) throw err;
       // One supplier failing must never lose the others' work.
       // eslint-disable-next-line no-console
       console.error(`[tender-sheet] fill failed for ${q.supplierName}`, err);

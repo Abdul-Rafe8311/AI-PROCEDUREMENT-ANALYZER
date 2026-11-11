@@ -12,6 +12,10 @@ import { TenderSheetDialog } from './tender-sheet-dialog';
 import type { TenderSheet } from '@/lib/tender-sheet/types';
 import type { AnalysisResult } from '@/lib/workspace-types';
 import { apiFetch } from '@/lib/api-fetch';
+import { useEntitlements } from '@/lib/use-entitlements';
+import { PlanRequiredError, isFeatureLocked, parsePlanRequired } from '@/lib/feature-lock';
+import { showFeatureLock } from '@/lib/feature-lock-store';
+import { FeatureLockDialog, LockedFeatureButton } from './feature-lock-dialog';
 
 export function TenderSheetPanel({
   analysis,
@@ -26,6 +30,10 @@ export function TenderSheetPanel({
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+
+  const [lockOpen, setLockOpen] = useState(false);
+  const { data: entitlements } = useEntitlements();
+  const locked = isFeatureLocked(entitlements?.plan, 'tender_sheet');
 
   const hasPr = !!analysis.purchaseRequisition?.items.length;
 
@@ -66,7 +74,8 @@ export function TenderSheetPanel({
           .join(' '),
       );
     } catch (err) {
-      setError((err as Error).message || 'Could not build the tender sheet.');
+      if (err instanceof PlanRequiredError) showFeatureLock(err.feature);
+      else setError((err as Error).message || 'Could not build the tender sheet.');
     } finally {
       setBusy(null);
       setProgress(null);
@@ -83,7 +92,12 @@ export function TenderSheetPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sheet, fileName: `tender-comparative-${sheet.template.prNumber ?? ''}` }),
       });
-      if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${res.status}`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        const feature = parsePlanRequired(res.status, body);
+        if (feature) throw new PlanRequiredError(feature);
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -94,7 +108,8 @@ export function TenderSheetPanel({
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     } catch (err) {
-      setError((err as Error).message || 'Could not download the sheet.');
+      if (err instanceof PlanRequiredError) showFeatureLock(err.feature);
+      else setError((err as Error).message || 'Could not download the sheet.');
     } finally {
       setBusy(null);
     }
@@ -120,6 +135,11 @@ export function TenderSheetPanel({
         <p className="text-sm text-muted-foreground">
           Upload the company Purchase Requisition to build a tender sheet — its items are the sheet&apos;s rows.
         </p>
+      ) : locked ? (
+        <div>
+          <LockedFeatureButton feature="tender_sheet" label="Generate Sheet" onOpen={() => setLockOpen(true)} />
+          <FeatureLockDialog feature="tender_sheet" open={lockOpen} onOpenChange={setLockOpen} />
+        </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
           <button

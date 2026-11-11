@@ -6,6 +6,9 @@ import { Loader2, MessageSquare, SendHorizonal, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { AnalysisResult, ChatMessage } from '@/lib/workspace-types';
 import { ChatMarkdown } from './chat-markdown';
+import { useEntitlements } from '@/lib/use-entitlements';
+import { isFeatureLocked } from '@/lib/feature-lock';
+import { FeatureLockDialog, LockedFeatureButton } from './feature-lock-dialog';
 
 // Lazy-load charts (recharts is heavy) — matches the dashboard's chart loading.
 const ChatChart = dynamic(() => import('./chat-chart').then((m) => m.ChatChart), { ssr: false });
@@ -31,7 +34,10 @@ export function ChatPanel({
   analysis: AnalysisResult | null;
 }) {
   const [input, setInput] = useState('');
+  const [lockOpen, setLockOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const { data: entitlements } = useEntitlements();
+  const locked = isFeatureLocked(entitlements?.plan, 'chat');
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -43,6 +49,18 @@ export function ChatPanel({
     onSend(value);
     setInput('');
   };
+
+  if (locked) {
+    return (
+      <div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-5 shadow-sm">
+        <p className="text-sm text-muted-foreground">Chat with your quotations is part of the Plus plan.</p>
+        <div>
+          <LockedFeatureButton feature="chat" label="Chat with your quotations" onOpen={() => setLockOpen(true)} />
+        </div>
+        <FeatureLockDialog feature="chat" open={lockOpen} onOpenChange={setLockOpen} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col rounded-2xl border border-border bg-card shadow-sm">

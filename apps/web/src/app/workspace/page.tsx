@@ -43,6 +43,9 @@ import {
 } from '@/lib/rag-client';
 import { type AnalysisResult, CHART_METRICS, type ChartDirective, type ChatMessage } from '@/lib/workspace-types';
 import { apiFetch } from '@/lib/api-fetch';
+import { parsePlanRequired } from '@/lib/feature-lock';
+import { showFeatureLock } from '@/lib/feature-lock-store';
+import { FeatureLockHost } from '@/components/workspace/feature-lock-dialog';
 
 // Points the next page load at the session to restore (analysis + chat + charts).
 const LAST_ANALYSIS_KEY = 'workspace:lastAnalysisId';
@@ -686,6 +689,11 @@ export default function WorkspacePage() {
         }),
       });
       const data = await res.json();
+      const locked = parsePlanRequired(res.status, data);
+      if (locked) {
+        showFeatureLock(locked);
+        return;
+      }
       const answer: string = data?.answer ?? 'Sorry, I could not answer that.';
       const notice: string = data?.notice ? `\n\n⚠️ ${data.notice}` : '';
       const chart: ChartDirective | undefined =
@@ -850,6 +858,7 @@ export default function WorkspacePage() {
 
           {docs.length > 0 && <DeepSearchStatus docs={docs} />}
 
+          <FeatureLockHost />
           <ChatPanel
             messages={messages}
             onSend={handleSend}
