@@ -1,6 +1,7 @@
-// guard: jwt
+// guard: public
+// Interim: the Fastn intake workflow calls this route with no credentials. Story 2.1 makes it
+// `apikey` (JWT or X-Api-Key) so Fastn can authenticate; do not make it `jwt`-only before then.
 import { NextResponse } from 'next/server';
-import { requirePrincipal } from '@/lib/server/guard';
 import { taFormWorkbookBuffer } from '@/lib/ta-form-excel';
 import { analysisFingerprint } from '@/lib/analysis-fingerprint';
 import type { ApprovalFormOptions } from '@/lib/approval-form-pdf';
@@ -38,9 +39,6 @@ interface Body {
 }
 
 export async function POST(req: Request) {
-  const g = await requirePrincipal(req);
-  if (!g.ok) return g.response;
-
   let body: Body;
   try {
     body = await req.json();

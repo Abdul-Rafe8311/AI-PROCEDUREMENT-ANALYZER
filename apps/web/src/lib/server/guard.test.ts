@@ -112,3 +112,12 @@ test('partial Supabase config gives 503 even with ALLOW_DEMO; demo only when bot
   assert.ok(demo.ok);
   if (demo.ok) assert.equal(demo.principal.demo, true);
 });
+
+test('production never returns a demo principal even if config wrongly says allowDemo', async () => {
+  const r = await requirePrincipal(req(), {
+    config: () => ({ production: true, allowDemo: true, supabaseUrl: null, supabaseAnonKey: null }),
+    verify: never,
+  });
+  assert.ok(!r.ok);
+  if (!r.ok) assert.equal(r.response.status, 503);
+});

@@ -33,3 +33,9 @@ test('allowDemo is true only for ALLOW_DEMO=true, in any NODE_ENV', () => {
   assert.equal(loadConfig({ ALLOW_DEMO: '1' }).allowDemo, false);
   assert.equal(loadConfig({ ALLOW_DEMO: 'true' }).allowDemo, true);
 });
+
+test('production rejects ALLOW_DEMO=true even with Supabase configured', () => {
+  const env = { NODE_ENV: 'production', NEXT_PUBLIC_SUPABASE_URL: 'https://x.supabase.co', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'k' };
+  assert.throws(() => loadConfig({ ...env, ALLOW_DEMO: 'true' }), ConfigError);
+  assert.throws(() => loadConfig({ NODE_ENV: 'production', ALLOW_DEMO: 'true' }), ConfigError);
+});

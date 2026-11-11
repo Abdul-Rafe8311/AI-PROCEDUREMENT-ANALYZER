@@ -52,7 +52,7 @@ export async function requirePrincipal(req: Request, deps: GuardDeps = {}): Prom
 
   const hasUrl = Boolean(cfg.supabaseUrl);
   const hasKey = Boolean(cfg.supabaseAnonKey);
-  if (!hasUrl && !hasKey && cfg.allowDemo) {
+  if (!hasUrl && !hasKey && cfg.allowDemo && !cfg.production) {
     return { ok: true, principal: { ...DEMO_PRINCIPAL } };
   }
   if (!hasUrl || !hasKey) {

@@ -173,7 +173,7 @@ So that no route trusts a plan, user id or admin flag sent by the browser.
 **Given** every `route.ts` under `apps/web/src/app/api`
 **When** `npm test` runs
 **Then** each carries a `// guard: <class>` marker from the valid AD-1 class set
-**And** `ta-form/export-excel` is `jwt`, `approve`/`dashboard` are `token-link`, `fx`/`intake` are `public`
+**And** `ta-form/export-excel` is interim `public` (the Fastn intake workflow calls it unauthenticated; Story 2.1 moves it to `apikey`), `approve`/`dashboard` are `token-link`, `fx`/`intake` are `public`
 **And** `extract`, `chat`, `doc-answer` and `tender-sheet/*` keep their current behavior and carry an interim `public` marker that Stories 2.1 (`apikey`) and 3.1 (`feature:chat` / `feature:tender_sheet`) replace
 **And** the test fails if a marker is missing, is not a valid class, or disagrees with the helper actually called.
 
@@ -334,6 +334,11 @@ So that email-intake uploads are attributed to a user and counted against their 
 **When** called with a valid `X-Api-Key` or a valid JWT
 **Then** the principal is `{ userId, via: 'api_key' | 'jwt' }`
 **And** a revoked or unknown key returns 401 `UNAUTHENTICATED`.
+
+**Given** `/api/ta-form/export-excel`, which the Fastn intake workflow (`wf_0b74a5ed061d`) calls with no credentials and which Story 1.1 leaves as interim `public`
+**When** this story ships
+**Then** the route is marked `apikey` and accepts a valid JWT or `X-Api-Key`, so Fastn can call it once the workflow sends the key
+**And** the route is switched only after the Fastn workflow sends `X-Api-Key` on that call (rollout step 3), never before.
 
 **Given** `X-Api-Key` sent to any non-`apikey` route
 **When** the route runs

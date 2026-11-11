@@ -64,6 +64,7 @@ export function loadConfig(env: Env): ServerConfig {
     cronSecret: str(env.CRON_SECRET),
   };
   if (production) {
+    if (cfg.allowDemo) errors.push('ALLOW_DEMO must not be set in production');
     if (!cfg.supabaseUrl) errors.push('NEXT_PUBLIC_SUPABASE_URL is missing');
     if (!cfg.supabaseAnonKey) errors.push('NEXT_PUBLIC_SUPABASE_ANON_KEY is missing');
     if (errors.length) throw new ConfigError(errors.join('; '));

@@ -15,7 +15,7 @@ function routes(dir: string): string[] {
 }
 
 const REQUIRED: Record<string, string> = {
-  'ta-form/export-excel': 'jwt',
+  'ta-form/export-excel': 'public',
   approve: 'token-link',
   dashboard: 'token-link',
   fx: 'public',
