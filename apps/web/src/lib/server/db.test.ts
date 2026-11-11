@@ -60,37 +60,58 @@ test('userExists handles found, 404 and failure', async () => {
   await assert.rejects(() => userExists('u', mk({ data: null, error: { status: 500 } })), DbUnavailableError);
 });
 
-test('listUsersWithPlans filters by email, computes plan with one batched query', async () => {
+function listClient(users: unknown[], periods: unknown[], audit: unknown[], calls: unknown[][] = []) {
+  const mk = (table: string) => {
+    const q: Record<string, unknown> = {};
+    for (const m of ['select', 'in', 'is', 'gte', 'eq', 'order', 'limit']) {
+      q[m] = (...a: unknown[]) => {
+        calls.push([m, ...a]);
+        return m === 'limit' ? Promise.resolve({ data: table === 'audit_log' ? audit : periods, error: null }) : q;
+      };
+    }
+    return q;
+  };
+  return {
+    auth: { admin: { listUsers: async () => ({ data: { users }, error: null }) } },
+    from: (t: string) => (calls.push(['from', t]), mk(t)),
+  } as never;
+}
+
+test('listUsersWithPlans filters by email, computes plan and lastChange with batched queries', async () => {
   const calls: unknown[][] = [];
-  const q: Record<string, unknown> = {};
-  for (const m of ['select', 'in', 'is', 'gte', 'limit']) {
-    q[m] = (...a: unknown[]) => {
-      calls.push([m, ...a]);
-      return m === 'limit'
-        ? Promise.resolve({ data: [{ user_id: 'u1', plan: 'pro', starts_at: '2026-11-01T00:00:00Z', ends_at: '2026-12-01T00:00:00Z', voided_at: null }], error: null })
-        : q;
-    };
-  }
-  const client = {
-    auth: { admin: { listUsers: async () => ({ data: { users: [
+  const client = listClient(
+    [
       { id: 'u1', email: 'Najran@x.test', created_at: 'c1' },
       { id: 'u2', email: 'other@x.test', created_at: 'c2' },
-    ] }, error: null }) } },
-    from: (t: string) => (calls.push(['from', t]), q),
-  } as never;
+    ],
+    [{ user_id: 'u1', plan: 'pro', starts_at: '2026-11-01T00:00:00Z', ends_at: '2026-12-01T00:00:00Z', voided_at: null }],
+    [
+      { actor_email: 'boss@x.test', subject_user_id: 'u1', detail: { plan: 'pro', ends_at: '2026-12-01T00:00:00Z' }, created_at: '2026-11-02T00:00:00Z' },
+      { actor_email: 'old@x.test', subject_user_id: 'u1', detail: { plan: 'plus', ends_at: '2026-10-01T00:00:00Z' }, created_at: '2026-10-02T00:00:00Z' },
+    ],
+    calls,
+  );
   const out = await listUsersWithPlans('naj', NOW, client);
-  assert.deepEqual(out, [{ id: 'u1', email: 'Najran@x.test', createdAt: 'c1', plan: 'pro', expiresAt: '2026-12-01T00:00:00.000Z' }]);
-  assert.equal(calls.filter((c) => c[0] === 'from').length, 1);
-  assert.deepEqual(calls.find((c) => c[0] === 'in'), ['in', 'user_id', ['u1']]);
+  assert.deepEqual(out, [
+    {
+      id: 'u1', email: 'Najran@x.test', createdAt: 'c1', plan: 'pro', expiresAt: '2026-12-01T00:00:00.000Z',
+      lastChange: { adminEmail: 'boss@x.test', at: '2026-11-02T00:00:00.000Z', plan: 'pro', endsAt: '2026-12-01T00:00:00.000Z' },
+    },
+  ]);
+  assert.deepEqual(calls.filter((c) => c[0] === 'from'), [['from', 'plan_periods'], ['from', 'audit_log']]);
+  assert.deepEqual(calls.find((c) => c[0] === 'eq'), ['eq', 'action', 'admin_set_plan']);
+  assert.deepEqual(calls.find((c) => c[0] === 'order'), ['order', 'created_at', { ascending: false }]);
+  assert.ok(calls.some((c) => c[0] === 'in' && c[1] === 'subject_user_id' && JSON.stringify(c[2]) === '["u1"]'));
+});
+
+test('listUsersWithPlans: user without audit row has lastChange null', async () => {
+  const out = await listUsersWithPlans('', NOW, listClient([{ id: 'u1', email: 'a@x.test' }], [], []));
+  assert.equal(out[0].lastChange, null);
 });
 
 test('listUsersWithPlans caps at 50 and errors map to DbUnavailableError', async () => {
   const users = Array.from({ length: 80 }, (_, i) => ({ id: `u${i}`, email: `a${i}@x.test` }));
-  const q: Record<string, unknown> = {};
-  for (const m of ['select', 'in', 'is', 'gte']) q[m] = () => q;
-  q.limit = () => Promise.resolve({ data: [], error: null });
-  const client = { auth: { admin: { listUsers: async () => ({ data: { users }, error: null }) } }, from: () => q } as never;
-  assert.equal((await listUsersWithPlans('', NOW, client)).length, 50);
+  assert.equal((await listUsersWithPlans('', NOW, listClient(users, [], []))).length, 50);
   const bad = { auth: { admin: { listUsers: async () => ({ data: null, error: { message: 'x' } }) } } } as never;
   await assert.rejects(() => listUsersWithPlans('', NOW, bad), DbUnavailableError);
 });

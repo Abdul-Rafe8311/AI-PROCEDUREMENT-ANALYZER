@@ -95,6 +95,14 @@ export interface AdminUserRow {
   createdAt: string | null;
   plan: string;
   expiresAt: string | null;
+  lastChange: AdminLastChange | null;
+}
+
+export interface AdminLastChange {
+  adminEmail: string | null;
+  at: string;
+  plan: string | null;
+  endsAt: string | null;
 }
 
 const MAX_USERS = 50;
@@ -143,6 +151,28 @@ export async function listUsersWithPlans(
     });
     byUser.set(r.user_id as string, list);
   }
+
+  const ids = matched.map((u) => u.id);
+  const { data: audit, error: auditErr } = await client
+    .from('audit_log')
+    .select('actor_email, subject_user_id, detail, created_at')
+    .eq('action', 'admin_set_plan')
+    .in('subject_user_id', ids)
+    .order('created_at', { ascending: false })
+    .limit(5000);
+  if (auditErr) throw new DbUnavailableError('audit_log query failed');
+  const lastBy = new Map<string, AdminLastChange>();
+  for (const a of audit ?? []) {
+    const uid = a.subject_user_id as string;
+    if (lastBy.has(uid)) continue;
+    const d = (a.detail ?? {}) as { plan?: unknown; ends_at?: unknown };
+    lastBy.set(uid, {
+      adminEmail: (a.actor_email as string | null) ?? null,
+      at: new Date(a.created_at as string).toISOString(),
+      plan: typeof d.plan === 'string' ? d.plan : null,
+      endsAt: typeof d.ends_at === 'string' ? new Date(d.ends_at).toISOString() : null,
+    });
+  }
   return matched.map((u) => {
     const periods = byUser.get(u.id) ?? [];
     const active = activePeriod(periods, now);
@@ -152,6 +182,7 @@ export async function listUsersWithPlans(
       createdAt: u.created_at ?? null,
       plan: effectivePlan(periods, now),
       expiresAt: active ? new Date(active.endsAt).toISOString() : null,
+      lastChange: lastBy.get(u.id) ?? null,
     };
   });
 }

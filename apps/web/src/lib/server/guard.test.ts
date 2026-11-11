@@ -181,3 +181,15 @@ test('requireAdmin: demo principal allowed', async () => {
   });
   assert.ok(r.ok);
 });
+
+import { isAdminPrincipal, DEMO_PRINCIPAL } from './guard';
+
+test('isAdminPrincipal: needs email and id, case-insensitive, never demo', () => {
+  const cfg = { adminEmails: ['boss@x.test'], adminUserIds: ['admin-1'] };
+  assert.equal(isAdminPrincipal({ userId: 'admin-1', email: 'BOSS@x.test', via: 'jwt' }, cfg), true);
+  assert.equal(isAdminPrincipal({ userId: 'admin-1', email: 'eve@x.test', via: 'jwt' }, cfg), false);
+  assert.equal(isAdminPrincipal({ userId: 'u2', email: 'boss@x.test', via: 'jwt' }, cfg), false);
+  assert.equal(isAdminPrincipal({ userId: 'admin-1', email: null, via: 'jwt' }, cfg), false);
+  assert.equal(isAdminPrincipal(DEMO_PRINCIPAL, cfg), false);
+  assert.equal(isAdminPrincipal({ userId: 'a', email: 'a@b', via: 'jwt' }, {}), false);
+});

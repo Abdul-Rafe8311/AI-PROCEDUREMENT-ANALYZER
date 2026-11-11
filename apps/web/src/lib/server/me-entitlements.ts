@@ -3,11 +3,21 @@ import { NextResponse } from 'next/server';
 import { activePeriod, effectivePlan, queuedPeriods, type PlanPeriod } from '../entitlements/effective-plan';
 import { planQuota } from '../entitlements/plans';
 import { loadPeriods } from './db';
-import type { Principal } from './guard';
+import { getConfig } from './config';
+import { isAdminPrincipal, type Principal } from './guard';
 
 export interface EntitlementsDeps {
   loadPeriods?: (userId: string, now: Date) => Promise<PlanPeriod[]>;
   now?: () => Date;
+  isAdmin?: (principal: Principal) => boolean;
+}
+
+function defaultIsAdmin(principal: Principal): boolean {
+  try {
+    return isAdminPrincipal(principal, getConfig());
+  } catch {
+    return false;
+  }
 }
 
 const iso = (d: string | Date) => new Date(d).toISOString();
@@ -15,9 +25,10 @@ const headers = { 'Cache-Control': 'no-store' };
 
 export async function buildEntitlements(principal: Principal, deps: EntitlementsDeps = {}): Promise<Response> {
   const now = (deps.now ?? (() => new Date()))();
+  const isAdmin = (deps.isAdmin ?? defaultIsAdmin)(principal);
   if (principal.demo) {
     return NextResponse.json(
-      { plan: 'max', expiresAt: null, queued: [], used: 0, quota: planQuota('max'), resetAt: null },
+      { plan: 'max', expiresAt: null, queued: [], used: 0, quota: planQuota('max'), resetAt: null, isAdmin },
       { headers },
     );
   }
@@ -37,6 +48,7 @@ export async function buildEntitlements(principal: Principal, deps: Entitlements
         used: 0,
         quota: planQuota(plan),
         resetAt: null,
+        isAdmin,
       },
       { headers },
     );

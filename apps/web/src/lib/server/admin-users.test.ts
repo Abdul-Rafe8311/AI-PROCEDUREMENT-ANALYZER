@@ -68,7 +68,7 @@ test('POST service failure gives 503, SQL exception maps to 400', async () => {
 
 test('GET passes search and returns users with no-store', async () => {
   let s = '';
-  const rows = [{ id: 'u1', email: 'n@x.test', createdAt: 'c', plan: 'pro', expiresAt: null }];
+  const rows = [{ id: 'u1', email: 'n@x.test', createdAt: 'c', plan: 'pro', expiresAt: null, lastChange: { adminEmail: 'boss@x.test', at: '2026-11-02T00:00:00.000Z', plan: 'pro', endsAt: null } }];
   const res = await buildAdminUsersGet(new Request('http://x/api/admin/users?search=naj'), {
     now: () => NOW, listUsers: async (q) => ((s = q), rows),
   });

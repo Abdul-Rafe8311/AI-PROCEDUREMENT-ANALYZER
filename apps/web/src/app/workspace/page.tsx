@@ -14,6 +14,7 @@ import { ExtractionDebug } from '@/components/workspace/extraction-debug';
 import { ChatPanel } from '@/components/workspace/chat-panel';
 import { type DeepDoc, DeepSearchStatus } from '@/components/workspace/deep-search-status';
 import { UserMenu } from '@/components/auth/user-menu';
+import { AdminNavLink } from '@/components/admin/admin-nav-link';
 import { HistoryMenu } from '@/components/auth/history-menu';
 import { useAuth } from '@/lib/auth-context';
 import { type HistoryItem, insertAnalysisRow, loadUserHistory } from '@/lib/analysis-history';
@@ -723,6 +724,7 @@ export default function WorkspacePage() {
               <ArrowLeft className="h-4 w-4" />
               Home
             </Link>
+            <AdminNavLink />
             <UserMenu />
           </div>
         </div>

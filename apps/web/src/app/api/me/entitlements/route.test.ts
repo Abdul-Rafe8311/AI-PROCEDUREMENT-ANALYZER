@@ -8,6 +8,7 @@ const user = { userId: 'u1', email: 'a@b.c', via: 'jwt' as const };
 const run = (periods: PlanPeriod[] | Error, principal = user) =>
   buildEntitlements(principal, {
     now: () => now,
+    isAdmin: () => false,
     loadPeriods: async () => {
       if (periods instanceof Error) throw periods;
       return periods;
@@ -18,7 +19,7 @@ test('no period -> free', async () => {
   const r = await run([]);
   assert.equal(r.status, 200);
   assert.equal(r.headers.get('cache-control'), 'no-store');
-  assert.deepEqual(await r.json(), { plan: 'free', expiresAt: null, queued: [], used: 0, quota: 14, resetAt: null });
+  assert.deepEqual(await r.json(), { plan: 'free', expiresAt: null, queued: [], used: 0, quota: 14, resetAt: null, isAdmin: false });
 });
 
 test('expired -> free', async () => {
@@ -53,4 +54,14 @@ test('DB failure -> 503 SERVICE_UNAVAILABLE', async () => {
   const r = await run(new Error('boom secret'));
   assert.equal(r.status, 503);
   assert.deepEqual(await r.json(), { error: 'Service unavailable.', code: 'SERVICE_UNAVAILABLE' });
+});
+
+test('isAdmin comes from the server rule', async () => {
+  const r = await buildEntitlements(user, { now: () => now, loadPeriods: async () => [], isAdmin: () => true });
+  assert.equal((await r.json()).isAdmin, true);
+});
+
+test('demo principal gets isAdmin false by default', async () => {
+  const r = await buildEntitlements({ ...user, demo: true } as never, { now: () => now });
+  assert.equal((await r.json()).isAdmin, false);
 });
