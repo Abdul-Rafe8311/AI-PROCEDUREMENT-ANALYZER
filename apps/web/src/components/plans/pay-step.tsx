@@ -10,6 +10,11 @@ import { PLAN_NAMES } from '@/lib/plan-matrix';
 import { PAY_STEPS, copyValue, displayValue, payDisclosures, payHeading, refundPolicy } from '@/lib/pay-step';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
+import { usePayments } from '@/lib/use-payments';
+import { underReviewText } from '@/lib/payment-form';
+import type { PaidPlanId } from '@/lib/entitlements/plans';
+import { ProofForm } from './proof-form';
+import { PaymentHistory } from './payment-history';
 
 interface BillingConfig {
   prices: Partial<Record<PlanId, number | null>>;
@@ -51,6 +56,8 @@ export function PayStep({ planParam }: { planParam: string | null }) {
   const [config, setConfig] = useState<BillingConfig | null>(null);
   const [configFailed, setConfigFailed] = useState(false);
   const [announce, setAnnounce] = useState('');
+  const payments = usePayments(1, 10);
+  const [submittedAt, setSubmittedAt] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,7 +101,7 @@ export function PayStep({ planParam }: { planParam: string | null }) {
     );
   }
 
-  if (loading || (!config && !configFailed)) {
+  if (loading || payments.loading || (!config && !configFailed)) {
     return (
       <div className="space-y-4" aria-busy="true">
         <Skeleton className="h-10 w-2/3" />
@@ -140,6 +147,7 @@ export function PayStep({ planParam }: { planParam: string | null }) {
   const current = data.plan as PlanId;
   const chainEnd = data.queued.length ? data.queued[data.queued.length - 1].endsAt : data.expiresAt;
   const disclosures = payDisclosures({ current, target, chainEnd });
+  const pendingAt = submittedAt ?? payments.data?.pending?.createdAt ?? null;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -191,6 +199,16 @@ export function PayStep({ planParam }: { planParam: string | null }) {
         ))}
         <p>{refundPolicy(support)}</p>
       </section>
+
+      {pendingAt ? (
+        <div role="status" className="rounded-xl border border-border bg-warning/10 px-4 py-4 text-sm">
+          <p className="font-medium">{underReviewText(pendingAt)}</p>
+        </div>
+      ) : (
+        <ProofForm plan={target as PaidPlanId} onSubmitted={(at) => { setSubmittedAt(at); payments.refresh(); }} />
+      )}
+
+      <PaymentHistory key={submittedAt ?? 'initial'} />
 
       <div>
         <Button asChild variant="outline" className="min-h-[44px]">

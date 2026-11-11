@@ -9,6 +9,9 @@ import { useEntitlements } from '@/lib/use-entitlements';
 import { formatQuotaDate } from '@/lib/entitlements/quota-window';
 import { comparisonRows, planColumns, PLAN_NAMES, type Cell, type PlanPrices } from '@/lib/plan-matrix';
 import { planNotice } from '@/lib/plan-notice';
+import { usePayments } from '@/lib/use-payments';
+import { PENDING_HINT, underReviewText } from '@/lib/payment-form';
+import { PaymentHistory } from './payment-history';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -48,6 +51,8 @@ function CellView({ value }: { value: Cell }) {
 export function PlansView() {
   const { user } = useAuth();
   const { data, loading, error } = useEntitlements();
+  const payments = usePayments(1, 1);
+  const hasPending = Boolean(payments.data?.pending);
   const [config, setConfig] = useState<BillingConfig | null>(null);
   const [compareOpen, setCompareOpen] = useState(false);
   const [told, setTold] = useState<string | null>(null);
@@ -150,6 +155,13 @@ export function PlansView() {
         </p>
       )}
 
+      {payments.data?.pending && (
+        <div role="status" className="rounded-lg border border-border bg-warning/10 px-4 py-3 text-sm">
+          <p className="font-medium">{underReviewText(payments.data.pending.createdAt)}</p>
+          <p className="mt-1 text-muted-foreground">{PENDING_HINT}</p>
+        </div>
+      )}
+
       <section aria-label="Plans" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {cols.map((c) => {
           const isCurrent = c.id === current;
@@ -178,15 +190,23 @@ export function PlansView() {
                     Current plan
                   </Button>
                 ) : c.id !== 'free' ? (
-                  <Button asChild variant="outline" className="min-h-[44px] w-full">
-                    <Link href={`/plans/pay?plan=${c.id}`}>Choose {c.name}</Link>
-                  </Button>
+                  hasPending ? (
+                    <Button type="button" variant="outline" disabled className="min-h-[44px] w-full">
+                      Choose {c.name}
+                    </Button>
+                  ) : (
+                    <Button asChild variant="outline" className="min-h-[44px] w-full">
+                      <Link href={`/plans/pay?plan=${c.id}`}>Choose {c.name}</Link>
+                    </Button>
+                  )
                 ) : null}
               </CardContent>
             </Card>
           );
         })}
       </section>
+
+      <PaymentHistory />
 
       <section aria-labelledby="compare-heading" className="space-y-3">
         <div className="flex items-center justify-between">
