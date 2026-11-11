@@ -28,3 +28,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-4-admin-users-tab-with-manual-override.md`
   summary: Admin Users UI has no component tests and no hint when results are capped at 50.
   evidence: Test runner only covers .ts; server cap MAX_USERS=50 is silent in the panel.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-deploy-the-foundation-and-seed-the-pilot-on-pro.md`
+  summary: `runbook/cases.sql` and `seed-pilot.sql` were never executed against Postgres; the founder must run them in the Supabase SQL editor and report the result.
+  evidence: No psql in the dev environment; tests only check sync with cases.json.

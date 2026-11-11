@@ -35,12 +35,12 @@ project_key: NOKEY
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
 development_status:
-  epic-1: in-progress
+  epic-1: done
   1-1-server-verified-identity-and-route-guard-markers: done
-  1-2-plan-ledger-effective-plan-and-entitlements-endpoint: review
-  1-3-admin-identity-and-manual-plan-override-api: review
-  1-4-admin-users-tab-with-manual-override: review
-  1-5-deploy-the-foundation-and-seed-the-pilot-on-pro: backlog
+  1-2-plan-ledger-effective-plan-and-entitlements-endpoint: done
+  1-3-admin-identity-and-manual-plan-override-api: done
+  1-4-admin-users-tab-with-manual-override: done
+  1-5-deploy-the-foundation-and-seed-the-pilot-on-pro: done
   epic-1-retrospective: optional
 
   epic-2: backlog
