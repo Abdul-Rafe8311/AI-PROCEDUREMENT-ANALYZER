@@ -2,12 +2,15 @@
 import { NextResponse } from 'next/server';
 import { activePeriod, effectivePlan, queuedPeriods, type PlanPeriod } from '../entitlements/effective-plan';
 import { planQuota } from '../entitlements/plans';
+import { quotaWindow } from '../entitlements/quota-window';
 import { loadPeriods } from './db';
+import { countUsed } from './usage';
 import { getConfig } from './config';
 import { isAdminPrincipal, type Principal } from './guard';
 
 export interface EntitlementsDeps {
   loadPeriods?: (userId: string, now: Date) => Promise<PlanPeriod[]>;
+  countUsed?: (args: { userId: string; windowStart: Date; now: Date }) => Promise<number>;
   now?: () => Date;
   isAdmin?: (principal: Principal) => boolean;
 }
@@ -24,6 +27,7 @@ const iso = (d: string | Date) => new Date(d).toISOString();
 const headers = { 'Cache-Control': 'no-store' };
 
 export async function buildEntitlements(principal: Principal, deps: EntitlementsDeps = {}): Promise<Response> {
+  const started = performance.now();
   const now = (deps.now ?? (() => new Date()))();
   const isAdmin = (deps.isAdmin ?? defaultIsAdmin)(principal);
   if (principal.demo) {
@@ -36,6 +40,11 @@ export async function buildEntitlements(principal: Principal, deps: Entitlements
     const periods = await (deps.loadPeriods ?? loadPeriods)(principal.userId, now);
     const plan = effectivePlan(periods, now);
     const active = activePeriod(periods, now);
+    // Same window and count rule as the gate in /api/extract (FR6).
+    const win = quotaWindow(periods, now);
+    const used = await (deps.countUsed ?? countUsed)({ userId: principal.userId, windowStart: win.windowStart, now });
+    const ms = performance.now() - started;
+    if (ms > 100) console.warn(`[entitlements] slow plan check: ${Math.round(ms)}ms`);
     return NextResponse.json(
       {
         plan,
@@ -45,12 +54,12 @@ export async function buildEntitlements(principal: Principal, deps: Entitlements
           startsAt: iso(p.startsAt),
           endsAt: iso(p.endsAt),
         })),
-        used: 0,
-        quota: planQuota(plan),
-        resetAt: null,
+        used,
+        quota: win.quota,
+        resetAt: win.resetAt.toISOString(),
         isAdmin,
       },
-      { headers },
+      { headers: { ...headers, 'Server-Timing': `plan;dur=${ms.toFixed(1)}` } },
     );
   } catch (err) {
     console.error('[entitlements] load failed:', err instanceof Error ? err.name : 'error');

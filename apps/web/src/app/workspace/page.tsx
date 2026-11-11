@@ -15,6 +15,8 @@ import { ChatPanel } from '@/components/workspace/chat-panel';
 import { type DeepDoc, DeepSearchStatus } from '@/components/workspace/deep-search-status';
 import { UserMenu } from '@/components/auth/user-menu';
 import { AdminNavLink } from '@/components/admin/admin-nav-link';
+import { UsageMeter, UsageMeterStrip } from '@/components/workspace/usage-meter';
+import { refreshEntitlements } from '@/lib/use-entitlements';
 import { HistoryMenu } from '@/components/auth/history-menu';
 import { useAuth } from '@/lib/auth-context';
 import { type HistoryItem, insertAnalysisRow, loadUserHistory } from '@/lib/analysis-history';
@@ -442,6 +444,8 @@ export default function WorkspacePage() {
       if (prFile) form.append('pr', prFile, prFile.name);
       const res = await apiFetch('/api/extract', { method: 'POST', body: form });
       const data = await res.json();
+      // Usage may have changed (a file counted, or a limit was hit): refresh the header meter.
+      refreshEntitlements();
 
       if (!res.ok) {
         // Clear error state — never silently substitute sample data.
@@ -725,9 +729,11 @@ export default function WorkspacePage() {
               Home
             </Link>
             <AdminNavLink />
+            <UsageMeter />
             <UserMenu />
           </div>
         </div>
+        <UsageMeterStrip />
       </header>
 
       <main className="mx-auto max-w-6xl px-6 py-10">

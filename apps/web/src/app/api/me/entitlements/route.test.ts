@@ -9,6 +9,7 @@ const run = (periods: PlanPeriod[] | Error, principal = user) =>
   buildEntitlements(principal, {
     now: () => now,
     isAdmin: () => false,
+    countUsed: async () => 0,
     loadPeriods: async () => {
       if (periods instanceof Error) throw periods;
       return periods;
@@ -19,7 +20,7 @@ test('no period -> free', async () => {
   const r = await run([]);
   assert.equal(r.status, 200);
   assert.equal(r.headers.get('cache-control'), 'no-store');
-  assert.deepEqual(await r.json(), { plan: 'free', expiresAt: null, queued: [], used: 0, quota: 14, resetAt: null, isAdmin: false });
+  assert.deepEqual(await r.json(), { plan: 'free', expiresAt: null, queued: [], used: 0, quota: 14, resetAt: '2026-11-30T21:00:00.000Z', isAdmin: false });
 });
 
 test('expired -> free', async () => {
@@ -39,7 +40,7 @@ test('active plus queued ordered', async () => {
   assert.equal(b.expiresAt, '2026-12-01T00:00:00.000Z');
   assert.deepEqual(b.queued.map((q: { plan: string }) => q.plan), ['plus', 'max']);
   assert.equal(b.used, 0);
-  assert.equal(b.resetAt, null);
+  assert.equal(b.resetAt, '2026-12-01T00:00:00.000Z');
 });
 
 test('demo principal -> max without DB call', async () => {
@@ -57,7 +58,7 @@ test('DB failure -> 503 SERVICE_UNAVAILABLE', async () => {
 });
 
 test('isAdmin comes from the server rule', async () => {
-  const r = await buildEntitlements(user, { now: () => now, loadPeriods: async () => [], isAdmin: () => true });
+  const r = await buildEntitlements(user, { now: () => now, loadPeriods: async () => [], countUsed: async () => 0, isAdmin: () => true });
   assert.equal((await r.json()).isAdmin, true);
 });
 
