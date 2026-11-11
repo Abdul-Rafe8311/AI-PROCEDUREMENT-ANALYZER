@@ -48,7 +48,7 @@ development_status:
   2-2-quota-windows-and-atomic-quota-functions: done
   2-3-enforce-quota-on-api-extract: done
   2-4-usage-figures-and-header-usage-meter: done
-  2-5-upgrade-callout-on-blocked-uploads: backlog
+  2-5-upgrade-callout-on-blocked-uploads: done
   2-6-plans-page-current-plan-usage-and-comparison: backlog
   epic-2-retrospective: optional
 

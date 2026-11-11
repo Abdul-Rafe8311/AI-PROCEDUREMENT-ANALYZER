@@ -17,6 +17,8 @@ import { UserMenu } from '@/components/auth/user-menu';
 import { AdminNavLink } from '@/components/admin/admin-nav-link';
 import { UsageMeter, UsageMeterStrip } from '@/components/workspace/usage-meter';
 import { refreshEntitlements } from '@/lib/use-entitlements';
+import { QuotaCallout } from '@/components/workspace/quota-callout';
+import { parseQuotaBlock, withNoUsageNote, type QuotaBlock } from '@/lib/quota-callout';
 import { HistoryMenu } from '@/components/auth/history-menu';
 import { useAuth } from '@/lib/auth-context';
 import { type HistoryItem, insertAnalysisRow, loadUserHistory } from '@/lib/analysis-history';
@@ -142,6 +144,7 @@ export default function WorkspacePage() {
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [quotaBlock, setQuotaBlock] = useState<QuotaBlock | null>(null);
   // Persistence is best-effort, but its failure must not be INVISIBLE: when a
   // session cannot be saved the workspace still works, yet nothing reaches history
   // and a reload restores an OLDER session instead. The reviewer has to know that.
@@ -428,6 +431,7 @@ export default function WorkspacePage() {
   async function handleAnalyze() {
     if (!files.length && !prFile) return;
     setError(null);
+    setQuotaBlock(null);
     setPersistWarning(null);
     setDocs([]);
     // From here on this workspace holds the reviewer's own work: auth resolving
@@ -450,11 +454,17 @@ export default function WorkspacePage() {
       if (!res.ok) {
         // Clear error state — never silently substitute sample data.
         setAnalysis(null);
+        const block = parseQuotaBlock(res.status, data, files.length);
+        if (block) {
+          // Blocked by the plan limit: explain inline (no dialog, toast or banner).
+          setQuotaBlock(block);
+          return;
+        }
         const base =
           data?.error ??
           'Could not extract data from the uploaded file(s). Please try a text-based PDF or DOCX.';
         // `detail` is only present in development for debugging.
-        setError(data?.detail ? `${base}\n\n${data.detail}` : base);
+        setError(withNoUsageNote(res.status, data?.detail ? `${base}\n\n${data.detail}` : base));
         return;
       }
 
@@ -757,6 +767,7 @@ export default function WorkspacePage() {
               busy={uploading}
               analyzing={analyzing}
             />
+            {quotaBlock && <QuotaCallout block={quotaBlock} onDismiss={() => setQuotaBlock(null)} />}
             <PrUpload
               file={prFile}
               onSelect={setPrFile}

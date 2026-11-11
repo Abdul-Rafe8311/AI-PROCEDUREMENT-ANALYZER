@@ -53,3 +53,11 @@ export function quotaWindow(periods: PlanPeriod[], now: Date): QuotaWindow {
     resetAt: new Date(riyadhMonthStart(t, 1)),
   };
 }
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "1 Dec 2026", the calendar date in Riyadh time (the quota calendar), for reset and expiry copy. */
+export function formatQuotaDate(d: string | Date): string {
+  const local = new Date((d instanceof Date ? d.getTime() : new Date(d).getTime()) + RIYADH_OFFSET);
+  return `${local.getUTCDate()} ${MONTHS[local.getUTCMonth()]} ${local.getUTCFullYear()}`;
+}
