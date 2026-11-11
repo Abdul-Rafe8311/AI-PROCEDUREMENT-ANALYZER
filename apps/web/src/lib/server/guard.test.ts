@@ -121,3 +121,63 @@ test('production never returns a demo principal even if config wrongly says allo
   assert.ok(!r.ok);
   if (!r.ok) assert.equal(r.response.status, 503);
 });
+
+// --- requireAdmin ---
+import { requireAdmin } from './guard';
+
+const adminCfg = (over: Record<string, unknown> = {}) => () => ({
+  production: true,
+  allowDemo: false,
+  supabaseUrl: 'https://x.supabase.co',
+  supabaseAnonKey: 'k',
+  adminEmails: ['boss@x.test'],
+  adminUserIds: ['admin-1'],
+  ...over,
+});
+const asUser = (id: string, email: string) => async () => ({ user: { id, email }, error: null });
+
+test('requireAdmin: email and id both allowlisted passes', async () => {
+  const r = await requireAdmin(req('Bearer t'), { config: adminCfg(), verify: asUser('admin-1', 'boss@x.test') });
+  assert.ok(r.ok);
+});
+
+test('requireAdmin: email matching is case-insensitive', async () => {
+  const r = await requireAdmin(req('Bearer t'), { config: adminCfg(), verify: asUser('admin-1', 'BOSS@X.test') });
+  assert.ok(r.ok);
+});
+
+for (const [name, cfg, user] of [
+  ['email only', adminCfg({ adminUserIds: ['other'] }), asUser('admin-1', 'boss@x.test')],
+  ['id only', adminCfg(), asUser('admin-1', 'eve@x.test')],
+  ['empty ids in production', adminCfg({ adminUserIds: [] }), asUser('admin-1', 'boss@x.test')],
+  ['non-admin', adminCfg(), asUser('u9', 'eve@x.test')],
+] as const) {
+  test(`requireAdmin: ${name} gives 403 FORBIDDEN`, async () => {
+    const r = await requireAdmin(req('Bearer t'), { config: cfg, verify: user });
+    assert.ok(!r.ok);
+    if (!r.ok) {
+      assert.equal(r.response.status, 403);
+      assert.equal((await r.response.json()).code, 'FORBIDDEN');
+    }
+  });
+}
+
+test('requireAdmin: passes through 401 and 503 from requirePrincipal', async () => {
+  const a = await requireAdmin(req(), { config: adminCfg(), verify: never });
+  assert.ok(!a.ok);
+  if (!a.ok) assert.equal(a.response.status, 401);
+  const b = await requireAdmin(req('Bearer t'), {
+    config: () => ({ production: true, allowDemo: false, supabaseUrl: null, supabaseAnonKey: null }),
+    verify: never,
+  });
+  assert.ok(!b.ok);
+  if (!b.ok) assert.equal(b.response.status, 503);
+});
+
+test('requireAdmin: demo principal allowed', async () => {
+  const r = await requireAdmin(req(), {
+    config: () => ({ production: false, allowDemo: true, supabaseUrl: null, supabaseAnonKey: null }),
+    verify: never,
+  });
+  assert.ok(r.ok);
+});

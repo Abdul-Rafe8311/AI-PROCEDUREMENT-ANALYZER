@@ -17,6 +17,7 @@ function routes(dir: string): string[] {
 const REQUIRED: Record<string, string> = {
   'ta-form/export-excel': 'public',
   'me/entitlements': 'jwt',
+  'admin/users': 'admin',
   approve: 'token-link',
   dashboard: 'token-link',
   fx: 'public',
@@ -59,9 +60,10 @@ test('marker agrees with the guard helper called', () => {
     if (wantsJwt) assert.ok(calls('requirePrincipal'), `route ${r.name} is "${r.marker}" but never calls requirePrincipal`);
     if (r.marker!.startsWith('feature:')) assert.ok(calls('requireFeature'), `route ${r.name} is "${r.marker}" but never calls requireFeature`);
     if (r.marker === 'admin') assert.ok(calls('requireAdmin'), `route ${r.name} is "admin" but never calls requireAdmin`);
-    if (r.marker === 'jwt') {
-      const m = /(?:const|let)\s+(\w+)\s*=\s*await\s+requirePrincipal\s*\(/.exec(r.code);
-      assert.ok(m, `route ${r.name} must assign the requirePrincipal result`);
+    if (r.marker === 'jwt' || r.marker === 'admin') {
+      const fn = r.marker === 'admin' ? 'requireAdmin' : 'requirePrincipal';
+      const m = new RegExp(`(?:const|let)\\s+(\\w+)\\s*=\\s*await\\s+${fn}\\s*\\(`).exec(r.code);
+      assert.ok(m, `route ${r.name} must assign the ${fn} result`);
       if (m) assert.ok(new RegExp(`if\\s*\\(\\s*!\\s*${m[1]}\\.ok\\s*\\)\\s*return\\b`).test(r.code), `route ${r.name} must return early on !${m[1]}.ok`);
     }
     if (r.marker === 'public' || r.marker === 'token-link') {

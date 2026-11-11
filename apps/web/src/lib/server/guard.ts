@@ -19,7 +19,8 @@ export interface VerifiedUser {
 }
 
 export interface GuardDeps {
-  config?: () => Pick<ServerConfig, 'production' | 'allowDemo' | 'supabaseUrl' | 'supabaseAnonKey'>;
+  config?: () => Pick<ServerConfig, 'production' | 'allowDemo' | 'supabaseUrl' | 'supabaseAnonKey'> &
+    Partial<Pick<ServerConfig, 'adminEmails' | 'adminUserIds'>>;
   verify?: (token: string) => Promise<{ user: VerifiedUser | null; error: unknown }>;
 }
 
@@ -89,4 +90,23 @@ export async function requirePrincipal(req: Request, deps: GuardDeps = {}): Prom
     console.error('[guard] token verification failed');
     return { ok: false, response: reply(503, 'Sign-in service unavailable.', 'SERVICE_UNAVAILABLE') };
   }
+}
+
+/** Admin guard (AD-7): principal email in ADMIN_EMAILS AND user id in ADMIN_USER_IDS. */
+export async function requireAdmin(req: Request, deps: GuardDeps = {}): Promise<GuardResult> {
+  const g = await requirePrincipal(req, deps);
+  if (!g.ok) return g;
+  if (g.principal.demo) return g;
+  let cfg;
+  try {
+    cfg = (deps.config ?? getConfig)();
+  } catch {
+    console.error('[guard] configuration error');
+    return { ok: false, response: reply(503, 'Service is not configured.', 'SERVICE_UNAVAILABLE') };
+  }
+  const email = g.principal.email?.toLowerCase() ?? null;
+  const emails = (cfg.adminEmails ?? []).map((e) => e.toLowerCase());
+  const ids = cfg.adminUserIds ?? [];
+  if (email && emails.includes(email) && ids.includes(g.principal.userId)) return g;
+  return { ok: false, response: reply(403, 'Admin access required.', 'FORBIDDEN') };
 }
