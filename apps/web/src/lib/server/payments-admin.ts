@@ -61,6 +61,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PENDING_LIMIT = 100;
 const HISTORY_PAGE = 20;
 
+export function receiptType(path: string | null): 'image' | 'pdf' | null {
+  if (!path) return null;
+  return /\.pdf$/i.test(path) ? 'pdf' : 'image';
+}
+
 function dto(
   r: PaymentRow,
   emails: Map<string, string | null>,
@@ -77,6 +82,7 @@ function dto(
     transactionId: r.transaction_id,
     createdAt: new Date(r.created_at).toISOString(),
     hasScreenshot: Boolean(r.screenshot_path),
+    receiptType: receiptType(r.screenshot_path),
     status: r.status,
     duplicateOf: dupes.filter((d) => d.transaction_id === r.transaction_id && d.id !== r.id).map((d) => d.id),
     resulting,

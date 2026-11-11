@@ -45,6 +45,8 @@ export interface AdminPaymentDto {
   transactionId: string;
   createdAt: string;
   hasScreenshot: boolean;
+  /** from the stored file extension; the path itself is never exposed */
+  receiptType: 'image' | 'pdf' | null;
   status: PaymentStatus;
   /** other requests that used the same transaction ID */
   duplicateOf: string[];

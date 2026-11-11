@@ -57,13 +57,13 @@ development_status:
   3-2-locked-feature-controls-and-dialog: done
   epic-3-retrospective: optional
 
-  epic-4: in-progress
+  epic-4: done
   4-1-choose-a-plan-and-see-bank-details: done
   4-2-payment-request-api-and-private-screenshot-storage: done
   4-3-pay-form-pending-banner-and-payment-history: done
   4-4-email-module-and-admin-new-request-notification: done
   4-5-decide-payment-requests-approve-reject-renew-upgrade-queue: done
-  4-6-admin-queue-viewer-decisions-and-history: backlog
+  4-6-admin-queue-viewer-decisions-and-history: done
   epic-4-retrospective: optional
 
   epic-5: backlog

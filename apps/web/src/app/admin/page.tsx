@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import { useEntitlements } from '@/lib/use-entitlements';
 import { UsersPanel } from '@/components/admin/users-panel';
+import { PaymentsPanel } from '@/components/admin/payments-panel';
 
 export default function AdminPage() {
   const { isAdmin, loading } = useEntitlements();
@@ -20,7 +21,7 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border/70">
-        <div className="mx-auto flex h-16 max-w-3xl items-center justify-between px-4">
+        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
           <h1 className="text-base font-semibold tracking-tight">Admin</h1>
           <Link
             href="/workspace"
@@ -31,8 +32,11 @@ export default function AdminPage() {
           </Link>
         </div>
       </header>
-      <main className="mx-auto max-w-3xl px-4 py-6">
-        <UsersPanel />
+      <main className="mx-auto max-w-6xl space-y-10 px-4 py-6">
+        <PaymentsPanel />
+        <div className="max-w-3xl">
+          <UsersPanel />
+        </div>
       </main>
     </div>
   );

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  receiptType,
   DecideInputError, decidePayment, emailFailedIds, listAdminPayments,
   type AdminPaymentsStore, type DecideResult,
 } from './payments-admin';
@@ -197,4 +198,14 @@ test('emailFailedIds ignores other templates and unrelated rows', () => {
     { subject_id: 'c', template: 'payment_approved', status: 'failed' },
   ]);
   assert.deepEqual([...s], ['c']);
+});
+
+test('receipt type comes from the extension; the storage path is not in the response', async () => {
+  assert.equal(receiptType('u/x.pdf'), 'pdf');
+  assert.equal(receiptType('u/x.PNG'), 'image');
+  assert.equal(receiptType(null), null);
+  const { s } = store({ async listPending() { return [row({ screenshot_path: 'secret-user/abc.pdf' })]; } });
+  const raw = JSON.stringify(await body(await listAdminPayments(new Request('http://x/api/admin/payments'), s, () => NOW)));
+  assert.ok(raw.includes('"receiptType":"pdf"'));
+  assert.ok(!raw.includes('secret-user'));
 });
