@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pay step mock</title>
+<style>
+:root{--bg:#F8FAFC;--fg:#0F172A;--card:#fff;--muted:#F1F5F9;--mfg:#64748B;--border:#E2E8F0;--primary:#4046E7;--warn:#DB7706;--danger:#DF2A2A;--ok:#1DA54F}
+@media (prefers-color-scheme:dark){:root{--bg:#0B0F1A;--fg:#F1F5F9;--card:#111827;--muted:#1A2233;--mfg:#94A3B8;--border:#2A3347;--primary:#6470F7}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 Inter,system-ui,sans-serif;font-variant-numeric:tabular-nums}
+header{height:64px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 24px;max-width:1152px;margin:auto}
+.brand{font-weight:600;display:flex;gap:8px;align-items:center}.logo{width:32px;height:32px;border-radius:10px;background:var(--primary)}
+.meter{font-size:12px;color:var(--mfg);text-align:right}.bar{height:6px;width:96px;background:var(--muted);border-radius:9999px;margin-top:4px;margin-left:auto}.bar i{display:block;height:100%;width:93%;background:var(--warn);border-radius:9999px}
+main{max-width:672px;margin:auto;padding:32px 24px 48px}
+h1{font-size:30px;letter-spacing:-.025em;margin:0 0 4px}
+.sub{color:var(--mfg);margin:0 0 24px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;margin-bottom:16px}
+.bank{background:var(--muted);border-radius:12px;padding:20px;border:1px solid var(--border)}
+.amount{font-size:36px;font-weight:700;letter-spacing:-.025em;margin:0}
+.lab{font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:.025em;color:var(--mfg)}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--border)}
+.row b{letter-spacing:.03em;word-break:break-all}
+button,.btn{font:inherit;min-height:44px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--fg);padding:0 14px;font-weight:500}
+.primary{background:var(--primary);color:#fff;border:0;font-weight:600;width:100%}
+ol{padding-left:20px;margin:8px 0 0}li{margin:4px 0}
+.field{margin-top:16px}.field label{display:block;font-weight:500;margin-bottom:6px}
+input[type=text]{width:100%;height:44px;border:1px solid var(--border);border-radius:8px;padding:0 12px;background:var(--bg);color:var(--fg);font:inherit}
+.drop{border:2px dashed var(--border);border-radius:12px;padding:20px;display:flex;gap:12px;align-items:center}
+.chip{width:40px;height:40px;border-radius:10px;background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--primary);display:grid;place-items:center;font-weight:700}
+.info{border:1px solid var(--border);background:var(--muted);border-radius:12px;padding:12px;color:var(--mfg);margin:16px 0}
+.turn{border:1px solid var(--border);border-radius:8px;height:65px;display:flex;align-items:center;padding:0 14px;color:var(--mfg);margin-top:16px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="logo"></span>AI Procurement Copilot</div>
+  <div class="meter">13 / 14 PDFs used this month<div class="bar"><i></i></div></div>
+</header>
+<main>
+  <h1>Pay $12.00 USD by bank transfer</h1>
+  <p class="sub">Pro plan · 45 PDFs per month · Chatbox · Tender sheet · active for 30 days</p>
+
+  <div class="card">
+    <div class="bank">
+      <div class="lab">Amount to send</div>
+      <p class="amount">$12.00 USD</p>
+      <div class="row" style="margin-top:12px"><div><div class="lab">Account name</div><b>Example Trading Co.</b></div><button>Copy</button></div>
+      <div class="row"><div><div class="lab">Bank</div><b>Example Bank</b></div><button>Copy</button></div>
+      <div class="row"><div><div class="lab">IBAN</div><b>SA00 0000 0000 0000 0000 0000</b></div><button>Copy</button></div>
+    </div>
+    <ol>
+      <li>Make the transfer from your bank.</li>
+      <li>Come back here and upload your receipt and transaction ID.</li>
+      <li>We usually review within 24 hours and email you the result.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2 style="font-size:18px;margin:0 0 4px">Send your payment proof</h2>
+    <div class="field"><label>Receipt (PNG, JPG or PDF, up to 5 MB)</label>
+      <div class="drop"><span class="chip">↑</span><div><b>Choose a file</b><br><span style="color:var(--mfg)">or drag it here</span></div></div></div>
+    <div class="field"><label>Transaction ID</label><input type="text" placeholder="e.g. 2611110042"></div>
+    <div class="turn">Turnstile verification widget</div>
+    <div class="info">Plans aren't refundable once activated. If we can't verify your payment, email support@example.com and we'll refund you manually.</div>
+    <button class="primary">Submit payment proof</button>
+  </div>
+</main>
+</body>
+</html>
