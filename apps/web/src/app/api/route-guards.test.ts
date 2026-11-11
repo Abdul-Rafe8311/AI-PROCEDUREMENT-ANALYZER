@@ -20,6 +20,8 @@ const REQUIRED: Record<string, string> = {
   'admin/users': 'admin',
   'billing/config': 'jwt',
   payments: 'jwt',
+  'admin/payments': 'admin',
+  'admin/payments/[id]/decide': 'admin',
   'payments/[id]/screenshot': 'jwt',
   approve: 'token-link',
   dashboard: 'token-link',

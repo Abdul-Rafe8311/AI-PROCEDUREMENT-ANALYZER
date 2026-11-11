@@ -35,3 +35,37 @@ export function cleanTransactionId(v: unknown): string | null {
   // eslint-disable-next-line no-control-regex
   return /[\u0000-\u001f\u007f]/.test(t) ? null : t;
 }
+
+export interface AdminPaymentDto {
+  id: string;
+  userId: string;
+  userEmail: string | null;
+  plan: PaidPlanId;
+  amountUsd: number;
+  transactionId: string;
+  createdAt: string;
+  hasScreenshot: boolean;
+  status: PaymentStatus;
+  /** other requests that used the same transaction ID */
+  duplicateOf: string[];
+  /** pending only: what approval would do now */
+  resulting: { startsAt: string; endsAt: string; upgrade: boolean } | null;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  rejectReason: string | null;
+  /** decided only: a decision email exists, none was sent, at least one failed */
+  emailFailed: boolean;
+}
+
+export interface AdminPaymentsPending {
+  view: 'pending';
+  requests: AdminPaymentDto[];
+}
+
+export interface AdminPaymentsHistory {
+  view: 'history';
+  requests: AdminPaymentDto[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
