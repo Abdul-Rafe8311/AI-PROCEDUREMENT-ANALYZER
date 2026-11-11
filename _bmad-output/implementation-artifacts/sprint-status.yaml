@@ -1,0 +1,77 @@
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when its first story starts (via build's sprint sync)
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates the next story after the previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; the status view surfaces open ones
+generated: 11-11-2026 12:00
+last_updated: 11-11-2026 12:00
+project: 'AI PROCEDUREMENT '
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+development_status:
+  epic-1: backlog
+  1-1-server-verified-identity-and-route-guard-markers: backlog
+  1-2-plan-ledger-effective-plan-and-entitlements-endpoint: backlog
+  1-3-admin-identity-and-manual-plan-override-api: backlog
+  1-4-admin-users-tab-with-manual-override: backlog
+  1-5-deploy-the-foundation-and-seed-the-pilot-on-pro: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-api-key-principal-for-the-fastn-intake-workflow: backlog
+  2-2-quota-windows-and-atomic-quota-functions: backlog
+  2-3-enforce-quota-on-api-extract: backlog
+  2-4-usage-figures-and-header-usage-meter: backlog
+  2-5-upgrade-callout-on-blocked-uploads: backlog
+  2-6-plans-page-current-plan-usage-and-comparison: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-server-side-feature-gating: backlog
+  3-2-locked-feature-controls-and-dialog: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-choose-a-plan-and-see-bank-details: backlog
+  4-2-payment-request-api-and-private-screenshot-storage: backlog
+  4-3-pay-form-pending-banner-and-payment-history: backlog
+  4-4-email-module-and-admin-new-request-notification: backlog
+  4-5-decide-payment-requests-approve-reject-renew-upgrade-queue: backlog
+  4-6-admin-queue-viewer-decisions-and-history: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-turnstile-widget-and-payment-form-verification: backlog
+  5-2-turnstile-on-signup-login-and-password-reset: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-daily-job-with-expiry-reminders: backlog
+  6-2-screenshot-retention-and-cron-schedule: backlog
+  epic-6-retrospective: optional
