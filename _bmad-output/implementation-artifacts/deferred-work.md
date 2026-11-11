@@ -17,3 +17,7 @@
   summary: Enforce append-only on plan_periods/audit_log with a trigger and add provenance checks and audit_log indexes when writers land in Story 1.3.
   evidence: service-role code can still update or delete rows; payment rows may lack payment_request_id.
 
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2-plan-ledger-effective-plan-and-entitlements-endpoint.md`
+  summary: Migration 0005_subscriptions.sql was applied to Supabase on 2026-11-11 (user-reported: plan_periods and audit_log exist, RLS on); the SQL-side run of cases.json is still outstanding.
+  evidence: Applied and checked by the user; no SQL version of cases.json exists yet, so effective-plan cases have not been run against the database. Do it with Story 1.3's writers.
