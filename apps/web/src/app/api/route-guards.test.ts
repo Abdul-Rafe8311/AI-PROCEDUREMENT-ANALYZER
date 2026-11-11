@@ -19,6 +19,8 @@ const REQUIRED: Record<string, string> = {
   'me/entitlements': 'jwt',
   'admin/users': 'admin',
   'billing/config': 'jwt',
+  payments: 'jwt',
+  'payments/[id]/screenshot': 'jwt',
   approve: 'token-link',
   dashboard: 'token-link',
   fx: 'public',
