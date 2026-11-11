@@ -1,6 +1,8 @@
 // guard: apikey
 import { NextResponse } from 'next/server';
 import { requirePrincipal } from '@/lib/server/guard';
+import { reserveForExtract, settleExtract, type QuotaTicket } from '@/lib/server/extract-quota';
+import { sha256Hex } from '@/lib/server/usage';
 import { assembleAnalysis } from '@/lib/analysis-engine';
 import { extractPurchaseRequisition, extractQuotations } from '@/lib/extraction-server';
 import type { ExtractedQuotation, PurchaseRequisition } from '@/lib/workspace-types';
@@ -116,6 +118,7 @@ export async function POST(req: Request) {
     return fail(400, 'Upload must be multipart/form-data or application/json.', `got content-type: "${contentType}"`);
   }
 
+  let ticket: QuotaTicket | null = null;
   try {
     const quotations: ExtractedQuotation[] = [];
     const debug: Record<string, unknown>[] = [];
@@ -136,6 +139,13 @@ export async function POST(req: Request) {
     const prInput = prFile
       ? { name: prFile.name || 'purchase-requisition', type: prFile.type, buffer: Buffer.from(await prFile.arrayBuffer()) }
       : null;
+
+    // Quota (AD-5): every quotation file counts, the PR never does. Enforced here, server-side,
+    // whatever the client checked. Re-uploads of already-analysed files cost nothing.
+    const hashes = fileInputs.map((f) => sha256Hex(f.buffer));
+    const reservation = await reserveForExtract(g.principal, [...new Set(hashes)]);
+    if (!reservation.ok) return reservation.response;
+    ticket = reservation.ticket;
 
     const [fileResults, prResult] = await Promise.all([
       Promise.all(fileInputs.map((f) => extractQuotations(f.buffer, f.name, f.type, f.i))),
@@ -211,6 +221,14 @@ export async function POST(req: Request) {
       }
     }
 
+    // Charge only files that produced usable data; failed files release their reservation.
+    const okHashes = new Set<string>();
+    fileInputs.forEach((f, idx) => {
+      if (fileResults[idx].quotations.some((q) => q.totalCost != null || q.lineItems.length > 0)) okHashes.add(hashes[idx]);
+    });
+    await settleExtract(ticket, okHashes);
+    ticket = null;
+
     const anyReadable = quotations.some((q) => q.totalCost != null || q.lineItems.length > 0);
     if (!anyReadable && !purchaseRequisition) {
       // Surface the most specific reason we collected.
@@ -268,6 +286,7 @@ export async function POST(req: Request) {
       },
     });
   } catch (err) {
+    await settleExtract(ticket, new Set());
     return fail(500, 'Extraction failed unexpectedly.', (err as Error).stack ?? (err as Error).message);
   }
 }

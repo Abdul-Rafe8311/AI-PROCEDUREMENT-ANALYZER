@@ -46,7 +46,7 @@ development_status:
   epic-2: in-progress
   2-1-api-key-principal-for-the-fastn-intake-workflow: done
   2-2-quota-windows-and-atomic-quota-functions: done
-  2-3-enforce-quota-on-api-extract: backlog
+  2-3-enforce-quota-on-api-extract: done
   2-4-usage-figures-and-header-usage-meter: backlog
   2-5-upgrade-callout-on-blocked-uploads: backlog
   2-6-plans-page-current-plan-usage-and-comparison: backlog
