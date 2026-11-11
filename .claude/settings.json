@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(**/.env)",
+      "Edit(**/.env.local)",
+      "Edit(**/.env.*.local)",
+      "Edit(**/workflow.json)"
+    ]
+  }
+}
