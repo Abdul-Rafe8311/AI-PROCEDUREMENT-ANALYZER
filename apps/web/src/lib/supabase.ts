@@ -11,6 +11,23 @@ const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 export const isSupabaseConfigured = Boolean(url && anonKey);
 
+// Hostname of the configured project (e.g. "abcdefgh.supabase.co"), surfaced in
+// error messages/logs so a bad or dead URL in a deployment is obvious.
+export const supabaseHost: string | null = (() => {
+  if (!url) return null;
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+})();
+
+// Fail loudly (console, not crash) when the URL is malformed — the client would
+// otherwise silently produce "Load failed" / "Failed to fetch" on every request.
+if (url && !/^https:\/\/[a-z0-9-]+\.supabase\.(co|in)$/i.test(url) && !/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(url)) {
+  console.warn(`[supabase] NEXT_PUBLIC_SUPABASE_URL looks unusual: ${url}`);
+}
+
 export const STORAGE_BUCKET = 'quotations';
 
 // Email+password auth (Supabase Auth). We persist the session in the browser so a

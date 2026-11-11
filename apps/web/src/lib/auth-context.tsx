@@ -6,8 +6,8 @@
 // Supabase's; this is just the React glue.
 
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import type { Session, User } from '@supabase/supabase-js';
-import { isSupabaseConfigured, supabase } from './supabase';
+import type { AuthError, Session, User } from '@supabase/supabase-js';
+import { isSupabaseConfigured, supabase, supabaseHost } from './supabase';
 import { isEmailAllowedToSignUp, signUpDomainRejectionMessage } from './auth-policy';
 
 export interface AuthResult {
@@ -78,26 +78,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       displayName: nameFromUser(user),
       async signIn(email, password) {
         if (!supabase) return { error: 'Authentication is not configured for this deployment.' };
-        const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-        if (error) return { error: friendlyAuthError(error.message) };
-        return { error: null };
+        try {
+          const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+          if (error) return { error: reportAuthError('signIn', error) };
+          return { error: null };
+        } catch (err) {
+          return { error: reportAuthError('signIn', err) };
+        }
       },
       async signUp(name, email, password) {
         if (!supabase) return { error: 'Authentication is not configured for this deployment.' };
         const cleanEmail = email.trim();
         // Domain policy: open by default; flip ALLOWED_SIGNUP_DOMAIN to restrict.
         if (!isEmailAllowedToSignUp(cleanEmail)) return { error: signUpDomainRejectionMessage() };
-        const { data, error } = await supabase.auth.signUp({
-          email: cleanEmail,
-          password,
-          options: {
-            data: { full_name: name.trim() }, // stored on the user's profile (user_metadata + profiles trigger)
-            emailRedirectTo: `${siteOrigin()}/workspace`,
-          },
-        });
-        if (error) return { error: friendlyAuthError(error.message) };
-        // When email confirmation is ON in Supabase, there's no session yet.
-        return { error: null, needsEmailConfirmation: !data.session };
+        try {
+          const { data, error } = await supabase.auth.signUp({
+            email: cleanEmail,
+            password,
+            options: {
+              data: { full_name: name.trim() }, // stored on the user's profile (user_metadata + profiles trigger)
+              emailRedirectTo: `${siteOrigin()}/workspace`,
+            },
+          });
+          if (error) return { error: reportAuthError('signUp', error) };
+          // When email confirmation is ON in Supabase, there's no session yet.
+          return { error: null, needsEmailConfirmation: !data.session };
+        } catch (err) {
+          return { error: reportAuthError('signUp', err) };
+        }
       },
       async signOut() {
         if (!supabase) return;
@@ -105,17 +113,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
       async sendPasswordReset(email) {
         if (!supabase) return { error: 'Authentication is not configured for this deployment.' };
-        const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-          redirectTo: `${siteOrigin()}/reset-password`,
-        });
-        if (error) return { error: friendlyAuthError(error.message) };
-        return { error: null };
+        try {
+          const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+            redirectTo: `${siteOrigin()}/reset-password`,
+          });
+          if (error) return { error: reportAuthError('sendPasswordReset', error) };
+          return { error: null };
+        } catch (err) {
+          return { error: reportAuthError('sendPasswordReset', err) };
+        }
       },
       async updatePassword(password) {
         if (!supabase) return { error: 'Authentication is not configured for this deployment.' };
-        const { error } = await supabase.auth.updateUser({ password });
-        if (error) return { error: friendlyAuthError(error.message) };
-        return { error: null };
+        try {
+          const { error } = await supabase.auth.updateUser({ password });
+          if (error) return { error: reportAuthError('updatePassword', error) };
+          return { error: null };
+        } catch (err) {
+          return { error: reportAuthError('updatePassword', err) };
+        }
       },
     };
   }, [ready, user, session]);
@@ -127,6 +143,49 @@ export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error('useAuth must be used within <AuthProvider>');
   return ctx;
+}
+
+// Browser fetch failures never carry an HTTP status. supabase-js wraps them as
+// AuthRetryableFetchError (status 0) with the browser's raw TypeError text —
+// "Load failed" (Safari/WebKit) or "Failed to fetch" (Chrome). That text is
+// useless to a user, so detect it and say what it really means.
+function isNetworkFailure(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as Partial<AuthError> & { name?: string; status?: number };
+  if (e.name === 'AuthRetryableFetchError' || e.status === 0) return true;
+  const m = String(e.message ?? '').toLowerCase();
+  return (
+    err instanceof TypeError ||
+    m.includes('load failed') ||
+    m.includes('failed to fetch') ||
+    m.includes('networkerror') ||
+    m.includes('network request failed')
+  );
+}
+
+// Log the full error (status, code, message, target host) so a production
+// failure is diagnosable from the browser console, then return user-facing text.
+function reportAuthError(op: string, err: unknown): string {
+  const e = (err ?? {}) as Partial<AuthError> & { name?: string; status?: number; code?: string };
+  const details = {
+    op,
+    name: e.name ?? (err instanceof Error ? err.constructor.name : typeof err),
+    status: e.status ?? null,
+    code: e.code ?? null,
+    message: e.message ?? String(err),
+    supabaseHost,
+    origin: siteOrigin(),
+  };
+  console.error(`[auth] ${op} failed`, details);
+
+  if (isNetworkFailure(err)) {
+    return (
+      `Could not reach the authentication server (${supabaseHost ?? 'not configured'}). ` +
+      'The Supabase project may be paused, deleted, or NEXT_PUBLIC_SUPABASE_URL may be wrong in this deployment. ' +
+      'Check your connection and try again; if it persists, contact the administrator.'
+    );
+  }
+  return friendlyAuthError(e.message ?? '');
 }
 
 // Map Supabase's raw messages to clear, user-facing text (no leaking internals).
