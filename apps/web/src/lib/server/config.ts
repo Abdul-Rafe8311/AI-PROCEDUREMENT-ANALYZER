@@ -9,6 +9,8 @@ export class ConfigError extends Error {
 
 export interface ServerConfig {
   production: boolean;
+  /** ALLOW_DEMO=true, explicit opt-in for the synthetic demo principal. Independent of NODE_ENV. */
+  allowDemo: boolean;
   supabaseUrl: string | null;
   supabaseAnonKey: string | null;
   supabaseServiceRoleKey: string | null;
@@ -46,6 +48,7 @@ export function loadConfig(env: Env): ServerConfig {
   const errors: string[] = [];
   const cfg: ServerConfig = {
     production,
+    allowDemo: env.ALLOW_DEMO === 'true',
     supabaseUrl: str(env.NEXT_PUBLIC_SUPABASE_URL),
     supabaseAnonKey: str(env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
     supabaseServiceRoleKey: str(env.SUPABASE_SERVICE_ROLE_KEY),

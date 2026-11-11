@@ -27,3 +27,9 @@ test('malformed JSON vars are reported', () => {
 test('ADMIN_EMAILS is trimmed and lower-cased', () => {
   assert.deepEqual(loadConfig({ NODE_ENV: 'test', ADMIN_EMAILS: ' A@B.com ,' }).adminEmails, ['a@b.com']);
 });
+
+test('allowDemo is true only for ALLOW_DEMO=true, in any NODE_ENV', () => {
+  assert.equal(loadConfig({}).allowDemo, false);
+  assert.equal(loadConfig({ ALLOW_DEMO: '1' }).allowDemo, false);
+  assert.equal(loadConfig({ ALLOW_DEMO: 'true' }).allowDemo, true);
+});

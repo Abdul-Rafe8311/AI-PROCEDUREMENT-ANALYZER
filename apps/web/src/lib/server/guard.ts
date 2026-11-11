@@ -19,7 +19,7 @@ export interface VerifiedUser {
 }
 
 export interface GuardDeps {
-  config?: () => Pick<ServerConfig, 'production' | 'supabaseUrl' | 'supabaseAnonKey'>;
+  config?: () => Pick<ServerConfig, 'production' | 'allowDemo' | 'supabaseUrl' | 'supabaseAnonKey'>;
   verify?: (token: string) => Promise<{ user: VerifiedUser | null; error: unknown }>;
 }
 
@@ -52,7 +52,7 @@ export async function requirePrincipal(req: Request, deps: GuardDeps = {}): Prom
 
   const hasUrl = Boolean(cfg.supabaseUrl);
   const hasKey = Boolean(cfg.supabaseAnonKey);
-  if (!hasUrl && !hasKey && !cfg.production) {
+  if (!hasUrl && !hasKey && cfg.allowDemo) {
     return { ok: true, principal: { ...DEMO_PRINCIPAL } };
   }
   if (!hasUrl || !hasKey) {
