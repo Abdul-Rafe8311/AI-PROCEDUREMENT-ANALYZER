@@ -1,0 +1,44 @@
+[
+  { "name": "no periods", "now": "2026-11-11T00:00:00Z", "periods": [], "expected": { "plan": "free", "queued": [] } },
+  {
+    "name": "expired period",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [{ "plan": "pro", "startsAt": "2026-09-01T00:00:00Z", "endsAt": "2026-10-01T00:00:00Z" }],
+    "expected": { "plan": "free", "queued": [] }
+  },
+  {
+    "name": "voided active period",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [{ "plan": "max", "startsAt": "2026-11-01T00:00:00Z", "endsAt": "2026-12-01T00:00:00Z", "voidedAt": "2026-11-05T00:00:00Z" }],
+    "expected": { "plan": "free", "queued": [] }
+  },
+  {
+    "name": "active period",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [{ "plan": "plus", "startsAt": "2026-11-01T00:00:00Z", "endsAt": "2026-12-01T00:00:00Z" }],
+    "expected": { "plan": "plus", "queued": [] }
+  },
+  {
+    "name": "starts_at equals now is active",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [{ "plan": "pro", "startsAt": "2026-11-11T00:00:00Z", "endsAt": "2026-12-11T00:00:00Z" }],
+    "expected": { "plan": "pro", "queued": [] }
+  },
+  {
+    "name": "ends_at equals now is expired",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [{ "plan": "pro", "startsAt": "2026-10-11T00:00:00Z", "endsAt": "2026-11-11T00:00:00Z" }],
+    "expected": { "plan": "free", "queued": [] }
+  },
+  {
+    "name": "active with queued ordered by start",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [
+      { "plan": "max", "startsAt": "2027-01-01T00:00:00Z", "endsAt": "2027-02-01T00:00:00Z" },
+      { "plan": "pro", "startsAt": "2026-11-01T00:00:00Z", "endsAt": "2026-12-01T00:00:00Z" },
+      { "plan": "plus", "startsAt": "2026-12-01T00:00:00Z", "endsAt": "2027-01-01T00:00:00Z" },
+      { "plan": "max", "startsAt": "2027-02-01T00:00:00Z", "endsAt": "2027-03-01T00:00:00Z", "voidedAt": "2026-11-02T00:00:00Z" }
+    ],
+    "expected": { "plan": "pro", "queued": ["plus", "max"] }
+  }
+]

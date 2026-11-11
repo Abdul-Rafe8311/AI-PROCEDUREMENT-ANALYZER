@@ -21,7 +21,7 @@ The founder can see every user's plan and grant plans manually (Najran pilot on 
 - Admin can set any user's plan and expiry directly; effective immediately, audited with admin and time.
 - Admin page shows each user's current plan for support triage.
 - Deployment values (admin emails, support email, bank details, prices, email sender) are configuration, never hard-coded.
-- Demo mode: with Supabase env absent and not production, guards return a synthetic Max principal; in production missing config returns 503 and never a principal.
+- Demo mode: only with explicit `ALLOW_DEMO=true`, Supabase env absent and not production, guards return a synthetic Max principal (`demo: true`); in production missing config returns 503 and never a principal, and ALLOW_DEMO in production is a config error.
 
 ## Technical Decisions
 
@@ -43,5 +43,5 @@ The founder can see every user's plan and grant plans manually (Najran pilot on 
 
 ## Cross-Story Dependencies
 
-- 1.1 provides guards and markers that 1.2-1.4 and later epics reuse; interim `public` markers on `extract`, `chat`, `doc-answer`, `tender-sheet/*` are replaced by Stories 2.1 and 3.1.
+- 1.1 provides guards and markers that 1.2-1.4 and later epics reuse; interim `public` markers on `extract`, `chat`, `doc-answer`, `tender-sheet/*`, `ta-form/export-excel` are replaced by Stories 2.1 and 3.1.
 - 1.2 (ledger, effective plan, entitlements endpoint) is required by 1.3 and 1.4; 1.5 deploys and seeds the pilot after 1.1-1.4.
