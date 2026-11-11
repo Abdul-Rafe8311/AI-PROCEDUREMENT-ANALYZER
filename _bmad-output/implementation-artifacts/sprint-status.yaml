@@ -43,8 +43,8 @@ development_status:
   1-5-deploy-the-foundation-and-seed-the-pilot-on-pro: done
   epic-1-retrospective: optional
 
-  epic-2: backlog
-  2-1-api-key-principal-for-the-fastn-intake-workflow: backlog
+  epic-2: in-progress
+  2-1-api-key-principal-for-the-fastn-intake-workflow: done
   2-2-quota-windows-and-atomic-quota-functions: backlog
   2-3-enforce-quota-on-api-extract: backlog
   2-4-usage-figures-and-header-usage-meter: backlog

@@ -1,5 +1,6 @@
-// guard: public
+// guard: apikey
 import { NextResponse } from 'next/server';
+import { requirePrincipal } from '@/lib/server/guard';
 import { assembleAnalysis } from '@/lib/analysis-engine';
 import { extractPurchaseRequisition, extractQuotations } from '@/lib/extraction-server';
 import type { ExtractedQuotation, PurchaseRequisition } from '@/lib/workspace-types';
@@ -55,6 +56,10 @@ function fail(status: number, message: string, detail?: string) {
 // and returns an AnalysisResult built from the actual document contents.
 // Never substitutes sample data — returns a clear, specific error on failure.
 export async function POST(req: Request) {
+  // JWT (browser) or X-Api-Key (Fastn intake workflow); the principal is used for quota in story 2.3.
+  const g = await requirePrincipal(req, { allowApiKey: true });
+  if (!g.ok) return g.response;
+
   const contentType = req.headers.get('content-type') ?? '';
   const isJson = contentType.includes('application/json');
 

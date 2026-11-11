@@ -32,3 +32,10 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-deploy-the-foundation-and-seed-the-pilot-on-pro.md`
   summary: `runbook/cases.sql` and `seed-pilot.sql` were never executed against Postgres; the founder must run them in the Supabase SQL editor and report the result.
   evidence: No psql in the dev environment; tests only check sync with cases.json.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-api-key-principal-for-the-fastn-intake-workflow.md`
+  summary: `/api/ta-form/export-excel` is still `public`; switch to `apikey` once the Fastn workflow sends X-Api-Key on that call (founder confirms).
+  evidence: Epic 2.1 says never switch before the workflow sends the key; the guard support is already in place.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-api-key-principal-for-the-fastn-intake-workflow.md`
+  summary: `/api/extract` now requires a JWT or X-Api-Key. Fastn intake calls to it fail with 401 until a key is minted (POST /api/admin/api-keys) and sent.
+  evidence: Spine rollout step 3 must precede deploy.

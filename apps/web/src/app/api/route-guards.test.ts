@@ -22,7 +22,8 @@ const REQUIRED: Record<string, string> = {
   dashboard: 'token-link',
   fx: 'public',
   intake: 'public',
-  extract: 'public',
+  extract: 'apikey',
+  'admin/api-keys': 'admin',
   chat: 'public',
   'doc-answer': 'public',
   'tender-sheet/fill': 'public',
@@ -60,7 +61,9 @@ test('marker agrees with the guard helper called', () => {
     if (wantsJwt) assert.ok(calls('requirePrincipal'), `route ${r.name} is "${r.marker}" but never calls requirePrincipal`);
     if (r.marker!.startsWith('feature:')) assert.ok(calls('requireFeature'), `route ${r.name} is "${r.marker}" but never calls requireFeature`);
     if (r.marker === 'admin') assert.ok(calls('requireAdmin'), `route ${r.name} is "admin" but never calls requireAdmin`);
-    if (r.marker === 'jwt' || r.marker === 'admin') {
+    if (r.marker === 'apikey') assert.ok(/allowApiKey\s*:\s*true/.test(r.code), `route ${r.name} is "apikey" but never passes allowApiKey: true`);
+    if (r.marker !== 'apikey') assert.ok(!/allowApiKey/.test(r.code), `route ${r.name} is "${r.marker}" but passes allowApiKey`);
+    if (r.marker === 'jwt' || r.marker === 'admin' || r.marker === 'apikey') {
       const fn = r.marker === 'admin' ? 'requireAdmin' : 'requirePrincipal';
       const m = new RegExp(`(?:const|let)\\s+(\\w+)\\s*=\\s*await\\s+${fn}\\s*\\(`).exec(r.code);
       assert.ok(m, `route ${r.name} must assign the ${fn} result`);

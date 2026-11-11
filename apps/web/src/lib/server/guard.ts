@@ -3,11 +3,12 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { ConfigError, getConfig, type ServerConfig } from './config';
+import { hashApiKey, lookupApiKeyUser } from './api-keys';
 
 export interface Principal {
   userId: string;
   email: string | null;
-  via: 'jwt';
+  via: 'jwt' | 'api_key';
   demo?: true;
 }
 
@@ -22,6 +23,10 @@ export interface GuardDeps {
   config?: () => Pick<ServerConfig, 'production' | 'allowDemo' | 'supabaseUrl' | 'supabaseAnonKey'> &
     Partial<Pick<ServerConfig, 'adminEmails' | 'adminUserIds'>>;
   verify?: (token: string) => Promise<{ user: VerifiedUser | null; error: unknown }>;
+  /** Only `apikey`-class routes set this (AD-2). Elsewhere `X-Api-Key` is ignored. */
+  allowApiKey?: boolean;
+  /** Maps a key's SHA-256 to its user id; null when unknown or revoked. */
+  lookupApiKey?: (sha256: string) => Promise<string | null>;
 }
 
 export const DEMO_PRINCIPAL: Principal = {
@@ -59,6 +64,18 @@ export async function requirePrincipal(req: Request, deps: GuardDeps = {}): Prom
   if (!hasUrl || !hasKey) {
     console.error('[guard] Supabase configuration missing or incomplete');
     return { ok: false, response: reply(503, 'Service is not configured.', 'SERVICE_UNAVAILABLE') };
+  }
+
+  const rawKey = deps.allowApiKey ? req.headers.get('x-api-key')?.trim() : undefined;
+  if (rawKey) {
+    try {
+      const userId = await (deps.lookupApiKey ?? lookupApiKeyUser)(hashApiKey(rawKey));
+      if (!userId) return { ok: false, response: reply(401, 'Invalid API key.', 'UNAUTHENTICATED') };
+      return { ok: true, principal: { userId, email: null, via: 'api_key' } };
+    } catch {
+      console.error('[guard] api key lookup failed');
+      return { ok: false, response: reply(503, 'Service unavailable.', 'SERVICE_UNAVAILABLE') };
+    }
   }
 
   const token = bearer(req);

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { requirePrincipal } from './guard';
 
 const configured = () => ({ production: true, allowDemo: false, supabaseUrl: 'https://x.supabase.co', supabaseAnonKey: 'k' });
@@ -192,4 +193,69 @@ test('isAdminPrincipal: needs email and id, case-insensitive, never demo', () =>
   assert.equal(isAdminPrincipal({ userId: 'admin-1', email: null, via: 'jwt' }, cfg), false);
   assert.equal(isAdminPrincipal(DEMO_PRINCIPAL, cfg), false);
   assert.equal(isAdminPrincipal({ userId: 'a', email: 'a@b', via: 'jwt' }, {}), false);
+});
+
+// --- API keys (AD-2) ---
+const keyReq = (headers: Record<string, string>) => new Request('http://localhost/api/x', { headers });
+
+test('valid X-Api-Key on an apikey route gives an api_key principal', async () => {
+  const r = await requirePrincipal(keyReq({ 'x-api-key': 'ak_good' }), {
+    config: configured,
+    allowApiKey: true,
+    verify: never,
+    lookupApiKey: async (h) => (h === createHash('sha256').update('ak_good').digest('hex') ? 'u9' : null),
+  });
+  assert.ok(r.ok);
+  if (r.ok) assert.deepEqual(r.principal, { userId: 'u9', email: null, via: 'api_key' });
+});
+
+test('unknown or revoked key gives 401 UNAUTHENTICATED, even with a valid JWT alongside', async () => {
+  const r = await requirePrincipal(keyReq({ 'x-api-key': 'ak_bad', authorization: 'Bearer good' }), {
+    config: configured,
+    allowApiKey: true,
+    lookupApiKey: async () => null,
+    verify: async () => ({ user: { id: 'u1' }, error: null }),
+  });
+  assert.ok(!r.ok);
+  if (!r.ok) {
+    assert.equal(r.response.status, 401);
+    assert.equal((await r.response.json()).code, 'UNAUTHENTICATED');
+  }
+});
+
+test('X-Api-Key is ignored on non-apikey routes (401 without a JWT, lookup never runs)', async () => {
+  const r = await requirePrincipal(keyReq({ 'x-api-key': 'ak_good' }), {
+    config: configured,
+    lookupApiKey: async () => {
+      throw new Error('lookup should not run');
+    },
+    verify: never,
+  });
+  assert.ok(!r.ok);
+  if (!r.ok) assert.equal(r.response.status, 401);
+});
+
+test('JWT still works on an apikey route when no key header is sent', async () => {
+  const r = await requirePrincipal(req('Bearer good'), {
+    config: configured,
+    allowApiKey: true,
+    lookupApiKey: async () => {
+      throw new Error('lookup should not run');
+    },
+    verify: async () => ({ user: { id: 'u1', email: 'a@b.test' }, error: null }),
+  });
+  assert.ok(r.ok);
+  if (r.ok) assert.equal(r.principal.via, 'jwt');
+});
+
+test('api key lookup failure gives 503, never a principal', async () => {
+  const r = await requirePrincipal(keyReq({ 'x-api-key': 'ak_x' }), {
+    config: configured,
+    allowApiKey: true,
+    lookupApiKey: async () => {
+      throw new Error('db down');
+    },
+  });
+  assert.ok(!r.ok);
+  if (!r.ok) assert.equal(r.response.status, 503);
 });
