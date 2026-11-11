@@ -1,3 +1,4 @@
+// guard: public
 import { NextResponse } from 'next/server';
 import { answerWithClaude, CHAT_MODEL, isAnthropicConfigured } from '@/lib/anthropic';
 

@@ -9,6 +9,8 @@
 // guess: if there is no live rate AND nothing cached, we return null and the
 // caller shows amounts in their original currency with a clear note.
 
+import { apiFetch } from './api-fetch';
+
 export interface FxRates {
   base: 'USD';
   /** units of <currency> per 1 USD, e.g. { USD: 1, SAR: 3.7501, EUR: 0.8758 } */
@@ -68,7 +70,7 @@ export async function getFxRates(
 ): Promise<FxRates | null> {
   const store = opts.store ?? localStore;
   const endpoint = opts.endpoint ?? '/api/fx';
-  const f = opts.fetchImpl ?? (typeof fetch !== 'undefined' ? fetch : undefined);
+  const f = opts.fetchImpl ?? (typeof fetch !== 'undefined' ? apiFetch : undefined);
   if (!f) return readCache(store);
 
   try {

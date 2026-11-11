@@ -1,3 +1,4 @@
+// guard: public
 import { NextResponse } from 'next/server';
 
 // POST /api/intake

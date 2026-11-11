@@ -2,6 +2,8 @@
 // Calls are best-effort: if the backend is unreachable, deep search degrades
 // gracefully and the comparison chat keeps working.
 
+import { apiFetch } from './api-fetch';
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
 
 export type IndexStatus = 'pending' | 'indexing' | 'ready' | 'failed' | 'unknown';
@@ -167,7 +169,7 @@ export async function answerFromChunks(
   chunks: RetrievedChunk[],
 ): Promise<DeepAnswer | null> {
   try {
-    const res = await fetch('/api/doc-answer', {
+    const res = await apiFetch('/api/doc-answer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question, fileName, chunks }),

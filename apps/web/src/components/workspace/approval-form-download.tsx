@@ -70,6 +70,7 @@ import {
   type TaCurrencyDisplay,
   type TaCurrencySelection,
 } from '@/lib/ta-currency';
+import { apiFetch } from '@/lib/api-fetch';
 
 interface SigRole {
   id: string;
@@ -603,7 +604,7 @@ export function ApprovalFormDownload({
     setXlsxLoading(true);
     try {
       const signatureRoles = roles.filter((r) => r.enabled).map((r) => r.label.trim()).filter(Boolean);
-      const res = await fetch('/api/ta-form/export-excel', {
+      const res = await apiFetch('/api/ta-form/export-excel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -1,3 +1,4 @@
+// guard: public
 import { NextResponse } from 'next/server';
 import { tenderWorkbookBuffer } from '@/lib/tender-sheet/excel';
 import type { TenderSheet } from '@/lib/tender-sheet/types';

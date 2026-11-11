@@ -1,3 +1,4 @@
+// guard: public
 import { NextResponse } from 'next/server';
 
 // Live FX rates for the Technical Approval Form (SAR primary + USD secondary).

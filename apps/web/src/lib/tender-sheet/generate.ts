@@ -10,6 +10,7 @@
 import type { AnalysisResult } from '../workspace-types';
 import { commercialAnswersFromQuotation } from './extract';
 import { seedTenderTemplate } from './seed';
+import { apiFetch } from '../api-fetch';
 import { mergeAiAnswers, type TenderAnswers, type TenderSheet } from './types';
 
 export interface GenerateProgress {
@@ -50,7 +51,7 @@ export async function generateTenderSheet(
     }
     try {
       // The Anthropic key is server-side only, so the read happens in a route.
-      const res = await fetch('/api/tender-sheet/fill', {
+      const res = await apiFetch('/api/tender-sheet/fill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ template, quotation: q }),

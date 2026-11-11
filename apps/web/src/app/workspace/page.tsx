@@ -37,6 +37,7 @@ import {
   startIndexing,
 } from '@/lib/rag-client';
 import { type AnalysisResult, CHART_METRICS, type ChartDirective, type ChatMessage } from '@/lib/workspace-types';
+import { apiFetch } from '@/lib/api-fetch';
 
 // Points the next page load at the session to restore (analysis + chat + charts).
 const LAST_ANALYSIS_KEY = 'workspace:lastAnalysisId';
@@ -438,7 +439,7 @@ export default function WorkspacePage() {
       const form = new FormData();
       files.forEach((f) => form.append('files', f, f.name));
       if (prFile) form.append('pr', prFile, prFile.name);
-      const res = await fetch('/api/extract', { method: 'POST', body: form });
+      const res = await apiFetch('/api/extract', { method: 'POST', body: form });
       const data = await res.json();
 
       if (!res.ok) {
@@ -660,7 +661,7 @@ export default function WorkspacePage() {
 
     try {
       setSending(true);
-      const res = await fetch('/api/chat', {
+      const res = await apiFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -1,3 +1,4 @@
+// guard: token-link
 import { NextResponse } from 'next/server';
 
 // GET /api/approve?token=<prMessageId>

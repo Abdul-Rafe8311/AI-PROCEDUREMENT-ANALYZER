@@ -1,3 +1,4 @@
+// guard: public
 import { NextResponse } from 'next/server';
 import { answersFromExtraction, extractTenderAnswersForSupplier } from '@/lib/tender-sheet/extract';
 import type { TenderTemplate } from '@/lib/tender-sheet/types';

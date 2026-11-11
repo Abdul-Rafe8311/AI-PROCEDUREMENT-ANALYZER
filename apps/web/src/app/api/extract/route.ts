@@ -1,3 +1,4 @@
+// guard: public
 import { NextResponse } from 'next/server';
 import { assembleAnalysis } from '@/lib/analysis-engine';
 import { extractPurchaseRequisition, extractQuotations } from '@/lib/extraction-server';

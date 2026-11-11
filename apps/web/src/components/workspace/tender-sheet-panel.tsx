@@ -11,6 +11,7 @@ import { loadTenderSheet, saveTenderSheet } from '@/lib/tender-sheet/store';
 import { TenderSheetDialog } from './tender-sheet-dialog';
 import type { TenderSheet } from '@/lib/tender-sheet/types';
 import type { AnalysisResult } from '@/lib/workspace-types';
+import { apiFetch } from '@/lib/api-fetch';
 
 export function TenderSheetPanel({
   analysis,
@@ -77,7 +78,7 @@ export function TenderSheetPanel({
     setBusy('download');
     setError(null);
     try {
-      const res = await fetch('/api/tender-sheet/export', {
+      const res = await apiFetch('/api/tender-sheet/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sheet, fileName: `tender-comparative-${sheet.template.prNumber ?? ''}` }),
