@@ -1,44 +1,447 @@
 [
-  { "name": "no periods", "now": "2026-11-11T00:00:00Z", "periods": [], "expected": { "plan": "free", "queued": [] } },
+  {
+    "name": "no periods",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [],
+    "expected": {
+      "plan": "free",
+      "queued": []
+    }
+  },
   {
     "name": "expired period",
     "now": "2026-11-11T00:00:00Z",
-    "periods": [{ "plan": "pro", "startsAt": "2026-09-01T00:00:00Z", "endsAt": "2026-10-01T00:00:00Z" }],
-    "expected": { "plan": "free", "queued": [] }
+    "periods": [
+      {
+        "plan": "pro",
+        "startsAt": "2026-09-01T00:00:00Z",
+        "endsAt": "2026-10-01T00:00:00Z"
+      }
+    ],
+    "expected": {
+      "plan": "free",
+      "queued": []
+    }
   },
   {
     "name": "voided active period",
     "now": "2026-11-11T00:00:00Z",
-    "periods": [{ "plan": "max", "startsAt": "2026-11-01T00:00:00Z", "endsAt": "2026-12-01T00:00:00Z", "voidedAt": "2026-11-05T00:00:00Z" }],
-    "expected": { "plan": "free", "queued": [] }
+    "periods": [
+      {
+        "plan": "max",
+        "startsAt": "2026-11-01T00:00:00Z",
+        "endsAt": "2026-12-01T00:00:00Z",
+        "voidedAt": "2026-11-05T00:00:00Z"
+      }
+    ],
+    "expected": {
+      "plan": "free",
+      "queued": []
+    }
   },
   {
     "name": "active period",
     "now": "2026-11-11T00:00:00Z",
-    "periods": [{ "plan": "plus", "startsAt": "2026-11-01T00:00:00Z", "endsAt": "2026-12-01T00:00:00Z" }],
-    "expected": { "plan": "plus", "queued": [] }
+    "periods": [
+      {
+        "plan": "plus",
+        "startsAt": "2026-11-01T00:00:00Z",
+        "endsAt": "2026-12-01T00:00:00Z"
+      }
+    ],
+    "expected": {
+      "plan": "plus",
+      "queued": []
+    }
   },
   {
     "name": "starts_at equals now is active",
     "now": "2026-11-11T00:00:00Z",
-    "periods": [{ "plan": "pro", "startsAt": "2026-11-11T00:00:00Z", "endsAt": "2026-12-11T00:00:00Z" }],
-    "expected": { "plan": "pro", "queued": [] }
+    "periods": [
+      {
+        "plan": "pro",
+        "startsAt": "2026-11-11T00:00:00Z",
+        "endsAt": "2026-12-11T00:00:00Z"
+      }
+    ],
+    "expected": {
+      "plan": "pro",
+      "queued": []
+    }
   },
   {
     "name": "ends_at equals now is expired",
     "now": "2026-11-11T00:00:00Z",
-    "periods": [{ "plan": "pro", "startsAt": "2026-10-11T00:00:00Z", "endsAt": "2026-11-11T00:00:00Z" }],
-    "expected": { "plan": "free", "queued": [] }
+    "periods": [
+      {
+        "plan": "pro",
+        "startsAt": "2026-10-11T00:00:00Z",
+        "endsAt": "2026-11-11T00:00:00Z"
+      }
+    ],
+    "expected": {
+      "plan": "free",
+      "queued": []
+    }
   },
   {
     "name": "active with queued ordered by start",
     "now": "2026-11-11T00:00:00Z",
     "periods": [
-      { "plan": "max", "startsAt": "2027-01-01T00:00:00Z", "endsAt": "2027-02-01T00:00:00Z" },
-      { "plan": "pro", "startsAt": "2026-11-01T00:00:00Z", "endsAt": "2026-12-01T00:00:00Z" },
-      { "plan": "plus", "startsAt": "2026-12-01T00:00:00Z", "endsAt": "2027-01-01T00:00:00Z" },
-      { "plan": "max", "startsAt": "2027-02-01T00:00:00Z", "endsAt": "2027-03-01T00:00:00Z", "voidedAt": "2026-11-02T00:00:00Z" }
+      {
+        "plan": "max",
+        "startsAt": "2027-01-01T00:00:00Z",
+        "endsAt": "2027-02-01T00:00:00Z"
+      },
+      {
+        "plan": "pro",
+        "startsAt": "2026-11-01T00:00:00Z",
+        "endsAt": "2026-12-01T00:00:00Z"
+      },
+      {
+        "plan": "plus",
+        "startsAt": "2026-12-01T00:00:00Z",
+        "endsAt": "2027-01-01T00:00:00Z"
+      },
+      {
+        "plan": "max",
+        "startsAt": "2027-02-01T00:00:00Z",
+        "endsAt": "2027-03-01T00:00:00Z",
+        "voidedAt": "2026-11-02T00:00:00Z"
+      }
     ],
-    "expected": { "plan": "pro", "queued": ["plus", "max"] }
+    "expected": {
+      "plan": "pro",
+      "queued": [
+        "plus",
+        "max"
+      ]
+    }
+  },
+  {
+    "name": "approve: first purchase from Free starts now",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [],
+    "expected": {
+      "plan": "free",
+      "queued": []
+    },
+    "approve": {
+      "plan": "pro"
+    },
+    "after": {
+      "voided": [],
+      "inserts": [
+        {
+          "plan": "pro",
+          "startsAt": "2026-11-11T00:00:00Z",
+          "endsAt": "2026-12-11T00:00:00Z"
+        }
+      ],
+      "plan": "pro",
+      "queued": []
+    }
+  },
+  {
+    "name": "approve: early same-plan renewal appends after current expiry",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [
+      {
+        "id": "a",
+        "plan": "pro",
+        "startsAt": "2026-10-21T00:00:00Z",
+        "endsAt": "2026-11-20T00:00:00Z"
+      }
+    ],
+    "expected": {
+      "plan": "pro",
+      "queued": []
+    },
+    "approve": {
+      "plan": "pro"
+    },
+    "after": {
+      "voided": [],
+      "inserts": [
+        {
+          "plan": "pro",
+          "startsAt": "2026-11-20T00:00:00Z",
+          "endsAt": "2026-12-20T00:00:00Z"
+        }
+      ],
+      "plan": "pro",
+      "queued": [
+        "pro"
+      ]
+    }
+  },
+  {
+    "name": "approve: renewal after expiry starts now",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [
+      {
+        "id": "a",
+        "plan": "pro",
+        "startsAt": "2026-09-01T00:00:00Z",
+        "endsAt": "2026-10-01T00:00:00Z"
+      }
+    ],
+    "expected": {
+      "plan": "free",
+      "queued": []
+    },
+    "approve": {
+      "plan": "plus"
+    },
+    "after": {
+      "voided": [],
+      "inserts": [
+        {
+          "plan": "plus",
+          "startsAt": "2026-11-11T00:00:00Z",
+          "endsAt": "2026-12-11T00:00:00Z"
+        }
+      ],
+      "plan": "plus",
+      "queued": []
+    }
+  },
+  {
+    "name": "approve: lower plan is queued after the higher one",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [
+      {
+        "id": "a",
+        "plan": "max",
+        "startsAt": "2026-11-01T00:00:00Z",
+        "endsAt": "2026-12-01T00:00:00Z"
+      }
+    ],
+    "expected": {
+      "plan": "max",
+      "queued": []
+    },
+    "approve": {
+      "plan": "plus"
+    },
+    "after": {
+      "voided": [],
+      "inserts": [
+        {
+          "plan": "plus",
+          "startsAt": "2026-12-01T00:00:00Z",
+          "endsAt": "2026-12-31T00:00:00Z"
+        }
+      ],
+      "plan": "max",
+      "queued": [
+        "plus"
+      ]
+    }
+  },
+  {
+    "name": "approve: upgrade voids current, starts now, re-chains queued periods keeping length",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [
+      {
+        "id": "a",
+        "plan": "plus",
+        "startsAt": "2026-11-01T00:00:00Z",
+        "endsAt": "2026-12-01T00:00:00Z"
+      },
+      {
+        "id": "b",
+        "plan": "pro",
+        "startsAt": "2026-12-01T00:00:00Z",
+        "endsAt": "2026-12-31T00:00:00Z"
+      }
+    ],
+    "expected": {
+      "plan": "plus",
+      "queued": [
+        "pro"
+      ]
+    },
+    "approve": {
+      "plan": "max"
+    },
+    "after": {
+      "voided": [
+        "a",
+        "b"
+      ],
+      "inserts": [
+        {
+          "plan": "max",
+          "startsAt": "2026-11-11T00:00:00Z",
+          "endsAt": "2026-12-11T00:00:00Z"
+        },
+        {
+          "plan": "pro",
+          "startsAt": "2026-12-11T00:00:00Z",
+          "endsAt": "2027-01-10T00:00:00Z"
+        }
+      ],
+      "plan": "max",
+      "queued": [
+        "pro"
+      ]
+    }
+  },
+  {
+    "name": "approve: same-plan renewal chains after the last queued period",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [
+      {
+        "id": "a",
+        "plan": "pro",
+        "startsAt": "2026-10-21T00:00:00Z",
+        "endsAt": "2026-11-20T00:00:00Z"
+      },
+      {
+        "id": "b",
+        "plan": "plus",
+        "startsAt": "2026-11-20T00:00:00Z",
+        "endsAt": "2026-12-20T00:00:00Z"
+      }
+    ],
+    "expected": {
+      "plan": "pro",
+      "queued": [
+        "plus"
+      ]
+    },
+    "approve": {
+      "plan": "pro"
+    },
+    "after": {
+      "voided": [],
+      "inserts": [
+        {
+          "plan": "pro",
+          "startsAt": "2026-12-20T00:00:00Z",
+          "endsAt": "2027-01-19T00:00:00Z"
+        }
+      ],
+      "plan": "pro",
+      "queued": [
+        "plus",
+        "pro"
+      ]
+    }
+  },
+  {
+    "name": "approve: voided periods are ignored",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [
+      {
+        "id": "a",
+        "plan": "max",
+        "startsAt": "2026-11-20T00:00:00Z",
+        "endsAt": "2026-12-20T00:00:00Z",
+        "voidedAt": "2026-11-05T00:00:00Z"
+      }
+    ],
+    "expected": {
+      "plan": "free",
+      "queued": []
+    },
+    "approve": {
+      "plan": "plus"
+    },
+    "after": {
+      "voided": [],
+      "inserts": [
+        {
+          "plan": "plus",
+          "startsAt": "2026-11-11T00:00:00Z",
+          "endsAt": "2026-12-11T00:00:00Z"
+        }
+      ],
+      "plan": "plus",
+      "queued": []
+    }
+  },
+  {
+    "name": "approve: a queued period shorter than 30 days keeps its length on upgrade",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [
+      {
+        "id": "a",
+        "plan": "plus",
+        "startsAt": "2026-11-01T00:00:00Z",
+        "endsAt": "2026-12-01T00:00:00Z"
+      },
+      {
+        "id": "b",
+        "plan": "pro",
+        "startsAt": "2026-12-01T00:00:00Z",
+        "endsAt": "2026-12-11T00:00:00Z"
+      }
+    ],
+    "expected": {
+      "plan": "plus",
+      "queued": [
+        "pro"
+      ]
+    },
+    "approve": {
+      "plan": "max"
+    },
+    "after": {
+      "voided": [
+        "a",
+        "b"
+      ],
+      "inserts": [
+        {
+          "plan": "max",
+          "startsAt": "2026-11-11T00:00:00Z",
+          "endsAt": "2026-12-11T00:00:00Z"
+        },
+        {
+          "plan": "pro",
+          "startsAt": "2026-12-11T00:00:00Z",
+          "endsAt": "2026-12-21T00:00:00Z"
+        }
+      ],
+      "plan": "max",
+      "queued": [
+        "pro"
+      ]
+    }
+  },
+  {
+    "name": "approve: upgrading to a plan equal to the queued one is still an upgrade of the current",
+    "now": "2026-11-11T00:00:00Z",
+    "periods": [
+      {
+        "id": "a",
+        "plan": "plus",
+        "startsAt": "2026-11-01T00:00:00Z",
+        "endsAt": "2026-12-01T00:00:00Z"
+      }
+    ],
+    "expected": {
+      "plan": "plus",
+      "queued": []
+    },
+    "approve": {
+      "plan": "pro"
+    },
+    "after": {
+      "voided": [
+        "a"
+      ],
+      "inserts": [
+        {
+          "plan": "pro",
+          "startsAt": "2026-11-11T00:00:00Z",
+          "endsAt": "2026-12-11T00:00:00Z"
+        }
+      ],
+      "plan": "pro",
+      "queued": []
+    }
   }
 ]
