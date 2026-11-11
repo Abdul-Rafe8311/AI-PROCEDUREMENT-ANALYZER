@@ -1,5 +1,6 @@
-// guard: public
+// guard: feature:chat
 import { NextResponse } from 'next/server';
+import { requireFeature } from '@/lib/server/guard';
 import { answerWithClaude, CHAT_MODEL, isAnthropicConfigured } from '@/lib/anthropic';
 
 export const runtime = 'nodejs';
@@ -19,6 +20,8 @@ interface Chunk {
 // degrades to a concise extract of the ACTUAL retrieved passages (never sample
 // data) and says so via `notice`.
 export async function POST(req: Request) {
+  const guard = await requireFeature(req, 'chat');
+  if (!guard.ok) return guard.response;
   let body: { question?: string; fileName?: string; chunks?: Chunk[] };
   try {
     body = await req.json();

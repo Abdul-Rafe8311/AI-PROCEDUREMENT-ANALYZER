@@ -4,6 +4,9 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { ConfigError, getConfig, type ServerConfig } from './config';
 import { hashApiKey, lookupApiKeyUser } from './api-keys';
+import { loadPeriods } from './db';
+import { effectivePlan, type PlanPeriod } from '../entitlements/effective-plan';
+import { canUseFeature, featureRequiredPlan, type FeatureId } from '../entitlements/plans';
 
 export interface Principal {
   userId: string;
@@ -135,4 +138,36 @@ export async function requireAdmin(req: Request, deps: GuardDeps = {}): Promise<
   }
   if (isAdminPrincipal(g.principal, cfg)) return g;
   return { ok: false, response: reply(403, 'Admin access required.', 'FORBIDDEN') };
+}
+
+export interface FeatureDeps extends GuardDeps {
+  loadPeriods?: (userId: string, now: Date) => Promise<PlanPeriod[]>;
+  now?: () => Date;
+}
+
+/**
+ * Feature guard (AD-4): verified principal, then one fresh periods query per request.
+ * Nothing is cached, so a plan change applies on the very next call.
+ */
+export async function requireFeature(req: Request, feature: FeatureId, deps: FeatureDeps = {}): Promise<GuardResult> {
+  const g = await requirePrincipal(req, deps);
+  if (!g.ok) return g;
+  if (g.principal.demo) return g; // demo mode is the Max plan (AD-1)
+  const now = (deps.now ?? (() => new Date()))();
+  let plan;
+  try {
+    plan = effectivePlan(await (deps.loadPeriods ?? loadPeriods)(g.principal.userId, now), now);
+  } catch {
+    console.error('[guard] plan lookup failed');
+    return { ok: false, response: reply(503, 'Service unavailable.', 'SERVICE_UNAVAILABLE') };
+  }
+  if (canUseFeature(plan, feature)) return g;
+  const requiredPlan = featureRequiredPlan(feature);
+  return {
+    ok: false,
+    response: NextResponse.json(
+      { error: `This feature needs the ${requiredPlan} plan or higher.`, code: 'PLAN_REQUIRED', feature, requiredPlan },
+      { status: 403 },
+    ),
+  };
 }

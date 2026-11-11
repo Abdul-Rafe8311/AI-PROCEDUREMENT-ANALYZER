@@ -1,5 +1,6 @@
-// guard: public
+// guard: feature:tender_sheet
 import { NextResponse } from 'next/server';
+import { requireFeature } from '@/lib/server/guard';
 import { answersFromExtraction, extractTenderAnswersForSupplier } from '@/lib/tender-sheet/extract';
 import type { TenderTemplate } from '@/lib/tender-sheet/types';
 import type { ExtractedQuotation } from '@/lib/workspace-types';
@@ -25,6 +26,8 @@ function fail(status: number, message: string, detail?: string) {
 }
 
 export async function POST(req: Request) {
+  const guard = await requireFeature(req, 'tender_sheet');
+  if (!guard.ok) return guard.response;
   let body: { template?: TenderTemplate; quotation?: ExtractedQuotation };
   try {
     body = await req.json();

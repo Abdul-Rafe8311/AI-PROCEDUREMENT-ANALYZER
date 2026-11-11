@@ -25,10 +25,10 @@ const REQUIRED: Record<string, string> = {
   intake: 'public',
   extract: 'apikey',
   'admin/api-keys': 'admin',
-  chat: 'public',
-  'doc-answer': 'public',
-  'tender-sheet/fill': 'public',
-  'tender-sheet/export': 'public',
+  chat: 'feature:chat',
+  'doc-answer': 'feature:chat',
+  'tender-sheet/fill': 'feature:tender_sheet',
+  'tender-sheet/export': 'feature:tender_sheet',
 };
 
 const files = routes(ROOT);

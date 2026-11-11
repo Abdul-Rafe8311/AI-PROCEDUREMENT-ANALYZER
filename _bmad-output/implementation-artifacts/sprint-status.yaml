@@ -52,8 +52,8 @@ development_status:
   2-6-plans-page-current-plan-usage-and-comparison: done
   epic-2-retrospective: optional
 
-  epic-3: backlog
-  3-1-server-side-feature-gating: backlog
+  epic-3: in-progress
+  3-1-server-side-feature-gating: done
   3-2-locked-feature-controls-and-dialog: backlog
   epic-3-retrospective: optional
 

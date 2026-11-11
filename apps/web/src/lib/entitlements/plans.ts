@@ -15,3 +15,9 @@ export const hasTenderSheetAccess = (p: PlanId): boolean => PLAN_RANK[p] >= PLAN
 /** Priority Support is Max-only (FR19). A service target, not an enforced SLA. */
 export const hasPrioritySupport = (p: PlanId): boolean => p === 'max';
 export const supportTargetHours = (p: PlanId): number => (hasPrioritySupport(p) ? 12 : 48);
+
+export type FeatureId = 'chat' | 'tender_sheet';
+export const FEATURE_REQUIRED_PLAN: Record<FeatureId, PaidPlanId> = { chat: 'plus', tender_sheet: 'pro' };
+export const featureRequiredPlan = (f: FeatureId): PaidPlanId => FEATURE_REQUIRED_PLAN[f];
+export const canUseFeature = (p: PlanId, f: FeatureId): boolean =>
+  f === 'chat' ? hasChatAccess(p) : hasTenderSheetAccess(p);

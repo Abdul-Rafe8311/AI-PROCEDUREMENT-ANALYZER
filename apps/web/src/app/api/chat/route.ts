@@ -1,5 +1,6 @@
-// guard: public
+// guard: feature:chat
 import { NextResponse } from 'next/server';
+import { requireFeature } from '@/lib/server/guard';
 import { answerFromData } from '@/lib/analysis-engine';
 import { answerWithClaudeChart, CHAT_MODEL, isAnthropicConfigured } from '@/lib/anthropic';
 import type { AnalysisResult, ChatMessage } from '@/lib/workspace-types';
@@ -20,6 +21,8 @@ interface ChatBody {
 // or the call fails, it degrades to a deterministic answer computed from the
 // SAME analysis data (never sample/fabricated data) and says so via `notice`.
 export async function POST(req: Request) {
+  const guard = await requireFeature(req, 'chat');
+  if (!guard.ok) return guard.response;
   let body: ChatBody;
   try {
     body = (await req.json()) as ChatBody;
