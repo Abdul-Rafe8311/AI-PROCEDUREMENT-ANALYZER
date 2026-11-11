@@ -32,7 +32,7 @@ export async function loadPeriods(
   const since = new Date(now.getTime() - LOOKBACK_MS).toISOString();
   const { data, error } = await client
     .from('plan_periods')
-    .select('plan, starts_at, ends_at, voided_at')
+    .select('id, plan, starts_at, ends_at, voided_at')
     .eq('user_id', userId)
     .is('voided_at', null)
     .gte('ends_at', since)
@@ -40,6 +40,7 @@ export async function loadPeriods(
     .limit(500);
   if (error) throw new DbUnavailableError('plan_periods query failed');
   return (data ?? []).map((r) => ({
+    id: r.id as string,
     plan: r.plan as PaidPlanId,
     startsAt: r.starts_at as string,
     endsAt: r.ends_at as string,

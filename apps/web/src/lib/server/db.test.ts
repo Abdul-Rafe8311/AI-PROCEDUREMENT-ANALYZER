@@ -18,11 +18,11 @@ const NOW = new Date('2026-11-11T00:00:00Z');
 
 test('loadPeriods maps rows and filters voided and old periods', async () => {
   const { calls, client } = fakeClient({
-    data: [{ plan: 'pro', starts_at: '2026-11-01T00:00:00Z', ends_at: '2026-12-01T00:00:00Z', voided_at: null }],
+    data: [{ id: 'pp1', plan: 'pro', starts_at: '2026-11-01T00:00:00Z', ends_at: '2026-12-01T00:00:00Z', voided_at: null }],
   });
   const out = await loadPeriods('u1', NOW, client);
   assert.deepEqual(out, [
-    { plan: 'pro', startsAt: '2026-11-01T00:00:00Z', endsAt: '2026-12-01T00:00:00Z', voidedAt: null },
+    { id: 'pp1', plan: 'pro', startsAt: '2026-11-01T00:00:00Z', endsAt: '2026-12-01T00:00:00Z', voidedAt: null },
   ]);
   assert.deepEqual(calls.find((c) => c[0] === 'from'), ['from', 'plan_periods']);
   assert.deepEqual(calls.find((c) => c[0] === 'eq'), ['eq', 'user_id', 'u1']);

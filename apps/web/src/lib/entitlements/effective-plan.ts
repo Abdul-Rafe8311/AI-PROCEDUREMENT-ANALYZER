@@ -2,6 +2,7 @@
 import type { PaidPlanId, PlanId } from './plans';
 
 export interface PlanPeriod {
+  id?: string;
   plan: PaidPlanId;
   startsAt: string | Date;
   endsAt: string | Date;

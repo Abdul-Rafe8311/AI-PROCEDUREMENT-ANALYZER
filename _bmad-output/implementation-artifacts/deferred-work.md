@@ -39,3 +39,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-1-api-key-principal-for-the-fastn-intake-workflow.md`
   summary: `/api/extract` now requires a JWT or X-Api-Key. Fastn intake calls to it fail with 401 until a key is minted (POST /api/admin/api-keys) and sent.
   evidence: Spine rollout step 3 must precede deploy.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-quota-windows-and-atomic-quota-functions.md`
+  summary: reserve/confirm/release SQL has no behavior test (dedupe, STALE, 10-minute expiry, confirm after expiry).
+  evidence: No Postgres locally; add a runbook SQL script like cases.sql and run it in the Supabase SQL editor.
