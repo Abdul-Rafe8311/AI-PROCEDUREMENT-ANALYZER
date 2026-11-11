@@ -11,3 +11,7 @@ export const planRank = (p: PlanId): number => PLAN_RANK[p];
 export const planQuota = (p: PlanId): number => PLAN_QUOTA[p];
 export const hasChatAccess = (p: PlanId): boolean => PLAN_RANK[p] >= PLAN_RANK.plus;
 export const hasTenderSheetAccess = (p: PlanId): boolean => PLAN_RANK[p] >= PLAN_RANK.pro;
+
+/** Priority Support is Max-only (FR19). A service target, not an enforced SLA. */
+export const hasPrioritySupport = (p: PlanId): boolean => p === 'max';
+export const supportTargetHours = (p: PlanId): number => (hasPrioritySupport(p) ? 12 : 48);

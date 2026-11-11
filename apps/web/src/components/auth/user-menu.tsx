@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { LogOut } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
@@ -29,6 +30,12 @@ export function UserMenu() {
       >
         {displayName}
       </span>
+      <Link
+        href="/plans"
+        className="inline-flex min-h-[44px] items-center px-2 text-sm font-medium text-muted-foreground transition hover:text-foreground"
+      >
+        Plans
+      </Link>
       <Button variant="ghost" size="sm" onClick={onLogout} disabled={busy} className="gap-1.5">
         <LogOut className="h-4 w-4" />
         <span className="hidden sm:inline">Sign out</span>

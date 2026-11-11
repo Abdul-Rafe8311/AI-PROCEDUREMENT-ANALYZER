@@ -20,12 +20,14 @@ test('no period -> free', async () => {
   const r = await run([]);
   assert.equal(r.status, 200);
   assert.equal(r.headers.get('cache-control'), 'no-store');
-  assert.deepEqual(await r.json(), { plan: 'free', expiresAt: null, queued: [], used: 0, quota: 14, resetAt: '2026-11-30T21:00:00.000Z', isAdmin: false });
+  assert.deepEqual(await r.json(), { plan: 'free', expiresAt: null, queued: [], lastExpired: null, used: 0, quota: 14, resetAt: '2026-11-30T21:00:00.000Z', isAdmin: false });
 });
 
 test('expired -> free', async () => {
   const r = await run([{ plan: 'pro', startsAt: '2026-09-01T00:00:00Z', endsAt: '2026-11-11T00:00:00Z' }]);
-  assert.equal((await r.json()).plan, 'free');
+  const b = await r.json();
+  assert.equal(b.plan, 'free');
+  assert.deepEqual(b.lastExpired, { plan: 'pro', endedAt: '2026-11-11T00:00:00.000Z' });
 });
 
 test('active plus queued ordered', async () => {

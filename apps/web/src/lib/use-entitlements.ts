@@ -11,6 +11,7 @@ export interface EntitlementsData {
   plan: string;
   expiresAt: string | null;
   queued: Array<{ plan: string; startsAt: string; endsAt: string }>;
+  lastExpired: { plan: string; endedAt: string } | null;
   used: number;
   quota: number;
   resetAt: string | null;

@@ -18,6 +18,7 @@ const REQUIRED: Record<string, string> = {
   'ta-form/export-excel': 'public',
   'me/entitlements': 'jwt',
   'admin/users': 'admin',
+  'billing/config': 'jwt',
   approve: 'token-link',
   dashboard: 'token-link',
   fx: 'public',

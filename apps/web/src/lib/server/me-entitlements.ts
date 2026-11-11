@@ -23,6 +23,16 @@ function defaultIsAdmin(principal: Principal): boolean {
   }
 }
 
+/** Most recent non-voided period that has already ended (for the one-time "plan ended" notice). */
+function lastExpired(periods: PlanPeriod[], now: Date): { plan: string; endedAt: string } | null {
+  let best: PlanPeriod | null = null;
+  for (const p of periods) {
+    if (p.voidedAt || new Date(p.endsAt).getTime() > now.getTime()) continue;
+    if (!best || new Date(p.endsAt).getTime() > new Date(best.endsAt).getTime()) best = p;
+  }
+  return best ? { plan: best.plan, endedAt: new Date(best.endsAt).toISOString() } : null;
+}
+
 const iso = (d: string | Date) => new Date(d).toISOString();
 const headers = { 'Cache-Control': 'no-store' };
 
@@ -54,6 +64,7 @@ export async function buildEntitlements(principal: Principal, deps: Entitlements
           startsAt: iso(p.startsAt),
           endsAt: iso(p.endsAt),
         })),
+        lastExpired: lastExpired(periods, now),
         used,
         quota: win.quota,
         resetAt: win.resetAt.toISOString(),
