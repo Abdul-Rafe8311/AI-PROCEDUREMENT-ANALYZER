@@ -188,6 +188,10 @@ graph TD
 - **Prevents:** duplicate or historic reminders; a public job endpoint; plan correctness depending on the scheduler
 - **Rule:**
   - `GET /api/cron/daily` requires `Authorization: Bearer <CRON_SECRET>` and is the only job entry point. Vercel Cron calls it once a day (`vercel.json` `crons`); Vercel sends `CRON_SECRET` as that header when the variable is set.
+  - The route exports `const dynamic = 'force-dynamic'` so Next never caches or prerenders it.
+  - Vercel may skip a run or run it twice, so every task is idempotent and the job has no schedule-dependent logic. The reminder window (3 days) and retention (12 months) are wide enough that one missed day loses nothing.
+  - On the Hobby plan the run happens once a day at some point within the scheduled hour, not at an exact minute. Nothing may depend on an exact time of day.
+  - Crons run only on production deployments, never on previews; preview and local runs call the route by hand with the secret.
   - Tasks, each safe to run twice: (a) expiry reminders, (b) screenshot retention deletion.
   - Reminder: a non-voided period qualifies only when `now < ends_at <= now + 3 days` and no non-voided period starts at or after its `ends_at`. The job first claims it by inserting an `email_log` row with unique `(template, subject_id)` for `expiry_reminder` (`subject_id` is the period id), then sends; a failed send is marked failed and may be retried by a later run while the period still qualifies.
   - The job never changes `plan_periods`; expiry stays computed (AD-3).
