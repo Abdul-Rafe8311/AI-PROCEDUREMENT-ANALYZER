@@ -1,5 +1,6 @@
 // Pure rules and copy for the proof form, history and banners (UX-DR7, UX-DR8, UX-DR9, UX-DR16).
 import { MAX_PROOF_BYTES, type PaymentStatus } from './payments-types';
+import { captchaMessageForCode } from './captcha';
 
 export const PROOF_ACCEPT = 'image/png,image/jpeg,application/pdf';
 
@@ -51,6 +52,7 @@ export type SubmitOutcome =
   | { kind: 'ok' }
   | { kind: 'fields'; fields: Partial<Record<FieldName, string>>; first: FieldName }
   | { kind: 'pending' }
+  | { kind: 'captcha'; message: string }
   | { kind: 'network' }
   | { kind: 'error'; message: string };
 
@@ -58,6 +60,8 @@ export type SubmitOutcome =
 export function interpretSubmit(status: number, body: unknown): SubmitOutcome {
   const b = (body && typeof body === 'object' ? body : {}) as { code?: string; fields?: Record<string, string> };
   if (status === 201) return { kind: 'ok' };
+  const captcha = captchaMessageForCode(b.code);
+  if (captcha && (status === 400 || status === 503)) return { kind: 'captcha', message: captcha };
   if (status === 409 && b.code === 'PENDING_REQUEST_EXISTS') return { kind: 'pending' };
   if (status === 400 && b.code === 'VALIDATION' && b.fields) {
     const fields: Partial<Record<FieldName, string>> = {};

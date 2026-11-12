@@ -6,6 +6,10 @@ import { PAID_PLAN_IDS, type PaidPlanId } from '../entitlements/plans';
 import { MAX_PROOF_BYTES, cleanTransactionId, type PaymentDto, type PaymentsPage } from '../payments-types';
 import { parsePrices } from './billing-config';
 import type { Principal } from './guard';
+import type { CaptchaResult } from './turnstile';
+
+/** Multipart field the Turnstile widget token travels in (Cloudflare's own field name). */
+export const CAPTCHA_FIELD = 'cf-turnstile-response';
 
 export interface ProofKind {
   ext: 'png' | 'jpg' | 'pdf';
@@ -70,6 +74,8 @@ export interface SubmitDeps {
   /** PLAN_PRICES_USD from config */
   rawPrices: unknown;
   newId?: () => string;
+  /** Turnstile verification (AD-9); anything but `ok` stops the request before validation or upload. */
+  verifyCaptcha: (token: unknown, req: Request) => Promise<CaptchaResult>;
   /** runs after the row commits; must never throw into the response */
   afterCommit?: (row: PaymentRow) => Promise<void>;
 }
@@ -79,13 +85,19 @@ function asBlob(v: FormDataEntryValue | null): Blob | null {
 }
 
 export async function submitPayment(req: Request, principal: Principal, deps: SubmitDeps): Promise<Response> {
-  // TURNSTILE HOOK (Epic 5, Story 5.1): verify the widget token here, before any validation or upload.
-
   let form: FormData;
   try {
     form = await req.formData();
   } catch {
     return json(400, { error: 'Invalid input.', code: 'VALIDATION', fields: { file: 'Send the form as multipart/form-data.' } });
+  }
+
+  // Turnstile (AD-9): after the guard and the multipart parse, before any validation or upload.
+  const captcha = await deps.verifyCaptcha(form.get(CAPTCHA_FIELD), req);
+  if (!captcha.ok) {
+    return captcha.status === 400
+      ? json(400, { error: 'Verification failed.', code: 'CAPTCHA_FAILED' })
+      : json(503, { error: 'Verification is unavailable.', code: 'CAPTCHA_UNAVAILABLE' });
   }
 
   const fields: Record<string, string> = {};

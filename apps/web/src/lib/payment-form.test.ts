@@ -46,3 +46,12 @@ test('page count', () => {
   assert.equal(pageCount(10, 10), 1);
   assert.equal(pageCount(11, 10), 2);
 });
+
+test('captcha codes map to the exact messages and are not a generic error', () => {
+  assert.deepEqual(interpretSubmit(400, { code: 'CAPTCHA_FAILED' }), { kind: 'captcha', message: 'Verification failed. Please try again.' });
+  assert.deepEqual(interpretSubmit(503, { code: 'CAPTCHA_UNAVAILABLE' }), {
+    kind: 'captcha',
+    message: 'Verification is unavailable right now. Please try again in a moment.',
+  });
+  assert.equal(interpretSubmit(200, { code: 'CAPTCHA_FAILED' }).kind, 'error');
+});

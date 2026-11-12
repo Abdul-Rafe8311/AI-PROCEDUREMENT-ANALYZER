@@ -4,6 +4,7 @@ import { getConfig } from '@/lib/server/config';
 import { listOwnPayments, submitPayment } from '@/lib/server/payments';
 import { supabasePaymentsStore } from '@/lib/server/payments-db';
 import { notifyAdminsPaymentSubmitted } from '@/lib/server/email';
+import { trustedClientIp, verifyTurnstile } from '@/lib/server/turnstile';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -25,6 +26,7 @@ export async function POST(req: Request) {
     return await submitPayment(req, g.principal, {
       store: supabasePaymentsStore(),
       rawPrices: getConfig().planPricesUsd,
+      verifyCaptcha: (token, r) => verifyTurnstile(token, trustedClientIp(r)),
       // After the row commits (AD-10): a failed email never removes the object or changes the request.
       afterCommit: async (row) => {
         await notifyAdminsPaymentSubmitted({

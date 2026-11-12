@@ -5,6 +5,8 @@ import { FileUp, Loader2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { TurnstileWidget, type TurnstileHandle } from '@/components/turnstile-widget';
+import { CAPTCHA_UNAVAILABLE_MESSAGE, submitBlocked, turnstileSiteKey } from '@/lib/captcha';
 import { apiFetch } from '@/lib/api-fetch';
 import type { PaidPlanId } from '@/lib/entitlements/plans';
 import {
@@ -30,6 +32,10 @@ export function ProofForm({ plan, onSubmitted }: { plan: PaidPlanId; onSubmitted
   const fileRef = useRef<HTMLInputElement>(null);
   const dropRef = useRef<HTMLButtonElement>(null);
   const inFlight = useRef(false);
+  const widget = useRef<TurnstileHandle>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [captchaError, setCaptchaError] = useState<string | null>(null);
+  const captchaRequired = turnstileSiteKey() !== null;
 
   useEffect(() => {
     if (!file || !file.type.startsWith('image/')) {
@@ -72,11 +78,13 @@ export function ProofForm({ plan, onSubmitted }: { plan: PaidPlanId; onSubmitted
     setBusy(true);
     setErrors({});
     setFormError(null);
+    setCaptchaError(null);
     try {
       const body = new FormData();
       body.set('plan', plan);
       body.set('transactionId', transactionId.trim());
       body.set('file', file as File);
+      if (token) body.set('cf-turnstile-response', token);
       const res = await apiFetch('/api/payments', { method: 'POST', body });
       const json = await res.json().catch(() => null);
       const out = interpretSubmit(res.status, json);
@@ -87,6 +95,9 @@ export function ProofForm({ plan, onSubmitted }: { plan: PaidPlanId; onSubmitted
       } else if (out.kind === 'fields') {
         setErrors(out.fields);
         focusField(out.first);
+      } else if (out.kind === 'captcha') {
+        setCaptchaError(out.message);
+        widget.current?.focus(); // the alert below announces the message
       } else if (out.kind === 'error') {
         setFormError(out.message);
       }
@@ -95,6 +106,8 @@ export function ProofForm({ plan, onSubmitted }: { plan: PaidPlanId; onSubmitted
     } finally {
       inFlight.current = false;
       setBusy(false);
+      // A token is single-use: fresh challenge after every attempt. Typed ID and file stay as they are.
+      widget.current?.reset();
     }
   }
 
@@ -192,13 +205,26 @@ export function ProofForm({ plan, onSubmitted }: { plan: PaidPlanId; onSubmitted
         )}
       </div>
 
+      <div className="space-y-2">
+        <TurnstileWidget
+          ref={widget}
+          onToken={setToken}
+          onUnavailable={() => setCaptchaError(CAPTCHA_UNAVAILABLE_MESSAGE)}
+        />
+        {captchaError && (
+          <p role="alert" className="text-sm text-danger">
+            {captchaError}
+          </p>
+        )}
+      </div>
+
       {formError && (
         <p role="alert" className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm">
           {formError}
         </p>
       )}
 
-      <Button type="submit" disabled={busy} className="min-h-[44px] w-full sm:w-auto">
+      <Button type="submit" disabled={submitBlocked({ required: captchaRequired, token, busy })} className="min-h-[44px] w-full sm:w-auto">
         {busy ? (
           <>
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Uploading…

@@ -8,6 +8,7 @@ const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2
 const JPG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1]);
 const PDF = new TextEncoder().encode('%PDF-1.7 fake');
 const prices = { plus: 6, pro: 12, max: 30 };
+const pass = async () => ({ ok: true }) as const;
 
 function fakeStore(over: Partial<PaymentsStore> = {}) {
   const calls = { uploaded: [] as string[], removed: [] as string[], inserted: [] as unknown[] };
@@ -46,7 +47,7 @@ test('sniffProof reads magic bytes, ignores everything else', () => {
 
 test('valid submission uploads to <user>/<id>.<ext>, copies the price and returns 201', async () => {
   const { store, calls } = fakeStore();
-  const r = await submitPayment(req(good), user, { store, rawPrices: prices, newId: () => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' });
+  const r = await submitPayment(req(good), user, { store, rawPrices: prices, verifyCaptcha: pass, newId: () => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' });
   assert.equal(r.status, 201);
   assert.deepEqual(calls.uploaded, [`${user.userId}/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png`]);
   assert.equal((calls.inserted[0] as { amount_usd: number }).amount_usd, 12);
@@ -55,7 +56,7 @@ test('valid submission uploads to <user>/<id>.<ext>, copies the price and return
 
 test('missing fields give 400 VALIDATION with field-level errors and nothing is uploaded', async () => {
   const { store, calls } = fakeStore();
-  const r = await submitPayment(req({}), user, { store, rawPrices: prices });
+  const r = await submitPayment(req({}), user, { store, rawPrices: prices, verifyCaptcha: pass });
   assert.equal(r.status, 400);
   const b = await body(r);
   assert.equal(b.code, 'VALIDATION');
@@ -66,7 +67,7 @@ test('missing fields give 400 VALIDATION with field-level errors and nothing is 
 test('free or unknown plan is rejected', async () => {
   const { store } = fakeStore();
   for (const plan of ['free', 'gold', '']) {
-    const r = await submitPayment(req({ ...good, plan }), user, { store, rawPrices: prices });
+    const r = await submitPayment(req({ ...good, plan }), user, { store, rawPrices: prices, verifyCaptcha: pass });
     assert.equal(r.status, 400);
     assert.ok((await body(r)).fields.plan);
   }
@@ -75,14 +76,14 @@ test('free or unknown plan is rejected', async () => {
 test('transaction id: blank, too long or with control characters is rejected', async () => {
   const { store } = fakeStore();
   for (const t of ['   ', 'x'.repeat(101), 'a\u0000b']) {
-    const r = await submitPayment(req({ ...good, transactionId: t }), user, { store, rawPrices: prices });
+    const r = await submitPayment(req({ ...good, transactionId: t }), user, { store, rawPrices: prices, verifyCaptcha: pass });
     assert.equal(r.status, 400, JSON.stringify(t));
   }
 });
 
 test('a spoofed file (html declared as png) is rejected by magic bytes', async () => {
   const { store, calls } = fakeStore();
-  const r = await submitPayment(req({ ...good, file: new TextEncoder().encode('<html>x</html>') }), user, { store, rawPrices: prices });
+  const r = await submitPayment(req({ ...good, file: new TextEncoder().encode('<html>x</html>') }), user, { store, rawPrices: prices, verifyCaptcha: pass });
   assert.equal(r.status, 400);
   assert.match((await body(r)).fields.file, /PNG, JPG or PDF/);
   assert.equal(calls.uploaded.length, 0);
@@ -92,7 +93,7 @@ test('a file over 5 MB is rejected with the limit stated', async () => {
   const { store } = fakeStore();
   const big = new Uint8Array(5 * 1024 * 1024 + 1);
   big.set(PNG);
-  const r = await submitPayment(req({ ...good, file: big }), user, { store, rawPrices: prices });
+  const r = await submitPayment(req({ ...good, file: big }), user, { store, rawPrices: prices, verifyCaptcha: pass });
   assert.equal(r.status, 400);
   assert.match((await body(r)).fields.file, /limit is 5 MB/);
 });
@@ -101,13 +102,13 @@ test('exactly 5 MB is accepted', async () => {
   const { store } = fakeStore();
   const ok = new Uint8Array(5 * 1024 * 1024);
   ok.set(PNG);
-  assert.equal((await submitPayment(req({ ...good, file: ok }), user, { store, rawPrices: prices })).status, 201);
+  assert.equal((await submitPayment(req({ ...good, file: ok }), user, { store, rawPrices: prices, verifyCaptcha: pass })).status, 201);
 });
 
 test('no configured price: 503 PAYMENTS_UNAVAILABLE and nothing uploaded', async () => {
   const { store, calls } = fakeStore();
   for (const rawPrices of [null, { pro: 'x' }, { pro: 12.5 }]) {
-    const r = await submitPayment(req(good), user, { store, rawPrices });
+    const r = await submitPayment(req(good), user, { store, rawPrices, verifyCaptcha: pass });
     assert.equal(r.status, 503);
     assert.equal((await body(r)).code, 'PAYMENTS_UNAVAILABLE');
   }
@@ -116,7 +117,7 @@ test('no configured price: 503 PAYMENTS_UNAVAILABLE and nothing uploaded', async
 
 test('a second pending request is 409 and the uploaded object is removed', async () => {
   const { store, calls } = fakeStore({ async insert() { return 'pending_exists'; } });
-  const r = await submitPayment(req(good), user, { store, rawPrices: prices });
+  const r = await submitPayment(req(good), user, { store, rawPrices: prices, verifyCaptcha: pass });
   assert.equal(r.status, 409);
   assert.equal((await body(r)).code, 'PENDING_REQUEST_EXISTS');
   assert.equal(calls.removed.length, 1);
@@ -125,14 +126,14 @@ test('a second pending request is 409 and the uploaded object is removed', async
 
 test('insert failure removes the object and returns 503', async () => {
   const { store, calls } = fakeStore({ async insert() { throw new Error('db'); } });
-  const r = await submitPayment(req(good), user, { store, rawPrices: prices });
+  const r = await submitPayment(req(good), user, { store, rawPrices: prices, verifyCaptcha: pass });
   assert.equal(r.status, 503);
   assert.deepEqual(calls.removed, calls.uploaded);
 });
 
 test('upload failure inserts nothing and removes nothing', async () => {
   const { store, calls } = fakeStore({ async upload() { throw new Error('storage'); } });
-  const r = await submitPayment(req(good), user, { store, rawPrices: prices });
+  const r = await submitPayment(req(good), user, { store, rawPrices: prices, verifyCaptcha: pass });
   assert.equal(r.status, 503);
   assert.equal(calls.inserted.length, 0);
   assert.equal(calls.removed.length, 0);
@@ -142,6 +143,7 @@ test('afterCommit runs once after the insert; its failure never changes the 201 
   const { store, calls } = fakeStore();
   let ran = 0;
   const r = await submitPayment(req(good), user, {
+    verifyCaptcha: pass,
     store, rawPrices: prices,
     afterCommit: async () => { ran++; throw new Error('mail down'); },
   });
@@ -188,4 +190,46 @@ test('screenshot: owner gets a 60 s URL, admin too, a stranger and an unknown id
 test('screenshot: a request with no stored file is 404', async () => {
   const { store } = fakeStore({ async get() { return row({ screenshot_path: null }); } });
   assert.equal((await screenshotUrl(user, row().id, false, store)).status, 404);
+});
+
+test('captcha runs before validation and upload; token comes from cf-turnstile-response', async () => {
+  const { store, calls } = fakeStore();
+  const seen: unknown[] = [];
+  const r = await submitPayment(req({ ...good, 'cf-turnstile-response': 'tok-1' }), user, {
+    store,
+    rawPrices: prices,
+    verifyCaptcha: async (t) => {
+      seen.push(t);
+      return { ok: true };
+    },
+  });
+  assert.equal(r.status, 201);
+  assert.deepEqual(seen, ['tok-1']);
+  assert.equal(calls.uploaded.length, 1);
+});
+
+test('captcha failure is 400 CAPTCHA_FAILED and nothing is uploaded or inserted, even with an invalid form', async () => {
+  for (const fields of [good, {}]) {
+    const { store, calls } = fakeStore();
+    const r = await submitPayment(req(fields), user, {
+      store,
+      rawPrices: prices,
+      verifyCaptcha: async () => ({ ok: false, status: 400, code: 'CAPTCHA_FAILED' }),
+    });
+    assert.equal(r.status, 400);
+    assert.equal((await body(r)).code, 'CAPTCHA_FAILED');
+    assert.deepEqual([calls.uploaded.length, calls.inserted.length], [0, 0]);
+  }
+});
+
+test('captcha unavailable is 503 CAPTCHA_UNAVAILABLE and never lets the request through', async () => {
+  const { store, calls } = fakeStore();
+  const r = await submitPayment(req(good), user, {
+    store,
+    rawPrices: prices,
+    verifyCaptcha: async () => ({ ok: false, status: 503, code: 'CAPTCHA_UNAVAILABLE' }),
+  });
+  assert.equal(r.status, 503);
+  assert.equal((await body(r)).code, 'CAPTCHA_UNAVAILABLE');
+  assert.deepEqual([calls.uploaded.length, calls.inserted.length], [0, 0]);
 });
