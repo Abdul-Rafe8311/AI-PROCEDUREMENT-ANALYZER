@@ -50,7 +50,7 @@ export const FAQS: FaqItem[] = [
   },
   {
     q: 'What happens to my data?',
-    a: 'Your quotations and analyses are tied to your own account. Quotation text is extracted using the Anthropic Claude API. Payment proof screenshots are deleted automatically after 12 months.',
+    a: 'We never sell your data. Your quotation files are used only to generate your analysis and are never shared with other customers. Your quotations and analyses are tied to your own account. Quotation text is extracted using the Anthropic Claude API. Payment proof screenshots are deleted automatically after 12 months.',
   },
 ];
 

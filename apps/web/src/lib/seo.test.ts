@@ -49,3 +49,12 @@ test('llms.txt: links use SITE_URL, prices shown when known', () => {
   assert.ok(t.includes(`${SITE_URL}/signup`));
   assert.ok(t.includes('Pro: USD 49/month'));
 });
+
+test('privacy FAQ: same text in the home FAQ, FAQPage JSON-LD and llms.txt', () => {
+  const claim = 'We never sell your data. Your quotation files are used only to generate your analysis and are never shared with other customers.';
+  const item = FAQS.find((f) => f.q === 'What happens to my data?');
+  assert.ok(item?.a.startsWith(claim));
+  assert.ok(item?.a.includes('Anthropic Claude API') && item?.a.includes('12 months'));
+  assert.ok(JSON.stringify(faqJsonLd()).includes(claim));
+  assert.ok(buildLlmsTxt(null).includes(claim));
+});
