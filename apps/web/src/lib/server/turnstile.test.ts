@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SITEVERIFY_URL, trustedClientIp, verifyTurnstile } from './turnstile';
+import { SITEVERIFY_URL, requestHostname, trustedClientIp, verifyTurnstile } from './turnstile';
 
 const secret = () => 'test-secret-value';
 const reply = (body: unknown, status = 200) => async () => new Response(JSON.stringify(body), { status });
@@ -118,4 +118,24 @@ test('trustedClientIp accepts one valid IP from x-real-ip only', () => {
   assert.equal(trustedClientIp(r({ 'x-real-ip': 'not-an-ip' })), undefined);
   assert.equal(trustedClientIp(r({ 'x-forwarded-for': '203.0.113.9' })), undefined);
   assert.equal(trustedClientIp(r({})), undefined);
+});
+
+test('a token minted for another action is rejected when an action is expected', async () => {
+  const f = reply({ success: true, action: 'login', hostname: 'app.example.test' });
+  assert.deepEqual(await verifyTurnstile('tok', undefined, { secret, fetchImpl: f }, { action: 'payment' }), FAILED);
+  const none = reply({ success: true, hostname: 'app.example.test' });
+  assert.deepEqual(await verifyTurnstile('tok', undefined, { secret, fetchImpl: none }, { action: 'payment' }), FAILED);
+  const ok = reply({ success: true, action: 'payment', hostname: 'app.example.test' });
+  assert.deepEqual(await verifyTurnstile('tok', undefined, { secret, fetchImpl: ok }, { action: 'payment' }), { ok: true });
+});
+
+test('a token solved on another hostname is rejected; localhost skips the check', async () => {
+  const f = reply({ success: true, action: 'payment', hostname: 'evil.example.test' });
+  assert.deepEqual(await verifyTurnstile('tok', undefined, { secret, fetchImpl: f }, { hostname: 'app.example.test' }), FAILED);
+  assert.deepEqual(await verifyTurnstile('tok', undefined, { secret, fetchImpl: f }, { hostname: 'localhost' }), { ok: true });
+});
+
+test('requestHostname prefers x-forwarded-host and drops the port', () => {
+  const r = new Request('http://x/y', { headers: { host: 'internal:3000', 'x-forwarded-host': 'App.Example.test:443' } });
+  assert.equal(requestHostname(r), 'app.example.test');
 });

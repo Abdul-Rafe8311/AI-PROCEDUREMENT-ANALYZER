@@ -62,3 +62,15 @@ export async function auditApiKey(
   });
   if (error) throw new DbUnavailableError('audit insert failed');
 }
+
+/** False when the user is deleted or currently banned/disabled in Supabase Auth. Throws DbUnavailableError on lookup failure (fail closed). */
+export async function apiKeyUserActive(userId: string, client: Pick<SupabaseClient, 'auth'> = serviceClient()): Promise<boolean> {
+  const { data, error } = await client.auth.admin.getUserById(userId);
+  if (error) {
+    if ((error as { status?: number }).status === 404) return false;
+    throw new DbUnavailableError('api key user lookup failed');
+  }
+  const u = data?.user as { banned_until?: string | null } | null | undefined;
+  if (!u) return false;
+  return !(u.banned_until && Date.parse(u.banned_until) > Date.now());
+}

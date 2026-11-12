@@ -28,7 +28,7 @@ export function PasswordStrength({ password }: { password: string }) {
         <span className={cn('text-xs font-medium capitalize', textColor)}>{label}</span>
       </div>
       {issues.length > 0 && (
-        <ul className="text-xs text-muted-foreground">
+        <ul className="text-xs text-muted-foreground" aria-live="polite">
           {issues.map((i) => (
             <li key={i}>• {i}</li>
           ))}

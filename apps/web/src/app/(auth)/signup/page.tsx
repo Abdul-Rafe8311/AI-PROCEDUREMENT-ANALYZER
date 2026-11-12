@@ -3,10 +3,9 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { CheckCircle2, Loader2 } from 'lucide-react';
+import { CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { AuthHeading, Field, FormAlert, PasswordField, SubmitButton, authLinkClass } from '@/components/auth/auth-ui';
 import { PasswordStrength } from '@/components/auth/password-strength';
 import { useAuth } from '@/lib/auth-context';
 import { assessPassword } from '@/lib/password';
@@ -22,6 +21,7 @@ export default function SignupPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmSent, setConfirmSent] = useState(false);
+  const [touched, setTouched] = useState(false);
   const captcha = useCaptchaField();
 
   useEffect(() => {
@@ -29,11 +29,16 @@ export default function SignupPage() {
   }, [ready, user, router]);
 
   const strong = assessPassword(password).ok;
-  const canSubmit = name.trim().length > 0 && email.trim().length > 0 && strong && !busy && !captcha.waiting;
+  const emailOk = /^\S+@\S+\.\S+$/.test(email.trim());
+  const nameErr = touched && !name.trim() ? 'Enter your full name.' : null;
+  const emailErr = touched && !emailOk ? 'Enter a valid email address.' : null;
+  const passErr = touched && !strong ? 'Choose a stronger password (see requirements below).' : null;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!canSubmit) return;
+    if (busy || captcha.waiting) return;
+    setTouched(true);
+    if (!name.trim() || !emailOk || !strong) return;
     setError(null);
     setBusy(true);
     const { error, needsEmailConfirmation } = await signUp(name, email, password, captcha.token);
@@ -56,14 +61,14 @@ export default function SignupPage() {
 
   if (confirmSent) {
     return (
-      <div className="rounded-2xl border border-border bg-card p-6 text-center shadow-sm">
+      <div className="rounded-2xl border border-border bg-card p-8 text-center shadow-sm">
         <CheckCircle2 className="mx-auto h-10 w-10 text-success" />
         <h1 className="mt-3 text-xl font-bold tracking-tight">Confirm your email</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           We sent a confirmation link to <span className="font-medium text-foreground">{email}</span>. Click it to
           activate your account, then sign in.
         </p>
-        <Button asChild variant="outline" className="mt-4 w-full">
+        <Button asChild variant="outline" size="lg" className="mt-4 w-full">
           <Link href="/login">Back to sign in</Link>
         </Button>
       </div>
@@ -72,63 +77,50 @@ export default function SignupPage() {
 
   return (
     <div>
-      <div className="mb-6 text-center">
-        <h1 className="text-2xl font-bold tracking-tight">Create your account</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Start analyzing supplier quotations in minutes.</p>
-      </div>
+      <AuthHeading title="Create your account" subtitle="Start analyzing supplier quotations in minutes." />
 
-      <form onSubmit={onSubmit} className="space-y-4 rounded-2xl border border-border bg-card p-6 shadow-sm">
-        {error && (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {error}
-          </div>
-        )}
-        <div className="space-y-1.5">
-          <Label htmlFor="name">Full name</Label>
-          <Input
-            id="name"
-            type="text"
-            autoComplete="name"
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Your full name"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="email">Email</Label>
-          <Input
-            id="email"
-            type="email"
-            autoComplete="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@company.com"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="password">Password</Label>
-          <Input
-            id="password"
-            type="password"
-            autoComplete="new-password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Create a strong password"
-          />
+      <form onSubmit={onSubmit} className="space-y-5" noValidate>
+        {error && <FormAlert>{error}</FormAlert>}
+        <Field
+          id="name"
+          label="Full name"
+          type="text"
+          autoComplete="name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Your full name"
+          error={nameErr}
+        />
+        <Field
+          id="email"
+          label="Work email"
+          type="email"
+          autoComplete="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@company.com"
+          error={emailErr}
+        />
+        <PasswordField
+          id="password"
+          label="Password"
+          autoComplete="new-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Create a strong password"
+          error={passErr}
+        >
           <PasswordStrength password={password} />
-        </div>
+        </PasswordField>
         {captcha.node}
-        <Button type="submit" className="w-full" disabled={!canSubmit}>
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create account'}
-        </Button>
+        <SubmitButton busy={busy} disabled={captcha.waiting} busyLabel="Creating account…">
+          Create account
+        </SubmitButton>
       </form>
 
-      <p className="mt-4 text-center text-sm text-muted-foreground">
+      <p className="mt-6 text-center text-sm text-muted-foreground">
         Already have an account?{' '}
-        <Link href="/login" className="font-medium text-primary hover:underline">
+        <Link href="/login" className={authLinkClass}>
           Sign in
         </Link>
       </p>

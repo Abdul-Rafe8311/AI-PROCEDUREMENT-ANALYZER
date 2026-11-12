@@ -84,7 +84,15 @@ function asBlob(v: FormDataEntryValue | null): Blob | null {
   return v && typeof v === 'object' && typeof (v as Blob).arrayBuffer === 'function' ? (v as Blob) : null;
 }
 
+/** Multipart framing + text fields on top of the 5 MB file; anything larger is rejected before parsing. */
+export const MAX_BODY_BYTES = MAX_PROOF_BYTES + 64 * 1024;
+
 export async function submitPayment(req: Request, principal: Principal, deps: SubmitDeps): Promise<Response> {
+  // Refuse oversized bodies before buffering them (a missing/invalid length falls through to the post-parse check).
+  const declared = Number(req.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    return json(413, { error: 'Invalid input.', code: 'VALIDATION', fields: { file: 'That file is too large. The limit is 5 MB.' } });
+  }
   let form: FormData;
   try {
     form = await req.formData();
@@ -119,6 +127,17 @@ export async function submitPayment(req: Request, principal: Principal, deps: Su
   const price = parsePrices(deps.rawPrices)[plan as PaidPlanId];
   if (price === null || !Number.isInteger(price)) {
     return json(503, { error: 'Payments are not available yet.', code: 'PAYMENTS_UNAVAILABLE' });
+  }
+
+  // Cheap pre-check so a user with a request under review cannot make us store (then delete) uploads.
+  // The unique index on insert remains the authority for races.
+  try {
+    if (await deps.store.pending(principal.userId)) {
+      return json(409, { error: 'You already have a payment under review.', code: 'PENDING_REQUEST_EXISTS' });
+    }
+  } catch (err) {
+    console.error('[api/payments] pending check failed:', err instanceof Error ? err.name : 'error');
+    return unavailable();
   }
 
   const id = (deps.newId ?? randomUUID)();
@@ -189,7 +208,7 @@ export async function screenshotUrl(
   store: PaymentsStore,
 ): Promise<Response> {
   const forbidden = () => json(403, { error: 'Not allowed.', code: 'FORBIDDEN' });
-  if (!/^[0-9a-f-]{36}$/i.test(requestId)) return forbidden();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId)) return forbidden();
   try {
     const row = await store.get(requestId);
     if (!row || (row.user_id !== principal.userId && !isAdmin)) return forbidden();

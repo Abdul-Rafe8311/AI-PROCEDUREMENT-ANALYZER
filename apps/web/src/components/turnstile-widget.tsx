@@ -3,6 +3,7 @@
 // Shared Cloudflare Turnstile widget (AD-9, UX-DR14). Managed mode, flexible width (fits 320 px),
 // height reserved up front so the form never jumps. The parent owns the token: it is single-use,
 // so the parent calls `reset()` after every attempt.
+import { useTheme } from 'next-themes';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { TURNSTILE_HEIGHT_PX, TURNSTILE_SCRIPT_SRC, turnstileSiteKey } from '@/lib/captcha';
 
@@ -50,13 +51,18 @@ export interface TurnstileWidgetProps {
   /** the script could not load or the widget errored: show the "unavailable" message */
   onUnavailable?: () => void;
   className?: string;
+  /** bound into the token; the server checks it (stops replaying a token from another form) */
+  action?: string;
 }
 
 export const TurnstileWidget = forwardRef<TurnstileHandle, TurnstileWidgetProps>(function TurnstileWidget(
-  { onToken, onUnavailable, className },
+  { onToken, onUnavailable, className, action },
   ref,
 ) {
   const siteKey = turnstileSiteKey();
+  // Follow the page theme (light/dark); a theme switch re-renders the widget.
+  const { resolvedTheme } = useTheme();
+  const theme = resolvedTheme === 'dark' ? 'dark' : 'light';
   const box = useRef<HTMLDivElement>(null);
   const widgetId = useRef<string | null>(null);
   const cb = useRef({ onToken, onUnavailable });
@@ -82,6 +88,8 @@ export const TurnstileWidget = forwardRef<TurnstileHandle, TurnstileWidgetProps>
         if (cancelled || !box.current || !window.turnstile || widgetId.current) return;
         widgetId.current = window.turnstile.render(box.current, {
           sitekey: siteKey,
+          ...(action ? { action } : {}),
+          theme,
           size: 'flexible',
           appearance: 'always',
           callback: (t: string) => cb.current.onToken(t),
@@ -101,8 +109,9 @@ export const TurnstileWidget = forwardRef<TurnstileHandle, TurnstileWidgetProps>
       cancelled = true;
       if (widgetId.current && window.turnstile) window.turnstile.remove(widgetId.current);
       widgetId.current = null;
+      cb.current.onToken(null); // a re-render (theme switch) issues a fresh token
     };
-  }, [siteKey]);
+  }, [siteKey, action, theme]);
 
   // No site key in this deployment: render nothing. The server still rejects requests without a token.
   if (!siteKey) return null;

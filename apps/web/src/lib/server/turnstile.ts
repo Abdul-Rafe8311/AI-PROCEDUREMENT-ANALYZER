@@ -4,11 +4,20 @@ import { getConfig } from './config';
 
 export const SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 export const VERIFY_TIMEOUT_MS = 5000;
+/** Action the payment form's widget is rendered with; the server requires it back. */
+export const PAYMENT_CAPTCHA_ACTION = 'payment';
 
 export type CaptchaResult =
   | { ok: true }
   | { ok: false; status: 400; code: 'CAPTCHA_FAILED' }
   | { ok: false; status: 503; code: 'CAPTCHA_UNAVAILABLE' };
+
+export interface TurnstileExpect {
+  /** Must equal the `action` the widget was rendered with, so a token minted for another form is useless here. */
+  action?: string;
+  /** Hostname of this deployment; checked against siteverify's `hostname`. Skipped for localhost. */
+  hostname?: string;
+}
 
 export interface TurnstileDeps {
   secret?: () => string | null;
@@ -38,10 +47,17 @@ export function trustedClientIp(req: Request): string | undefined {
   return /^[0-9a-f:]+$/i.test(v) && v.includes(':') && v.length <= 45 ? v : undefined;
 }
 
+/** Host the request was addressed to (no port), for the siteverify hostname check. */
+export function requestHostname(req: Request): string | undefined {
+  const h = (req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? '').split(',')[0].trim().toLowerCase();
+  return h.replace(/:\d+$/, '') || undefined;
+}
+
 export async function verifyTurnstile(
   token: unknown,
   remoteIp: string | undefined,
   deps: TurnstileDeps = {},
+  expect: TurnstileExpect = {},
 ): Promise<CaptchaResult> {
   let secret: string | null;
   try {
@@ -76,8 +92,18 @@ export async function verifyTurnstile(
       logCode(`http-${res.status}`);
       return UNAVAILABLE;
     }
-    const json = (await res.json()) as { success?: unknown; 'error-codes'?: unknown };
-    if (json.success === true) return { ok: true };
+    const json = (await res.json()) as { success?: unknown; action?: unknown; hostname?: unknown; 'error-codes'?: unknown };
+    if (json.success === true) {
+      if (expect.action !== undefined && json.action !== expect.action) {
+        logCode('action-mismatch');
+        return FAILED;
+      }
+      if (expect.hostname && !/^(localhost|127\.0\.0\.1)$/.test(expect.hostname) && json.hostname !== expect.hostname) {
+        logCode('hostname-mismatch');
+        return FAILED;
+      }
+      return { ok: true };
+    }
     const codes = Array.isArray(json['error-codes']) ? (json['error-codes'] as unknown[]).filter((c): c is string => typeof c === 'string') : [];
     logCode(codes.join(',') || 'no-error-code');
     // A user-fixable code only counts when no service-side code is present alongside it.

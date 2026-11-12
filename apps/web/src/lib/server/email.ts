@@ -8,6 +8,8 @@ import { EMAIL_TEMPLATES, renderEmail, type EmailData, type EmailPayload, type E
 export { EMAIL_TEMPLATES, type EmailData, type EmailTemplate };
 
 /** sendEmail error when another run already owns (or has sent) this reminder. */
+/** A reminder claim older than this that never finished is treated as crashed and may be retried. */
+export const STALE_PENDING_MS = 15 * 60 * 1000;
 export const ALREADY_CLAIMED = 'already claimed';
 
 export interface SendResult {
@@ -36,10 +38,10 @@ export interface SendOptions {
 
 const short = (s: string) => s.replace(/\s+/g, ' ').slice(0, 300);
 
-export function supabaseEmailLog(): EmailLogStore {
+export function supabaseEmailLog(getClient: () => ReturnType<typeof serviceClient> = serviceClient): EmailLogStore {
   return {
     async start(row) {
-      const client = serviceClient();
+      const client = getClient();
       const { data, error } = await client
         .from('email_log')
         .insert({ template: row.template, to_email: row.to, subject_id: row.subjectId, status: 'pending' })
@@ -49,6 +51,17 @@ export function supabaseEmailLog(): EmailLogStore {
         if ((error as { code?: string }).code === '23505') {
           // A reminder that FAILED earlier may be retried: flip failed -> pending atomically so only one run wins.
           if (row.template !== 'expiry_reminder' || !row.subjectId) return null;
+          // A claim stuck in 'pending' (the run crashed or timed out before finish) is first turned into
+          // 'failed' by exactly one run, then goes through the same failed -> pending reclaim below.
+          const stale = new Date(Date.now() - STALE_PENDING_MS).toISOString();
+          const { error: e1 } = await client
+            .from('email_log')
+            .update({ status: 'failed', error: 'stale pending claim' })
+            .eq('template', row.template)
+            .eq('subject_id', row.subjectId)
+            .eq('status', 'pending')
+            .lt('created_at', stale);
+          if (e1) throw new DbUnavailableError('email_log stale reclaim failed');
           const { data: again, error: e2 } = await client
             .from('email_log')
             .update({ status: 'pending', error: null })
@@ -64,7 +77,7 @@ export function supabaseEmailLog(): EmailLogStore {
       return (data as { id: string }).id;
     },
     async finish(id, status, error) {
-      const { error: e } = await serviceClient().from('email_log').update({ status, error }).eq('id', id);
+      const { error: e } = await getClient().from('email_log').update({ status, error }).eq('id', id);
       if (e) throw new DbUnavailableError('email_log update failed');
     },
   };

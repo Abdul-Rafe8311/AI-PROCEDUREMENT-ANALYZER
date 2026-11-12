@@ -89,3 +89,31 @@ test('marker agrees with the guard helper called', () => {
     }
   }
 });
+
+// Gated routes: the plan gate is only real if the result is assigned, checked with an early return, and asks for
+// the feature the marker names (so `chat` cannot quietly call requireFeature(req, 'tender_sheet') or none at all).
+test('feature routes assign requireFeature, return early on !ok and pass the marker feature id', () => {
+  const gated = info.filter((r) => r.marker!.startsWith('feature:'));
+  assert.ok(gated.length >= 4, 'expected the four gated routes');
+  for (const r of gated) {
+    const feature = r.marker!.slice('feature:'.length);
+    const m = /(?:const|let)\s+(\w+)\s*=\s*await\s+requireFeature\s*\(\s*[^,()]+,\s*['"]([a-z_]+)['"]/.exec(r.code);
+    assert.ok(m, `route ${r.name} must assign await requireFeature(req, '<feature>')`);
+    if (!m) continue;
+    assert.equal(m[2], feature, `route ${r.name} is "${r.marker}" but requires feature "${m[2]}"`);
+    assert.ok(
+      new RegExp(`if\\s*\\(\\s*!\\s*${m[1]}\\.ok\\s*\\)\\s*return\\s+${m[1]}\\.response\\b`).test(r.code),
+      `route ${r.name} must return ${m[1]}.response on !${m[1]}.ok`,
+    );
+  }
+});
+
+test('the guard runs before any other work in each gated handler', () => {
+  for (const r of info.filter((i) => i.marker!.startsWith('feature:'))) {
+    const post = /export async function POST\s*\([^)]*\)\s*\{([\s\S]*)/.exec(r.code);
+    assert.ok(post, `route ${r.name} has no POST handler`);
+    const at = (post as RegExpExecArray)[1].search(/requireFeature\s*\(/);
+    const first = (post as RegExpExecArray)[1].search(/\b(req\.(json|formData|text)|await\s+(?!requireFeature))/);
+    assert.ok(at >= 0 && (first < 0 || at <= first), `route ${r.name} does work before requireFeature`);
+  }
+});

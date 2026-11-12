@@ -4,7 +4,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { ConfigError, getConfig, type ServerConfig } from './config';
-import { hashApiKey, lookupApiKeyUser } from './api-keys';
+import { apiKeyUserActive, hashApiKey, lookupApiKeyUser } from './api-keys';
 import { loadPeriods } from './db';
 import { effectivePlan, type PlanPeriod } from '../entitlements/effective-plan';
 import { canUseFeature, featureRequiredPlan, type FeatureId } from '../entitlements/plans';
@@ -29,6 +29,8 @@ export interface GuardDeps {
   verify?: (token: string) => Promise<{ user: VerifiedUser | null; error: unknown }>;
   /** Only `apikey`-class routes set this (AD-2). Elsewhere `X-Api-Key` is ignored. */
   allowApiKey?: boolean;
+  /** Whether the key's user is neither deleted nor banned. Defaults to a Supabase Auth admin lookup. */
+  userActive?: (userId: string) => Promise<boolean>;
   /** Maps a key's SHA-256 to its user id; null when unknown or revoked. */
   lookupApiKey?: (sha256: string) => Promise<string | null>;
 }
@@ -75,6 +77,10 @@ export async function requirePrincipal(req: Request, deps: GuardDeps = {}): Prom
     try {
       const userId = await (deps.lookupApiKey ?? lookupApiKeyUser)(hashApiKey(rawKey));
       if (!userId) return { ok: false, response: reply(401, 'Invalid API key.', 'UNAUTHENTICATED') };
+      // A key outlives its user's account unless we check: banned or deleted users must not keep extracting.
+      if (!(await (deps.userActive ?? apiKeyUserActive)(userId))) {
+        return { ok: false, response: reply(401, 'Invalid API key.', 'UNAUTHENTICATED') };
+      }
       return { ok: true, principal: { userId, email: null, via: 'api_key' } };
     } catch {
       console.error('[guard] api key lookup failed');

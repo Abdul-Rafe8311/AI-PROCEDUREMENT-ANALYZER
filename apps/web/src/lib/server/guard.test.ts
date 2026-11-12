@@ -204,6 +204,7 @@ test('valid X-Api-Key on an apikey route gives an api_key principal', async () =
     allowApiKey: true,
     verify: never,
     lookupApiKey: async (h) => (h === createHash('sha256').update('ak_good').digest('hex') ? 'u9' : null),
+    userActive: async () => true,
   });
   assert.ok(r.ok);
   if (r.ok) assert.deepEqual(r.principal, { userId: 'u9', email: null, via: 'api_key' });
@@ -258,4 +259,19 @@ test('api key lookup failure gives 503, never a principal', async () => {
   });
   assert.ok(!r.ok);
   if (!r.ok) assert.equal(r.response.status, 503);
+});
+
+test('a valid key whose user is banned or deleted gives 401; a lookup failure is 503', async () => {
+  const base = { config: configured, allowApiKey: true, verify: never, lookupApiKey: async () => 'u9' };
+  const gone = await requirePrincipal(keyReq({ 'x-api-key': 'ak_good' }), { ...base, userActive: async () => false });
+  assert.ok(!gone.ok);
+  if (!gone.ok) assert.equal(gone.response.status, 401);
+  const down = await requirePrincipal(keyReq({ 'x-api-key': 'ak_good' }), {
+    ...base,
+    userActive: async () => {
+      throw new Error('auth down');
+    },
+  });
+  assert.ok(!down.ok);
+  if (!down.ok) assert.equal(down.response.status, 503);
 });

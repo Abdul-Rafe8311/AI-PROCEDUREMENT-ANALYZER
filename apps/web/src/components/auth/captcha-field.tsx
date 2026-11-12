@@ -33,7 +33,7 @@ export function useCaptchaField(): CaptchaField {
     <div className="space-y-2">
       <TurnstileWidget ref={ref} onToken={setToken} onUnavailable={() => setUnavailable(true)} />
       {unavailable && (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="text-sm text-destructive">
           {CAPTCHA_UNAVAILABLE_MESSAGE}
         </p>
       )}

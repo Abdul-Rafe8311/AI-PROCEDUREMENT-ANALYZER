@@ -3,11 +3,9 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { AuthHeading, Field, FormAlert, PasswordField, SubmitButton, authLinkClass } from '@/components/auth/auth-ui';
 import { PasswordStrength } from '@/components/auth/password-strength';
 import { useAuth } from '@/lib/auth-context';
 import { assessPassword } from '@/lib/password';
@@ -39,11 +37,15 @@ export default function ResetPasswordPage() {
 
   const strong = assessPassword(password).ok;
   const matches = password.length > 0 && password === confirm;
-  const canSubmit = strong && matches && !busy;
+  const [touched, setTouched] = useState(false);
+  const passErr = touched && !strong ? 'Choose a stronger password (see requirements below).' : null;
+  const confirmErr = confirm.length > 0 && !matches ? "Passwords don't match." : touched && !matches ? 'Re-enter the password.' : null;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!canSubmit) return;
+    if (busy) return;
+    setTouched(true);
+    if (!strong || !matches) return;
     setError(null);
     setBusy(true);
     const { error } = await updatePassword(password);
@@ -62,12 +64,12 @@ export default function ResetPasswordPage() {
 
   if (ready && hasRecovery === false) {
     return (
-      <div className="rounded-2xl border border-border bg-card p-6 text-center shadow-sm">
+      <div className="rounded-2xl border border-border bg-card p-8 text-center shadow-sm">
         <h1 className="text-xl font-bold tracking-tight">Invalid or expired link</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           This password-reset link is no longer valid. Request a fresh one to continue.
         </p>
-        <Button asChild className="mt-4 w-full">
+        <Button asChild size="lg" className="mt-4 w-full">
           <Link href="/forgot-password">Request a new link</Link>
         </Button>
       </div>
@@ -76,46 +78,33 @@ export default function ResetPasswordPage() {
 
   return (
     <div>
-      <div className="mb-6 text-center">
-        <h1 className="text-2xl font-bold tracking-tight">Choose a new password</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Set a new password for your account.</p>
-      </div>
+      <AuthHeading title="Choose a new password" subtitle="Set a new password for your account." />
 
-      <form onSubmit={onSubmit} className="space-y-4 rounded-2xl border border-border bg-card p-6 shadow-sm">
-        {error && (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {error}
-          </div>
-        )}
-        <div className="space-y-1.5">
-          <Label htmlFor="password">New password</Label>
-          <Input
-            id="password"
-            type="password"
-            autoComplete="new-password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Create a strong password"
-          />
+      <form onSubmit={onSubmit} className="space-y-5" noValidate>
+        {error && <FormAlert>{error}</FormAlert>}
+        <PasswordField
+          id="password"
+          label="New password"
+          autoComplete="new-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Create a strong password"
+          error={passErr}
+        >
           <PasswordStrength password={password} />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="confirm">Confirm new password</Label>
-          <Input
-            id="confirm"
-            type="password"
-            autoComplete="new-password"
-            required
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            placeholder="Re-enter the password"
-          />
-          {confirm.length > 0 && !matches && <p className="text-xs text-destructive">Passwords don&apos;t match.</p>}
-        </div>
-        <Button type="submit" className="w-full" disabled={!canSubmit}>
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Update password'}
-        </Button>
+        </PasswordField>
+        <PasswordField
+          id="confirm"
+          label="Confirm new password"
+          autoComplete="new-password"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          placeholder="Re-enter the password"
+          error={confirmErr}
+        />
+        <SubmitButton busy={busy} busyLabel="Updating…">
+          Update password
+        </SubmitButton>
       </form>
     </div>
   );

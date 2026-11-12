@@ -237,3 +237,32 @@ test('captcha unavailable is 503 CAPTCHA_UNAVAILABLE and never lets the request 
   assert.equal((await body(r)).code, 'CAPTCHA_UNAVAILABLE');
   assert.deepEqual([calls.uploaded.length, calls.inserted.length], [0, 0]);
 });
+
+test('a user with a pending request is refused before anything is uploaded', async () => {
+  const { store, calls } = fakeStore({ async pending() { return { id: 'x' } as PaymentRow; } });
+  const r = await submitPayment(req(good), user, { store, rawPrices: prices, verifyCaptcha: pass });
+  assert.equal(r.status, 409);
+  assert.equal((await body(r)).code, 'PENDING_REQUEST_EXISTS');
+  assert.deepEqual(calls.uploaded, []);
+  assert.deepEqual(calls.inserted, []);
+});
+
+test('a body whose declared Content-Length is far over the limit is 413 before it is parsed', async () => {
+  const { store, calls } = fakeStore();
+  let parsed = false;
+  const r0 = new Request('http://localhost/api/payments', { method: 'POST', body: 'x', headers: { 'content-length': String(50 * 1024 * 1024) } });
+  r0.formData = async () => { parsed = true; return new FormData(); };
+  const r = await submitPayment(r0, user, { store, rawPrices: prices, verifyCaptcha: pass });
+  assert.equal(r.status, 413);
+  assert.equal(parsed, false);
+  assert.deepEqual(calls.uploaded, []);
+});
+
+test('screenshot: a 36-character non-UUID id is 403 without touching the store', async () => {
+  let reads = 0;
+  const { store } = fakeStore({ async get() { reads++; return null; } });
+  for (const id of ['-'.repeat(36), 'g'.repeat(8) + '-aaaa-aaaa-aaaa-' + 'a'.repeat(12), '1'.repeat(36)]) {
+    assert.equal((await screenshotUrl(user, id, true, store)).status, 403);
+  }
+  assert.equal(reads, 0);
+});

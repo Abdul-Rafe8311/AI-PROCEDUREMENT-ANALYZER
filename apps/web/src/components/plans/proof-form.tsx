@@ -207,6 +207,7 @@ export function ProofForm({ plan, onSubmitted }: { plan: PaidPlanId; onSubmitted
 
       <div className="space-y-2">
         <TurnstileWidget
+          action="payment"
           ref={widget}
           onToken={setToken}
           onUnavailable={() => setCaptchaError(CAPTCHA_UNAVAILABLE_MESSAGE)}
