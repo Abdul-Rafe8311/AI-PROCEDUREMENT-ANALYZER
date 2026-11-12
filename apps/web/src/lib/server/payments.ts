@@ -193,7 +193,7 @@ export async function screenshotUrl(
   try {
     const row = await store.get(requestId);
     if (!row || (row.user_id !== principal.userId && !isAdmin)) return forbidden();
-    if (!row.screenshot_path) return json(404, { error: 'No screenshot is stored for this request.', code: 'NOT_FOUND' });
+    if (!row.screenshot_path) return json(404, { error: 'Screenshot removed after 12 months.', code: 'SCREENSHOT_REMOVED' });
     const url = await store.signedUrl(row.screenshot_path, SIGNED_URL_TTL_SECONDS);
     return json(200, { url, expiresIn: SIGNED_URL_TTL_SECONDS });
   } catch (err) {

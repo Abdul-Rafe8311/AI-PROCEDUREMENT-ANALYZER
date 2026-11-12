@@ -131,3 +131,10 @@ test('admin notification: one email and one log row per ADMIN_EMAILS address, wi
 test('admin notification with no admins sends nothing and does not throw', async () => {
   assert.deepEqual(await notifyAdminsPaymentSubmitted({ requestId: 'r', userEmail: null, plan: 'pro', amountUsd: 12 }, { adminEmails: [] }), []);
 });
+
+test('static: the log store re-claims only a FAILED reminder, atomically, and never other templates', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(`${__dirname}/email.ts`, 'utf8');
+  assert.match(src, /row\.template !== 'expiry_reminder'/);
+  assert.match(src, /\.eq\('status', 'failed'\)/);
+});

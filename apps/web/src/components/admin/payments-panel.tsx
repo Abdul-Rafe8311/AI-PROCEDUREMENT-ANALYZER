@@ -59,7 +59,7 @@ function ReceiptThumb({ p, onOpen }: { p: AdminPaymentDto; onOpen: () => void })
     };
   }, [p.id, p.hasScreenshot, p.receiptType]);
 
-  if (!p.hasScreenshot) return <p className="text-sm text-muted-foreground">No receipt stored.</p>;
+  if (!p.hasScreenshot) return <p className="text-sm text-muted-foreground">Screenshot removed after 12 months.</p>;
   return (
     <button
       type="button"

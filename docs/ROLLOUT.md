@@ -42,4 +42,8 @@ Set every variable listed in `apps/web/.env.example` (never edit `.env*` files i
 
 ## Step 7: cron (after Epic 6)
 
-- [ ] Add the `crons` entry for `/api/cron/daily` to `apps/web/vercel.json` (daily) and set `CRON_SECRET`.
+- [ ] `apps/web/vercel.json` already holds the `crons` entry for `/api/cron/daily` (06:00 UTC daily). Set `CRON_SECRET` in Vercel (Production), then redeploy; Vercel sends it as `Authorization: Bearer <CRON_SECRET>` automatically.
+- [ ] Crons run on Production only. On previews or local, call the route yourself:
+  `curl -H "Authorization: Bearer $CRON_SECRET" https://<host>/api/cron/daily`. Without the header it returns 401 and does nothing; with `CRON_SECRET` unset it returns 503.
+- [ ] The response is counts only: `reminders {considered, sent, failed, skipped}` and `retention {deleted, failed}`. Running it twice in a day is safe: each plan period gets at most one reminder (a failed send is retried by a later run while the period still ends within 3 days and has not been renewed), and screenshots are deleted once.
+- [ ] Retention: payment screenshots older than 12 months are deleted from the `payment-proofs` bucket and `screenshot_path` is set to null; the request row stays. The Admin page then shows "Screenshot removed after 12 months."

@@ -71,7 +71,7 @@ development_status:
   5-2-turnstile-on-signup-login-and-password-reset: done
   epic-5-retrospective: optional
 
-  epic-6: backlog
-  6-1-daily-job-with-expiry-reminders: backlog
-  6-2-screenshot-retention-and-cron-schedule: backlog
+  epic-6: done
+  6-1-daily-job-with-expiry-reminders: done
+  6-2-screenshot-retention-and-cron-schedule: done
   epic-6-retrospective: optional

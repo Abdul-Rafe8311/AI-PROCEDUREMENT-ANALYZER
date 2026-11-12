@@ -187,9 +187,13 @@ test('screenshot: owner gets a 60 s URL, admin too, a stranger and an unknown id
   assert.equal((await screenshotUrl(user, 'not-a-uuid', false, store)).status, 403);
 });
 
-test('screenshot: a request with no stored file is 404', async () => {
+test('screenshot: a request whose file was removed is 404 SCREENSHOT_REMOVED with the retention message', async () => {
   const { store } = fakeStore({ async get() { return row({ screenshot_path: null }); } });
-  assert.equal((await screenshotUrl(user, row().id, false, store)).status, 404);
+  const r = await screenshotUrl(user, row().id, false, store);
+  assert.equal(r.status, 404);
+  const b = (await r.json()) as { code: string; error: string };
+  assert.equal(b.code, 'SCREENSHOT_REMOVED');
+  assert.equal(b.error, 'Screenshot removed after 12 months.');
 });
 
 test('captcha runs before validation and upload; token comes from cf-turnstile-response', async () => {

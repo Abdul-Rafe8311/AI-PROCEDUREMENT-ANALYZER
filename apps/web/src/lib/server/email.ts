@@ -7,6 +7,9 @@ import { EMAIL_TEMPLATES, renderEmail, type EmailData, type EmailPayload, type E
 
 export { EMAIL_TEMPLATES, type EmailData, type EmailTemplate };
 
+/** sendEmail error when another run already owns (or has sent) this reminder. */
+export const ALREADY_CLAIMED = 'already claimed';
+
 export interface SendResult {
   ok: boolean;
   status: 'sent' | 'failed';
@@ -43,7 +46,19 @@ export function supabaseEmailLog(): EmailLogStore {
         .select('id')
         .single();
       if (error) {
-        if ((error as { code?: string }).code === '23505') return null;
+        if ((error as { code?: string }).code === '23505') {
+          // A reminder that FAILED earlier may be retried: flip failed -> pending atomically so only one run wins.
+          if (row.template !== 'expiry_reminder' || !row.subjectId) return null;
+          const { data: again, error: e2 } = await client
+            .from('email_log')
+            .update({ status: 'pending', error: null })
+            .eq('template', row.template)
+            .eq('subject_id', row.subjectId)
+            .eq('status', 'failed')
+            .select('id');
+          if (e2) throw new DbUnavailableError('email_log reclaim failed');
+          return (again as Array<{ id: string }> | null)?.[0]?.id ?? null;
+        }
         throw new DbUnavailableError('email_log insert failed');
       }
       return (data as { id: string }).id;
@@ -83,7 +98,7 @@ export async function sendEmail(
   } catch {
     console.error('[email] could not write email_log');
   }
-  if (logged && logId === null) return { ok: false, status: 'failed', error: 'already claimed' };
+  if (logged && logId === null) return { ok: false, status: 'failed', error: ALREADY_CLAIMED };
 
   const finish = async (status: 'sent' | 'failed', error: string | null): Promise<SendResult> => {
     if (logId) await log.finish(logId, status, error).catch(() => console.error('[email] could not update email_log'));

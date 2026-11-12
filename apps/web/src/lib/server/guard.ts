@@ -1,5 +1,6 @@
 // Guard-then-handle (AD-1). requirePrincipal verifies the Bearer token once per
 // request with supabase.auth.getUser; identity is never read from body/query.
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { ConfigError, getConfig, type ServerConfig } from './config';
@@ -170,4 +171,34 @@ export async function requireFeature(req: Request, feature: FeatureId, deps: Fea
       { status: 403 },
     ),
   };
+}
+
+export interface CronDeps {
+  secret?: () => string | null;
+}
+
+/** Constant-time compare: hashing first makes both sides the same length. */
+function safeEqual(a: string, b: string): boolean {
+  return timingSafeEqual(createHash('sha256').update(a).digest(), createHash('sha256').update(b).digest());
+}
+
+/**
+ * Cron guard: `Authorization: Bearer <CRON_SECRET>` (Vercel Cron sends it). No user principal exists.
+ * Missing or wrong header is 401; an unset secret is 503, never open.
+ */
+export function requireCron(req: Request, deps: CronDeps = {}): { ok: true } | { ok: false; response: Response } {
+  let secret: string | null;
+  try {
+    secret = (deps.secret ?? (() => getConfig().cronSecret))();
+  } catch {
+    console.error('[guard] configuration error');
+    return { ok: false, response: reply(503, 'Service is not configured.', 'SERVICE_UNAVAILABLE') };
+  }
+  if (!secret) {
+    console.error('[guard] CRON_SECRET is not set');
+    return { ok: false, response: reply(503, 'Service is not configured.', 'SERVICE_UNAVAILABLE') };
+  }
+  const token = bearer(req);
+  if (!token || !safeEqual(token, secret)) return { ok: false, response: reply(401, 'Unauthorized.', 'UNAUTHENTICATED') };
+  return { ok: true };
 }

@@ -23,6 +23,7 @@ const REQUIRED: Record<string, string> = {
   'admin/payments': 'admin',
   'admin/payments/[id]/decide': 'admin',
   'payments/[id]/screenshot': 'jwt',
+  'cron/daily': 'cron',
   approve: 'token-link',
   dashboard: 'token-link',
   fx: 'public',
@@ -65,9 +66,16 @@ test('marker agrees with the guard helper called', () => {
     const wantsJwt = r.marker === 'jwt' || r.marker === 'apikey';
     if (wantsJwt) assert.ok(calls('requirePrincipal'), `route ${r.name} is "${r.marker}" but never calls requirePrincipal`);
     if (r.marker!.startsWith('feature:')) assert.ok(calls('requireFeature'), `route ${r.name} is "${r.marker}" but never calls requireFeature`);
+    if (r.marker === 'cron') assert.ok(calls('requireCron'), `route ${r.name} is "cron" but never calls requireCron`);
     if (r.marker === 'admin') assert.ok(calls('requireAdmin'), `route ${r.name} is "admin" but never calls requireAdmin`);
     if (r.marker === 'apikey') assert.ok(/allowApiKey\s*:\s*true/.test(r.code), `route ${r.name} is "apikey" but never passes allowApiKey: true`);
     if (r.marker !== 'apikey') assert.ok(!/allowApiKey/.test(r.code), `route ${r.name} is "${r.marker}" but passes allowApiKey`);
+    if (r.marker === 'cron') {
+      const m = /(?:const|let)\s+(\w+)\s*=\s*requireCron\s*\(/.exec(r.code);
+      assert.ok(m, `route ${r.name} must assign the requireCron result`);
+      if (m) assert.ok(new RegExp(`if\\s*\\(\\s*!\\s*${m[1]}\\.ok\\s*\\)\\s*return\\b`).test(r.code), `route ${r.name} must return early on !${m[1]}.ok`);
+      assert.ok(/export const dynamic\s*=\s*'force-dynamic'/.test(r.code), `route ${r.name} must be force-dynamic`);
+    }
     if (r.marker === 'jwt' || r.marker === 'admin' || r.marker === 'apikey') {
       const fn = r.marker === 'admin' ? 'requireAdmin' : 'requirePrincipal';
       const m = new RegExp(`(?:const|let)\\s+(\\w+)\\s*=\\s*await\\s+${fn}\\s*\\(`).exec(r.code);
@@ -75,7 +83,7 @@ test('marker agrees with the guard helper called', () => {
       if (m) assert.ok(new RegExp(`if\\s*\\(\\s*!\\s*${m[1]}\\.ok\\s*\\)\\s*return\\b`).test(r.code), `route ${r.name} must return early on !${m[1]}.ok`);
     }
     if (r.marker === 'public' || r.marker === 'token-link') {
-      for (const fn of ['requirePrincipal', 'requireFeature', 'requireAdmin']) {
+      for (const fn of ['requirePrincipal', 'requireFeature', 'requireAdmin', 'requireCron']) {
         assert.ok(!calls(fn), `route ${r.name} is "${r.marker}" but calls ${fn}`);
       }
     }
