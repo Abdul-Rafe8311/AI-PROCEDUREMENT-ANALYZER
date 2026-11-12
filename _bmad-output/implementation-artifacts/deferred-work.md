@@ -43,3 +43,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-2-quota-windows-and-atomic-quota-functions.md`
   summary: reserve/confirm/release SQL has no behavior test (dedupe, STALE, 10-minute expiry, confirm after expiry).
   evidence: No Postgres locally; add a runbook SQL script like cases.sql and run it in the Supabase SQL editor.
+- source_spec: `ux: auth pages redesign + home Pricing section`
+  summary: Auto-grant Pro to verified @najrancement.com users — only after email confirmation is enabled.
+  evidence: Granting by email domain before email confirmation is on would let anyone claim the domain at sign-up.

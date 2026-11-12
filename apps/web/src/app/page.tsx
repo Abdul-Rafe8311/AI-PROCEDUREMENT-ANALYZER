@@ -22,6 +22,7 @@ import {
 import { cn } from '@/lib/utils';
 import { SITE_NAME } from '@/lib/site';
 import { ResizableNavbar } from '@/components/resizable-navbar';
+import { PricingSection } from '@/components/pricing-section';
 
 // The only public, indexable page. Uses the layout's `default` title verbatim
 // (rather than the "%s · …" template) so the homepage keeps the full brand title.
@@ -179,6 +180,7 @@ export default function Home() {
       <Features />
       <WhoFor />
       <Demo />
+      <PricingSection />
       <FinalCta />
       <SiteFooter />
     </div>

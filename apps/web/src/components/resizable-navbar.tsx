@@ -16,6 +16,7 @@ const NAV_LINKS = [
   { label: 'How it works', href: '#workflow' },
   { label: 'Features', href: '#features' },
   { label: 'Live demo', href: '#demo' },
+  { label: 'Pricing', href: '#pricing' },
 ];
 
 const primaryBtn =
