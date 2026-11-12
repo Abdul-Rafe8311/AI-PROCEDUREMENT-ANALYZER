@@ -12,6 +12,10 @@ const nextConfig = {
   // Marking the package external makes Next require() it natively instead,
   // so it (and the React it bundles) stays outside that resolution swap.
   serverExternalPackages: ['@react-pdf/renderer'],
+  // /llms.txt is served by a route handler (needs server config for prices); route handlers can't live at a .txt path.
+  async rewrites() {
+    return [{ source: '/llms.txt', destination: '/api/llms' }];
+  },
 };
 
 export default nextConfig;

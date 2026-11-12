@@ -1,9 +1,13 @@
 import type { MetadataRoute } from 'next';
-import { SITE_URL } from '@/lib/site';
+import { absoluteUrl } from '@/lib/site';
 
-// Public pages only. The workspace and the auth screens are deliberately absent —
-// they are gated (or account-only) and are disallowed in robots.ts.
+// Public pages only (the pricing section lives on the home page, so it has no URL of its own).
+// Logged-in routes are noindex and disallowed in robots.ts.
 export default function sitemap(): MetadataRoute.Sitemap {
   const lastModified = new Date();
-  return [{ url: `${SITE_URL}/`, lastModified, changeFrequency: 'monthly', priority: 1 }];
+  return [
+    { url: absoluteUrl('/'), lastModified, changeFrequency: 'weekly', priority: 1 },
+    { url: absoluteUrl('/signup'), lastModified, changeFrequency: 'yearly', priority: 0.6 },
+    { url: absoluteUrl('/login'), lastModified, changeFrequency: 'yearly', priority: 0.4 },
+  ];
 }

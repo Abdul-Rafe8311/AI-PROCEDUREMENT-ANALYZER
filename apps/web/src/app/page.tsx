@@ -20,36 +20,19 @@ import {
   Upload,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { SITE_NAME } from '@/lib/site';
+import { pageMetadata, FAQS, faqJsonLd, jsonLdString, softwareJsonLd, PRODUCT_SUMMARY } from '@/lib/seo';
+import { getPublicPrices } from '@/lib/server/public-prices';
 import { ResizableNavbar } from '@/components/resizable-navbar';
 import { PricingSection } from '@/components/pricing-section';
 
-// The only public, indexable page. Uses the layout's `default` title verbatim
-// (rather than the "%s · …" template) so the homepage keeps the full brand title.
-const HOME_TITLE = 'AI Procurement Copilot — Supplier Quotation Analysis';
-const HOME_DESCRIPTION =
-  'Compare supplier quotations side by side: upload quotes and your purchase requisition, then get deterministic scoring, normalized currencies, flagged risks, and a ready-to-sign technical approval form.';
+// Plan prices feed the JSON-LD offers; revalidate hourly so a price change reaches search engines.
+export const revalidate = 3600;
 
-export const metadata: Metadata = {
-  title: { absolute: HOME_TITLE },
-  description: HOME_DESCRIPTION,
-  alternates: { canonical: '/' },
-  // A page-level openGraph object replaces the layout's outright, so siteName and
-  // locale are repeated here rather than inherited.
-  openGraph: {
-    type: 'website',
-    url: '/',
-    siteName: SITE_NAME,
-    locale: 'en_US',
-    title: HOME_TITLE,
-    description: HOME_DESCRIPTION,
-  },
-  twitter: {
-    card: 'summary_large_image',
-    title: HOME_TITLE,
-    description: HOME_DESCRIPTION,
-  },
-};
+const HOME_TITLE = 'AI Procurement Software for Supplier Quotation Comparison';
+const HOME_DESCRIPTION =
+  'AI procurement software for GCC and Saudi procurement teams: supplier quotation comparison, RFQ and bid scoring, risk flags and a ready-to-sign technical approval (TA) form.';
+
+export const metadata: Metadata = pageMetadata({ title: HOME_TITLE, description: HOME_DESCRIPTION, path: '/' });
 
 /* ─────────────────────────────────────────────
    Shared button styles (no auth UI on this page)
@@ -94,17 +77,17 @@ const features = [
   {
     icon: ScanText,
     title: 'AI Quotation Extraction',
-    desc: 'Turn messy PDFs, scans, and Word docs into clean structured data — prices, terms, and dates parsed automatically.',
+    desc: 'Reads PDF, Word (DOCX), PNG and JPG supplier quotations, including scans, and extracts prices, delivery, payment terms, warranty and currency into structured data.',
   },
   {
     icon: LayoutDashboard,
     title: 'Supplier Comparison Dashboard',
-    desc: 'A single source of truth comparing every supplier across cost, delivery, payment terms, and warranty.',
+    desc: 'An RFQ comparison tool that lines up every supplier across cost, delivery, payment terms and warranty, with currencies normalized for a true bid comparison.',
   },
   {
     icon: ShieldAlert,
     title: 'Risk Detection',
-    desc: 'Flags hidden risks — long lead times, unfavorable payment terms, missing warranties, and price outliers.',
+    desc: 'Flags long lead times, unfavorable payment terms, missing warranties and price outliers, then scores each supplier from 0 to 100 with deterministic rules.',
   },
   {
     icon: FileText,
@@ -114,7 +97,7 @@ const features = [
   {
     icon: ClipboardCheck,
     title: 'Technical Approval & PR Matching',
-    desc: 'Match supplier line items against your purchase requisition, flag spec mismatches, and export a pre-filled Technical Approval Form.',
+    desc: 'Match supplier line items against your purchase requisition, flag spec mismatches, and export a pre-filled technical approval (TA) form as a PDF.',
   },
   {
     icon: MessageSquare,
@@ -174,6 +157,9 @@ const fmtUsd = (n: number) => `$${n.toLocaleString('en-US')}`;
 export default function Home() {
   return (
     <div className="min-h-screen bg-background text-foreground">
+      {[softwareJsonLd(getPublicPrices()), faqJsonLd()].map((d) => (
+        <script key={d['@type']} type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdString(d) }} />
+      ))}
       <ResizableNavbar />
       <Hero />
       <Workflow />
@@ -181,6 +167,7 @@ export default function Home() {
       <WhoFor />
       <Demo />
       <PricingSection />
+      <Faq />
       <FinalCta />
       <SiteFooter />
     </div>
@@ -205,12 +192,15 @@ function Hero() {
         </span>
 
         <h1 className="mx-auto mt-6 max-w-3xl text-balance text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
-          Compare Supplier Quotations in Minutes
+          Supplier Quotation Comparison in Minutes
         </h1>
 
         <p className="mx-auto mt-5 max-w-2xl text-pretty text-base leading-relaxed text-muted-foreground sm:text-lg">
-          Upload quotations from multiple suppliers and let AI identify the best option based on
-          price, delivery time, payment terms, and risk factors.
+          {PRODUCT_SUMMARY}
+        </p>
+        <p className="mx-auto mt-3 max-w-2xl text-pretty text-sm leading-relaxed text-muted-foreground">
+          Upload quotations from multiple suppliers and the software ranks them on price, delivery time,
+          payment terms, warranty and risk, using fixed scoring rules so the result is repeatable.
         </p>
 
         <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
@@ -225,7 +215,7 @@ function Hero() {
         </div>
 
         <p className="mt-4 text-xs text-muted-foreground">
-          No account required · Start analyzing in seconds
+          Free plan available · Create an account and start analyzing in minutes
         </p>
 
         <div className="mt-16">
@@ -413,6 +403,7 @@ function Features() {
 function WhoFor() {
   const audiences = [
     'Procurement & purchasing teams',
+    'GCC and Saudi procurement teams',
     'Planning departments',
     'Construction & contracting',
     'Manufacturing',
@@ -615,6 +606,32 @@ function RecItem({
         <p className="mt-0.5 text-sm text-muted-foreground">{body}</p>
       </div>
     </li>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   FAQ (mirrored in the FAQPage JSON-LD)
+   ───────────────────────────────────────────── */
+function Faq() {
+  return (
+    <section id="faq" className="mx-auto max-w-3xl scroll-mt-20 px-6 py-20 sm:py-24" aria-labelledby="faq-heading">
+      <div className="text-center">
+        <span className="text-sm font-semibold uppercase tracking-wide text-primary">FAQ</span>
+        <h2 id="faq-heading" className="mt-2 text-balance text-3xl font-bold tracking-tight sm:text-4xl">
+          Frequently asked questions
+        </h2>
+      </div>
+      <dl className="mt-10 space-y-4">
+        {FAQS.map((f) => (
+          <div key={f.q} className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+            <dt>
+              <h3 className="text-base font-semibold">{f.q}</h3>
+            </dt>
+            <dd className="mt-2 text-sm leading-relaxed text-muted-foreground">{f.a}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
   );
 }
 

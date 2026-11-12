@@ -5,7 +5,8 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 
 const SRC = resolve(__dirname, '..', '..');
 const SERVER = join(SRC, 'lib', 'server');
-const ALLOWED = [SERVER, join(SRC, 'lib', 'entitlements'), join(SRC, 'app', 'api')];
+// app/page.tsx is a server component that reads public plan prices for its JSON-LD offers.
+const ALLOWED = [SERVER, join(SRC, 'lib', 'entitlements'), join(SRC, 'app', 'api'), join(SRC, 'app', 'page.tsx')];
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((n) => {

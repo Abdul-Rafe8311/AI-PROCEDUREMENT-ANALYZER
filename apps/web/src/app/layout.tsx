@@ -3,6 +3,7 @@ import { Inter } from 'next/font/google';
 import './globals.css';
 import { Providers } from '@/components/providers';
 import { SITE_DESCRIPTION, SITE_NAME, SITE_TAGLINE, SITE_URL } from '@/lib/site';
+import { SITE_KEYWORDS, jsonLdString, organizationJsonLd, websiteJsonLd } from '@/lib/seo';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -20,21 +21,9 @@ export const metadata: Metadata = {
   },
   description: SITE_DESCRIPTION,
   applicationName: SITE_NAME,
-  keywords: [
-    'supplier quotation comparison',
-    'procurement software',
-    'quotation analysis',
-    'supplier comparison tool',
-    'RFQ comparison',
-    'bid comparison',
-    'procurement risk detection',
-    'purchase requisition matching',
-    'technical approval form',
-  ],
+  keywords: SITE_KEYWORDS,
   authors: [{ name: SITE_NAME }],
   creator: SITE_NAME,
-  // Home canonical; per-route layouts override (e.g. /workspace).
-  alternates: { canonical: '/' },
   openGraph: {
     type: 'website',
     siteName: SITE_NAME,
@@ -54,28 +43,21 @@ export const metadata: Metadata = {
     googleBot: { index: true, follow: true, 'max-image-preview': 'large', 'max-snippet': -1 },
   },
   category: 'business',
-};
-
-// Honest structured data (Schema.org) — helps search engines classify the app.
-const jsonLd = {
-  '@context': 'https://schema.org',
-  '@type': 'SoftwareApplication',
-  name: SITE_NAME,
-  applicationCategory: 'BusinessApplication',
-  operatingSystem: 'Web',
-  description: SITE_DESCRIPTION,
-  url: SITE_URL,
-  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+  // Search Console meta-tag verification; omitted when the env var is unset.
+  ...(process.env.GOOGLE_SITE_VERIFICATION ? { verification: { google: process.env.GOOGLE_SITE_VERIFICATION } } : {}),
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={inter.variable} suppressHydrationWarning>
       <body className="font-sans">
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-        />
+        {[organizationJsonLd(), websiteJsonLd()].map((d) => (
+          <script
+            key={d['@type']}
+            type="application/ld+json"
+            dangerouslySetInnerHTML={{ __html: jsonLdString(d) }}
+          />
+        ))}
         <Providers>{children}</Providers>
       </body>
     </html>

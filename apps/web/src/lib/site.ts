@@ -12,15 +12,19 @@ export const SITE_DESCRIPTION =
 const PRODUCTION_URL = 'https://ai-procedurement-analyzer.vercel.app';
 
 /**
- * Canonical origin (no trailing slash). Set NEXT_PUBLIC_SITE_URL to override
+ * Canonical origin (no trailing slash). Set SITE_URL (or NEXT_PUBLIC_SITE_URL) to override
  * (e.g. once a custom domain exists); on Vercel preview builds it falls back to
  * the project's production URL, then to the deployed domain above. Drives
  * canonical URLs, OG tags, sitemap and robots — so those always emit absolute
  * production URLs rather than localhost, even when rendered locally.
  */
 export const SITE_URL = (
+  process.env.SITE_URL ||
   process.env.NEXT_PUBLIC_SITE_URL ||
   (process.env.VERCEL_PROJECT_PRODUCTION_URL
     ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
     : PRODUCTION_URL)
 ).replace(/\/+$/, '');
+
+/** Absolute URL for a site path, always built from SITE_URL. */
+export const absoluteUrl = (path = '/'): string => `${SITE_URL}${path.startsWith('/') ? path : `/${path}`}`;

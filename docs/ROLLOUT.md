@@ -18,6 +18,7 @@ Set every variable listed in `apps/web/.env.example` (never edit `.env*` files i
 
 - [ ] `ADMIN_EMAILS` and `ADMIN_USER_IDS`: an admin needs both.
 - [ ] `SUPPORT_EMAIL`, `BANK_DETAILS` (JSON), `PLAN_PRICES_USD` (JSON), `CRON_SECRET`.
+- [ ] `SITE_URL` (public origin for canonicals, sitemap, OG, JSON-LD and /llms.txt; changing domain later is just this value). Optional `GOOGLE_SITE_VERIFICATION` (Search Console meta-tag token).
 - [ ] `RESEND_API_KEY`, `EMAIL_FROM`; `TURNSTILE_SECRET_KEY`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY` (when Epics 4-5 ship).
 - [ ] `ALLOW_DEMO` must be unset in production.
 - [ ] **Pre-launch gate, Resend:** sending-domain verification status: `not verified / verified on ____`. Real payments are not accepted until this reads verified.

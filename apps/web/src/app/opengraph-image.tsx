@@ -49,16 +49,16 @@ export default function OpengraphImage() {
         {/* Headline */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <div style={{ fontSize: 68, fontWeight: 800, color: '#0f172a', lineHeight: 1.05, letterSpacing: -1 }}>
-            Compare supplier quotations automatically
+            Supplier quotation comparison, done by AI
           </div>
           <div style={{ fontSize: 32, color: '#475569', maxWidth: 940, lineHeight: 1.3 }}>
-            Upload quotes → side-by-side comparison, risk flags, and a recommendation you can defend.
+            AI procurement software: compare bids, flag risks, and export the technical approval (TA) form.
           </div>
         </div>
 
         {/* Honest feature chips */}
         <div style={{ display: 'flex', gap: 14 }}>
-          {['Automatic comparison', 'Risk detection', 'Downloadable reports'].map((t) => (
+          {['RFQ comparison', 'Risk detection', 'TA form export'].map((t) => (
             <div
               key={t}
               style={{
