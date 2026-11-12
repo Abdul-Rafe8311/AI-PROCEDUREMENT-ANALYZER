@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { PasswordStrength } from '@/components/auth/password-strength';
 import { useAuth } from '@/lib/auth-context';
 import { assessPassword } from '@/lib/password';
+import { useCaptchaField } from '@/components/auth/captcha-field';
 
 export default function SignupPage() {
   const { signUp, ready, user } = useAuth();
@@ -21,23 +22,25 @@ export default function SignupPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmSent, setConfirmSent] = useState(false);
+  const captcha = useCaptchaField();
 
   useEffect(() => {
     if (ready && user) router.replace('/workspace');
   }, [ready, user, router]);
 
   const strong = assessPassword(password).ok;
-  const canSubmit = name.trim().length > 0 && email.trim().length > 0 && strong && !busy;
+  const canSubmit = name.trim().length > 0 && email.trim().length > 0 && strong && !busy && !captcha.waiting;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!canSubmit) return;
     setError(null);
     setBusy(true);
-    const { error, needsEmailConfirmation } = await signUp(name, email, password);
+    const { error, needsEmailConfirmation } = await signUp(name, email, password, captcha.token);
     if (error) {
       setError(error);
       setBusy(false);
+      captcha.settle(error);
       return;
     }
     if (needsEmailConfirmation) {
@@ -117,6 +120,7 @@ export default function SignupPage() {
           />
           <PasswordStrength password={password} />
         </div>
+        {captcha.node}
         <Button type="submit" className="w-full" disabled={!canSubmit}>
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create account'}
         </Button>

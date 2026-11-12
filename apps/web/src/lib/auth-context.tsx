@@ -9,6 +9,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { AuthError, Session, User } from '@supabase/supabase-js';
 import { isSupabaseConfigured, supabase, supabaseHost } from './supabase';
 import { isEmailAllowedToSignUp, signUpDomainRejectionMessage } from './auth-policy';
+import { captchaMessageForAuthError } from './captcha';
 
 export interface AuthResult {
   error: string | null;
@@ -23,10 +24,10 @@ interface AuthContextValue {
   user: User | null;
   session: Session | null;
   displayName: string;
-  signIn: (email: string, password: string) => Promise<AuthResult>;
-  signUp: (name: string, email: string, password: string) => Promise<AuthResult>;
+  signIn: (email: string, password: string, captchaToken?: string | null) => Promise<AuthResult>;
+  signUp: (name: string, email: string, password: string, captchaToken?: string | null) => Promise<AuthResult>;
   signOut: () => Promise<void>;
-  sendPasswordReset: (email: string) => Promise<AuthResult>;
+  sendPasswordReset: (email: string, captchaToken?: string | null) => Promise<AuthResult>;
   updatePassword: (password: string) => Promise<AuthResult>;
 }
 
@@ -76,17 +77,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       session,
       displayName: nameFromUser(user),
-      async signIn(email, password) {
+      async signIn(email, password, captchaToken) {
         if (!supabase) return { error: 'Authentication is not configured for this deployment.' };
         try {
-          const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-          if (error) return { error: reportAuthError('signIn', error) };
+          const { error } = await supabase.auth.signInWithPassword({
+            email: email.trim(),
+            password,
+            ...(captchaToken ? { options: { captchaToken } } : {}),
+          });
+          if (error) return { error: reportAuthError('signIn', error, Boolean(captchaToken)) };
           return { error: null };
         } catch (err) {
-          return { error: reportAuthError('signIn', err) };
+          return { error: reportAuthError('signIn', err, Boolean(captchaToken)) };
         }
       },
-      async signUp(name, email, password) {
+      async signUp(name, email, password, captchaToken) {
         if (!supabase) return { error: 'Authentication is not configured for this deployment.' };
         const cleanEmail = email.trim();
         // Domain policy: open by default; flip ALLOWED_SIGNUP_DOMAIN to restrict.
@@ -98,29 +103,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             options: {
               data: { full_name: name.trim() }, // stored on the user's profile (user_metadata + profiles trigger)
               emailRedirectTo: `${siteOrigin()}/workspace`,
+              ...(captchaToken ? { captchaToken } : {}),
             },
           });
-          if (error) return { error: reportAuthError('signUp', error) };
+          if (error) return { error: reportAuthError('signUp', error, Boolean(captchaToken)) };
           // When email confirmation is ON in Supabase, there's no session yet.
           return { error: null, needsEmailConfirmation: !data.session };
         } catch (err) {
-          return { error: reportAuthError('signUp', err) };
+          return { error: reportAuthError('signUp', err, Boolean(captchaToken)) };
         }
       },
       async signOut() {
         if (!supabase) return;
         await supabase.auth.signOut();
       },
-      async sendPasswordReset(email) {
+      async sendPasswordReset(email, captchaToken) {
         if (!supabase) return { error: 'Authentication is not configured for this deployment.' };
         try {
           const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
             redirectTo: `${siteOrigin()}/reset-password`,
+            ...(captchaToken ? { captchaToken } : {}),
           });
-          if (error) return { error: reportAuthError('sendPasswordReset', error) };
+          if (error) return { error: reportAuthError('sendPasswordReset', error, Boolean(captchaToken)) };
           return { error: null };
         } catch (err) {
-          return { error: reportAuthError('sendPasswordReset', err) };
+          return { error: reportAuthError('sendPasswordReset', err, Boolean(captchaToken)) };
         }
       },
       async updatePassword(password) {
@@ -165,7 +172,7 @@ function isNetworkFailure(err: unknown): boolean {
 
 // Log the full error (status, code, message, target host) so a production
 // failure is diagnosable from the browser console, then return user-facing text.
-function reportAuthError(op: string, err: unknown): string {
+function reportAuthError(op: string, err: unknown, tokenSent = false): string {
   const e = (err ?? {}) as Partial<AuthError> & { name?: string; status?: number; code?: string };
   const details = {
     op,
@@ -177,6 +184,9 @@ function reportAuthError(op: string, err: unknown): string {
     origin: siteOrigin(),
   };
   console.error(`[auth] ${op} failed`, details);
+
+  const captcha = captchaMessageForAuthError(err, tokenSent);
+  if (captcha) return captcha;
 
   if (isNetworkFailure(err)) {
     return (

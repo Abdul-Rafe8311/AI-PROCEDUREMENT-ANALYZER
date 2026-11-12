@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/lib/auth-context';
+import { useCaptchaField } from '@/components/auth/captcha-field';
 
 function LoginForm() {
   const { signIn, ready, user } = useAuth();
@@ -19,6 +20,7 @@ function LoginForm() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const captcha = useCaptchaField();
 
   // Already signed in → skip the form.
   useEffect(() => {
@@ -27,13 +29,14 @@ function LoginForm() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (busy) return;
+    if (busy || captcha.waiting) return;
     setError(null);
     setBusy(true);
-    const { error } = await signIn(email, password);
+    const { error } = await signIn(email, password, captcha.token);
     if (error) {
       setError(error);
       setBusy(false);
+      captcha.settle(error); // single-use token; email stays
       return;
     }
     router.replace(redirect);
@@ -81,7 +84,8 @@ function LoginForm() {
             placeholder="••••••••"
           />
         </div>
-        <Button type="submit" className="w-full" disabled={busy}>
+        {captcha.node}
+        <Button type="submit" className="w-full" disabled={busy || captcha.waiting}>
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Sign in'}
         </Button>
       </form>

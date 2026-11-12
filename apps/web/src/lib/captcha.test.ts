@@ -5,6 +5,7 @@ import {
   CAPTCHA_UNAVAILABLE_MESSAGE,
   captchaMessageForAuthError,
   captchaMessageForCode,
+  isCaptchaMessage,
   submitBlocked,
   turnstileSiteKey,
 } from './captcha';
@@ -42,4 +43,11 @@ test('auth errors: rejected token, provider outage with a token, and everything 
   assert.equal(captchaMessageForAuthError({ status: 500, message: 'unexpected' }, false), null);
   assert.equal(captchaMessageForAuthError({ status: 400, message: 'Invalid login credentials' }, true), null);
   assert.equal(captchaMessageForAuthError(null, true), null);
+});
+
+test('isCaptchaMessage recognises only the two captcha messages', () => {
+  assert.equal(isCaptchaMessage(CAPTCHA_FAILED_MESSAGE), true);
+  assert.equal(isCaptchaMessage(CAPTCHA_UNAVAILABLE_MESSAGE), true);
+  assert.equal(isCaptchaMessage('Incorrect email or password.'), false);
+  assert.equal(isCaptchaMessage(null), false);
 });

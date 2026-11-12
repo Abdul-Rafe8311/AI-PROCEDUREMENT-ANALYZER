@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/lib/auth-context';
+import { useCaptchaField } from '@/components/auth/captcha-field';
 
 export default function ForgotPasswordPage() {
   const { sendPasswordReset } = useAuth();
@@ -14,17 +15,19 @@ export default function ForgotPasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
+  const captcha = useCaptchaField();
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (busy || !email.trim()) return;
+    if (busy || captcha.waiting || !email.trim()) return;
     setError(null);
     setBusy(true);
-    const { error } = await sendPasswordReset(email);
+    const { error } = await sendPasswordReset(email, captcha.token);
     setBusy(false);
     // Don't reveal whether an account exists — always show the same confirmation.
     if (error) {
       setError(error);
+      captcha.settle(error);
       return;
     }
     setSent(true);
@@ -73,7 +76,8 @@ export default function ForgotPasswordPage() {
             placeholder="you@company.com"
           />
         </div>
-        <Button type="submit" className="w-full" disabled={busy}>
+        {captcha.node}
+        <Button type="submit" className="w-full" disabled={busy || captcha.waiting}>
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send reset link'}
         </Button>
       </form>

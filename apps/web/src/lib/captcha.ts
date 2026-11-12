@@ -37,3 +37,5 @@ export function captchaMessageForAuthError(err: unknown, tokenSent: boolean): st
   if (tokenSent && typeof e.status === 'number' && e.status >= 500) return CAPTCHA_UNAVAILABLE_MESSAGE;
   return null;
 }
+
+export const isCaptchaMessage = (m: string | null): boolean => m === CAPTCHA_FAILED_MESSAGE || m === CAPTCHA_UNAVAILABLE_MESSAGE;

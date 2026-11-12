@@ -66,9 +66,9 @@ development_status:
   4-6-admin-queue-viewer-decisions-and-history: done
   epic-4-retrospective: optional
 
-  epic-5: in-progress
+  epic-5: done
   5-1-turnstile-widget-and-payment-form-verification: done
-  5-2-turnstile-on-signup-login-and-password-reset: backlog
+  5-2-turnstile-on-signup-login-and-password-reset: done
   epic-5-retrospective: optional
 
   epic-6: backlog
