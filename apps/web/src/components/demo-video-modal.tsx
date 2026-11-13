@@ -10,6 +10,7 @@ export function useDemoVideo() {
   return useContext(DemoVideoContext);
 }
 
+const EXIT_MS = 200;
 const FOCUSABLE = 'button, [href], video[controls], [tabindex]:not([tabindex="-1"])';
 
 export function DemoVideoProvider({ children }: { children: React.ReactNode }) {
@@ -22,11 +23,24 @@ export function DemoVideoProvider({ children }: { children: React.ReactNode }) {
     setOpen(true);
   }, []);
 
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const close = useCallback(() => {
-    setVisible(false);
-    setOpen(false);
-    triggerRef.current?.focus?.();
+    if (closeTimer.current) return; // already closing
+    setVisible(false); // play the 200ms fade+scale-out, then unmount
+    closeTimer.current = setTimeout(() => {
+      closeTimer.current = null;
+      setOpen(false);
+      triggerRef.current?.focus?.();
+    }, EXIT_MS);
   }, []);
+
+  useEffect(
+    () => () => {
+      if (closeTimer.current) clearTimeout(closeTimer.current);
+    },
+    [],
+  );
 
   const value = useMemo(() => ({ openDemo }), [openDemo]);
 
@@ -76,6 +90,17 @@ function DemoModal({
     };
   }, [setVisible]);
 
+  // Pause and rewind as soon as the exit transition starts.
+  const shown = useRef(false);
+  useEffect(() => {
+    if (visible) {
+      shown.current = true;
+    } else if (shown.current && videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.currentTime = 0;
+    }
+  }, [visible]);
+
   // Esc to close + focus trap.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -105,7 +130,7 @@ function DemoModal({
   return (
     <div
       className={cn(
-        'fixed inset-0 z-[100] flex items-center justify-center px-4 transition-opacity duration-200 sm:px-6',
+        'fixed inset-0 z-[100] flex items-center justify-center px-4 transition-opacity duration-200 ease-out sm:px-6',
         'bg-black/70 backdrop-blur-sm',
         visible ? 'opacity-100' : 'opacity-0',
       )}
