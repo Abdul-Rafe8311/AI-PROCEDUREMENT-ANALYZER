@@ -11,8 +11,8 @@ const w = DEFAULT_WEIGHTS;
 
 /** Product summary an AI engine can quote verbatim. */
 export const PRODUCT_SUMMARY =
-  `${SITE_NAME} is supplier quotation comparison software for procurement teams, including GCC and Saudi Arabia procurement teams. ` +
-  'It reads supplier quotations (PDF, Word or image), compares them side by side, flags risks, and fills in the technical approval (TA) form.';
+  `${SITE_NAME} is supplier quotation comparison software for procurement teams of any size, in any industry. ` +
+  'It reads supplier quotations (PDF, Word or image) in English and Arabic, compares them side by side, flags risks, and fills in the technical approval (TA) form.';
 
 export interface FaqItem {
   q: string;
@@ -26,7 +26,7 @@ export const FAQS: FaqItem[] = [
   },
   {
     q: 'Who is it for?',
-    a: 'Procurement, purchasing and planning teams that compare RFQ responses by hand, in industries such as construction, contracting, manufacturing and trading. It is built with GCC and Saudi procurement teams in mind, including bilingual quotations.',
+    a: 'Procurement, purchasing and planning teams that compare RFQ responses by hand, in industries such as construction, contracting, manufacturing and trading. It reads quotations in English and Arabic.',
   },
   {
     q: 'How does supplier scoring work?',
@@ -94,8 +94,8 @@ export const SITE_KEYWORDS = [
   'RFQ comparison tool',
   'bid comparison',
   'technical approval (TA) form',
-  'procurement software Saudi Arabia',
-  'GCC procurement',
+  'supplier quotation comparison software',
+  'procurement quotation analysis',
   'quotation analysis',
   'purchase requisition matching',
   'procurement risk detection',

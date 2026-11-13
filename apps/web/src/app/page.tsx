@@ -30,7 +30,7 @@ export const revalidate = 3600;
 
 const HOME_TITLE = 'AI Procurement Software for Supplier Quotation Comparison';
 const HOME_DESCRIPTION =
-  'AI procurement software for GCC and Saudi procurement teams: supplier quotation comparison, RFQ and bid scoring, risk flags and a ready-to-sign technical approval (TA) form.';
+  'AI procurement software for supplier quotation comparison: RFQ and bid scoring, risk flags and a ready-to-sign technical approval (TA) form. Reads quotations in English and Arabic.';
 
 export const metadata: Metadata = pageMetadata({ title: HOME_TITLE, description: HOME_DESCRIPTION, path: '/' });
 
@@ -403,7 +403,6 @@ function Features() {
 function WhoFor() {
   const audiences = [
     'Procurement & purchasing teams',
-    'GCC and Saudi procurement teams',
     'Planning departments',
     'Construction & contracting',
     'Manufacturing',

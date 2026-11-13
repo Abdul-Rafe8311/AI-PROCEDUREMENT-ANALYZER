@@ -16,14 +16,14 @@ export function buildLlmsTxt(prices: PlanPrices | null): string {
 > ${PRODUCT_SUMMARY}
 
 ## What it does
-- Reads supplier quotations in PDF, Word (DOCX), PNG and JPG formats, including scans and Arabic or English documents.
+- Reads supplier quotations in PDF, Word (DOCX), PNG and JPG formats, including scans, in English and Arabic.
 - Extracts price, delivery time, payment terms, warranty and currency, and normalizes currencies for a like-for-like bid comparison.
 - Scores each supplier from 0 to 100 with deterministic rules (default weights: price 40%, delivery 25%, payment terms 15%, warranty 10%, risk 10%) and flags risks.
 - Matches supplier line items to the buyer's purchase requisition and exports a pre-filled technical approval (TA) form as PDF.
 - Produces a decision report, and lets you chat with your quotations on paid plans.
 
 ## Who it is for
-Procurement, purchasing and planning teams, including GCC and Saudi Arabia procurement teams, in construction, contracting, manufacturing and trading.
+Procurement, purchasing and planning teams of any size, in any industry, including construction, contracting, manufacturing and trading.
 
 ## Pricing
 ${plans.join('\n')}

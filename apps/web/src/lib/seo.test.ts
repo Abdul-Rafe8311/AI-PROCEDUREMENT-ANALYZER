@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FAQS, faqJsonLd, jsonLdString, pageMetadata, softwareJsonLd } from './seo';
+import { FAQS, PRODUCT_SUMMARY, SITE_KEYWORDS, faqJsonLd, jsonLdString, pageMetadata, softwareJsonLd } from './seo';
 import { buildLlmsTxt } from './llms-txt';
 import robots from '../app/robots';
 import sitemap from '../app/sitemap';
@@ -57,4 +57,13 @@ test('privacy FAQ: same text in the home FAQ, FAQPage JSON-LD and llms.txt', () 
   assert.ok(item?.a.includes('Anthropic Claude API') && item?.a.includes('12 months'));
   assert.ok(JSON.stringify(faqJsonLd()).includes(claim));
   assert.ok(buildLlmsTxt(null).includes(claim));
+});
+
+test('copy is global: no GCC/Saudi wording anywhere in shared SEO text; hero sentence is exact', () => {
+  const all = JSON.stringify([PRODUCT_SUMMARY, FAQS, SITE_KEYWORDS, softwareJsonLd(null), buildLlmsTxt(null)]);
+  assert.ok(!/gcc|saudi|gulf/i.test(all));
+  assert.equal(
+    PRODUCT_SUMMARY,
+    'AI Procurement Copilot is supplier quotation comparison software for procurement teams of any size, in any industry. It reads supplier quotations (PDF, Word or image) in English and Arabic, compares them side by side, flags risks, and fills in the technical approval (TA) form.',
+  );
 });
