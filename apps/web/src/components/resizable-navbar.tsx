@@ -11,11 +11,12 @@ import Link from 'next/link';
 import { Menu, Sparkles, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { useDemoVideo } from '@/components/demo-video-modal';
 
 const NAV_LINKS = [
   { label: 'How it works', href: '#workflow' },
   { label: 'Features', href: '#features' },
-  { label: 'Live demo', href: '#demo' },
+  { label: 'Live demo', href: '#demo', demo: true },
   { label: 'Pricing', href: '#pricing' },
   { label: 'FAQ', href: '#faq' },
 ];
@@ -26,6 +27,7 @@ const primaryBtn =
 export function ResizableNavbar() {
   const [scrolled, setScrolled] = useState(false);
   const [open, setOpen] = useState(false);
+  const { openDemo } = useDemoVideo();
 
   // Shrink once the page is scrolled past a small threshold.
   useEffect(() => {
@@ -64,9 +66,15 @@ export function ResizableNavbar() {
         {/* Center links (desktop) — absolutely centered so the pill stays balanced */}
         <nav className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-6 text-sm font-medium text-muted-foreground lg:flex">
           {NAV_LINKS.map((l) => (
-            <a key={l.href} href={l.href} className="transition hover:text-foreground">
-              {l.label}
-            </a>
+            l.demo ? (
+              <button key={l.href} type="button" onClick={openDemo} className="transition hover:text-foreground">
+                {l.label}
+              </button>
+            ) : (
+              <a key={l.href} href={l.href} className="transition hover:text-foreground">
+                {l.label}
+              </a>
+            )
           ))}
         </nav>
 
@@ -104,14 +112,28 @@ export function ResizableNavbar() {
         <div className="mx-auto mt-2 max-w-4xl rounded-2xl border border-border bg-background/95 p-4 shadow-xl backdrop-blur-md md:hidden">
           <nav className="flex flex-col gap-1">
             {NAV_LINKS.map((l) => (
-              <a
-                key={l.href}
-                href={l.href}
-                onClick={() => setOpen(false)}
-                className="rounded-lg px-3 py-2.5 text-sm font-medium text-foreground transition hover:bg-accent"
-              >
-                {l.label}
-              </a>
+              l.demo ? (
+                <button
+                  key={l.href}
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    openDemo();
+                  }}
+                  className="rounded-lg px-3 py-2.5 text-left text-sm font-medium text-foreground transition hover:bg-accent"
+                >
+                  {l.label}
+                </button>
+              ) : (
+                <a
+                  key={l.href}
+                  href={l.href}
+                  onClick={() => setOpen(false)}
+                  className="rounded-lg px-3 py-2.5 text-sm font-medium text-foreground transition hover:bg-accent"
+                >
+                  {l.label}
+                </a>
+              )
             ))}
           </nav>
           <div className="mt-3 flex flex-col gap-2 border-t border-border pt-3">

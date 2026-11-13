@@ -24,6 +24,7 @@ import { pageMetadata, FAQS, faqJsonLd, jsonLdString, softwareJsonLd, PRODUCT_SU
 import { getPublicPrices } from '@/lib/server/public-prices';
 import { ResizableNavbar } from '@/components/resizable-navbar';
 import { PricingSection } from '@/components/pricing-section';
+import { DemoVideoProvider, WatchDemoButton } from '@/components/demo-video-modal';
 
 // Plan prices feed the JSON-LD offers; revalidate hourly so a price change reaches search engines.
 export const revalidate = 3600;
@@ -156,6 +157,7 @@ const fmtUsd = (n: number) => `$${n.toLocaleString('en-US')}`;
    ───────────────────────────────────────────── */
 export default function Home() {
   return (
+    <DemoVideoProvider>
     <div className="min-h-screen bg-background text-foreground">
       {[softwareJsonLd(getPublicPrices()), faqJsonLd()].map((d) => (
         <script key={d['@type']} type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdString(d) }} />
@@ -171,6 +173,7 @@ export default function Home() {
       <FinalCta />
       <SiteFooter />
     </div>
+    </DemoVideoProvider>
   );
 }
 
@@ -208,11 +211,16 @@ function Hero() {
             <Upload className="h-4 w-4" />
             Get started free
           </Link>
-          <a href="#demo" className={btnSecondary}>
-            View Demo Analysis
-            <ArrowRight className="h-4 w-4" />
-          </a>
+          <WatchDemoButton className={btnSecondary} />
         </div>
+
+        <a
+          href="#demo"
+          className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-muted-foreground transition hover:text-foreground"
+        >
+          View Demo Analysis
+          <ArrowRight className="h-3.5 w-3.5" />
+        </a>
 
         <p className="mt-4 text-xs text-muted-foreground">
           Free plan available · Create an account and start analyzing in minutes
